@@ -1520,7 +1520,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 <header>
   <div class="logo">
     <div class="logo-mark">rx</div>
-    <div class="logo-text">rdx<span>per</span></div>
+    <div class="logo-text">RD<span>Xper</span></div>
   </div>
   <div class="nav-links" id="nav-auth" style="display:none">
     <button class="nav-btn" onclick="showProfile()">👤 Profile</button>
@@ -2404,4 +2404,5 @@ if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     host = "0.0.0.0" if os.environ.get("FLY_APP_NAME") or os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RENDER") or os.environ.get("SPACE_ID") else "127.0.0.1"
     app.run(host=host, port=port, debug=False, threaded=True)
+
 
