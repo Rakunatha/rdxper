@@ -1407,7 +1407,7 @@ HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>rdxper</title>
+<title>rdxper — AI Research Paper Generator</title>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -1519,8 +1519,8 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 <div class="wrap">
 <header>
   <div class="logo">
-   
-    <div class="logo-text">RD<span>Xper</span></div>
+    <div class="logo-mark">rx</div>
+    <div class="logo-text">rdx<span>per</span></div>
   </div>
   <div class="nav-links" id="nav-auth" style="display:none">
     <button class="nav-btn" onclick="showProfile()">👤 Profile</button>
@@ -1536,16 +1536,16 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 <!-- LOGIN -->
 <div class="screen active" id="s-home">
   <div class="hero">
- 
-    <h1>Generate <em> Genuinely Intelligent</em><br>Research Papers</h1>
-
+    
+    <h1>Generate <em>Genuine</em><br>Research Papers</h1>
+    
   </div>
   <div class="card">
     <div class="ct">Sign in to continue</div>
     <div class="cs">Use your Google account — no password needed</div>
     <div id="n-login" class="notif"></div>
     <div id="g-btn-wrap" style="display:flex;justify-content:center;min-height:44px;align-items:center"></div>
-
+    <p style="font-size:11px;color:var(--dim);text-align:center;margin-top:14px">Sign in with your Google account to get started</p>
   </div>
 </div>
 
@@ -1572,7 +1572,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 <div class="q-panel active" id="qp-0">
   <div class="q-badge">Step 1 of 6</div>
   <div class="ct" style="margin-bottom:6px">Identification of the Problem</div>
-  <div class="cs" style="margin-bottom:20px">What specific problem prompted this research? Describe it in your own words — AI will use this as the foundation. <strong style="color:var(--accent)">Optional — skip if you prefer AI to write this.</strong></div>
+  <div class="cs" style="margin-bottom:20px">What specific problem prompted this research? Describe it in your own words, AI will use this as the foundation. <strong style="color:var(--accent)">Optional — skip if you prefer AI to write this.</strong></div>
   <div class="q-hint">💡 Think about: What is wrong or missing? Who is affected? What is the scale of the problem? What are the consequences of not addressing it?</div>
   <div class="fg">
     <label>Research Topic / Title *</label>
@@ -1679,7 +1679,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   </div>
   <div style="display:flex;gap:10px;justify-content:space-between">
     <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(5)">← Back</button>
-    <button class="btn btn-p" id="btn-gen" onclick="generate()" style="flex:1">✦ Generate Research Paper</button>
+    <button class="btn btn-p" id="btn-gen" onclick="generate()" style="flex:1">Generate Research Paper</button>
   </div>
 </div>
 
@@ -1782,7 +1782,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   </div>
 </div>
 
-<footer>rdxper v4.0</footer>
+<footer>rdxper v4.0 ·</footer>
 </div>
 
 <script>
@@ -1803,7 +1803,22 @@ const G_CLIENT='__GOOGLE_CLIENT_ID__';
 // Google Sign-In init
 window.addEventListener('load',function(){
   if(!G_CLIENT){
-    document.getElementById('g-btn-wrap').innerHTML='<div style="color:#ff4757;font-size:13px;text-align:center;padding:10px">⚠️ GOOGLE_CLIENT_ID not configured.<br>Add it in Render environment variables.</div>';
+    // Dev mode: show simple login form instead of Google button
+    document.getElementById('g-btn-wrap').innerHTML=`
+      <div style="width:100%">
+        <div style="background:rgba(255,200,0,.1);border:1px solid rgba(255,200,0,.3);border-radius:8px;padding:10px 14px;font-size:12px;color:#ffd700;margin-bottom:14px;text-align:center">
+          🛠️ Local / Dev Mode — Google Sign-In not configured
+        </div>
+        <div class="fg" style="margin-bottom:10px">
+          <label style="font-size:12px">Your Name</label>
+          <input type="text" id="dev-name" placeholder="e.g. Rakunatha Khrishanth" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);width:100%;font-size:13px;outline:none">
+        </div>
+        <div class="fg" style="margin-bottom:14px">
+          <label style="font-size:12px">Your Email</label>
+          <input type="email" id="dev-email" placeholder="e.g. you@email.com" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);width:100%;font-size:13px;outline:none">
+        </div>
+        <button class="btn btn-p" onclick="devLogin()" style="width:100%">Continue →</button>
+      </div>`;
     return;
   }
   function tryInit(){
@@ -1825,6 +1840,24 @@ async function handleGoogle(resp){
     token=d.token;userEmail=d.email;userName=d.name;userPicture=d.picture;
     try{localStorage.setItem('rx_tok',token);localStorage.setItem('rx_em',userEmail);
         localStorage.setItem('rx_nm',userName);localStorage.setItem('rx_pic',userPicture);}catch(e){}
+    onLoggedIn();
+  }catch(e){n.className='notif error show';n.textContent='Connection error. Try again.';}
+}
+
+async function devLogin(){
+  const name  = (document.getElementById('dev-name')||{value:''}).value.trim();
+  const email = (document.getElementById('dev-email')||{value:''}).value.trim();
+  if(!email){ alert('Please enter your email to continue.'); return; }
+  const n=document.getElementById('n-login');
+  n.className='notif info show'; n.textContent='Signing in...';
+  try{
+    const r=await fetch('/api/auth/dev',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name:name||email.split('@')[0], email})});
+    const d=await r.json();
+    if(!d.success){n.className='notif error show';n.textContent=d.message||'Sign in failed';return;}
+    token=d.token;userEmail=d.email;userName=d.name;userPicture='';
+    try{localStorage.setItem('rx_tok',token);localStorage.setItem('rx_em',userEmail);
+        localStorage.setItem('rx_nm',userName);localStorage.setItem('rx_pic','');}catch(e){}
     onLoggedIn();
   }catch(e){n.className='notif error show';n.textContent='Connection error. Try again.';}
 }
@@ -1975,7 +2008,7 @@ function pollStatus(){
         show('s-done');
       }else if(d.status==='error'){
         clearInterval(poll);
-        const btn=document.getElementById('btn-gen');btn.disabled=false;btn.innerHTML='Generate Paper';
+        const btn=document.getElementById('btn-gen');btn.disabled=false;btn.innerHTML='✦ Generate Paper (Free AI)';
         alert('Generation failed: '+d.message);show('s-gen');
       }
     }catch(e){console.error(e);}
@@ -2107,6 +2140,29 @@ def _verify_google_token(id_token_str):
     except Exception as e:
         print(f"[Google] Token error: {e}")
         return None
+
+@app.route("/api/auth/dev", methods=["POST"])
+def dev_auth():
+    """Local dev login — only works when GOOGLE_CLIENT_ID is not set."""
+    if os.environ.get("GOOGLE_CLIENT_ID"):
+        return jsonify({"success": False, "message": "Dev auth disabled in production"}), 403
+    data    = request.json or {}
+    email   = data.get("email", "").strip().lower()
+    name    = data.get("name", email.split("@")[0]).strip()
+    if not email or "@" not in email:
+        return jsonify({"success": False, "message": "Valid email required"}), 400
+    user_id = "dev_" + email.replace("@","_").replace(".","_")
+    with get_db() as db:
+        user = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+        if user:
+            db.execute("UPDATE users SET name=?,last_login=datetime('now') WHERE email=?", (name, email))
+            user_id = user["id"]
+        else:
+            db.execute("INSERT INTO users (id,email,name,picture,last_login) VALUES (?,?,?,?,datetime('now'))",
+                       (user_id, email, name, ""))
+    tok = secrets.token_urlsafe(32)
+    sessions[tok] = {"email": email, "user_id": user_id, "name": name, "picture": ""}
+    return jsonify({"success": True, "token": tok, "email": email, "name": name, "picture": ""})
 
 @app.route("/api/auth/google", methods=["POST"])
 def google_auth():
@@ -2349,5 +2405,3 @@ if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     host = "0.0.0.0" if os.environ.get("FLY_APP_NAME") or os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RENDER") or os.environ.get("SPACE_ID") else "127.0.0.1"
     app.run(host=host, port=port, debug=False, threaded=True)
-
-
