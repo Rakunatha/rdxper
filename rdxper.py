@@ -1407,7 +1407,7 @@ HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>rdxper — AI Research Paper Generator</title>
+<title>rdxper</title>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -1545,7 +1545,6 @@ textarea::placeholder{color:var(--dim);font-size:12px}
     <div class="cs">Use your Google account — no password needed</div>
     <div id="n-login" class="notif"></div>
     <div id="g-btn-wrap" style="display:flex;justify-content:center;min-height:44px;align-items:center"></div>
-    <p style="font-size:11px;color:var(--dim);text-align:center;margin-top:14px">Sign in with your Google account to get started</p>
   </div>
 </div>
 
@@ -2405,3 +2404,4 @@ if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     host = "0.0.0.0" if os.environ.get("FLY_APP_NAME") or os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RENDER") or os.environ.get("SPACE_ID") else "127.0.0.1"
     app.run(host=host, port=port, debug=False, threaded=True)
+
