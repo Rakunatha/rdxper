@@ -73,10 +73,39 @@ def init_db():
                 created_at TEXT DEFAULT (datetime('now')),
                 FOREIGN KEY(user_id) REFERENCES users(id)
             );
+            CREATE TABLE IF NOT EXISTS sessions (
+                token TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
         """)
 
 init_db()
 
+
+def session_set(token: str, email: str):
+    """Persist a session token to the DB and keep in-memory cache."""
+    sessions[token] = {'email': email}
+    with get_db() as db:
+        db.execute('INSERT OR REPLACE INTO sessions (token, email) VALUES (?, ?)', (token, email))
+
+
+def session_get(token: str) -> dict | None:
+    """Return session dict from memory, falling back to DB (handles restarts)."""
+    if token in sessions:
+        return sessions[token]
+    with get_db() as db:
+        row = db.execute('SELECT email FROM sessions WHERE token=?', (token,)).fetchone()
+    if row:
+        sessions[token] = {'email': row['email']}
+        return sessions[token]
+    return None
+
+
+def session_delete(token: str):
+    sessions.pop(token, None)
+    with get_db() as db:
+        db.execute('DELETE FROM sessions WHERE token=?', (token,))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2160,7 +2189,10 @@ def dev_auth():
             db.execute("INSERT INTO users (id,email,name,picture,last_login) VALUES (?,?,?,?,datetime('now'))",
                        (user_id, email, name, ""))
     tok = secrets.token_urlsafe(32)
-    sessions[tok] = {"email": email, "user_id": user_id, "name": name, "picture": ""}
+    session_set(tok, email)
+    sessions[tok]["user_id"] = user_id
+    sessions[tok]["name"] = name
+    sessions[tok]["picture"] = ""
     return jsonify({"success": True, "token": tok, "email": email, "name": name, "picture": ""})
 
 @app.route("/api/auth/google", methods=["POST"])
@@ -2186,15 +2218,18 @@ def google_auth():
             db.execute("INSERT INTO users (id,email,name,picture,last_login) VALUES (?,?,?,?,datetime('now'))",
                        (user_id, g_email, g_name, g_picture))
     tok = secrets.token_urlsafe(32)
-    sessions[tok] = {"email": g_email, "user_id": user_id, "name": g_name, "picture": g_picture}
+    session_set(tok, g_email)
+    sessions[tok]["user_id"] = user_id
+    sessions[tok]["name"] = g_name
+    sessions[tok]["picture"] = g_picture
     return jsonify({"success": True, "token": tok, "email": g_email, "name": g_name, "picture": g_picture})
 
 @app.route("/api/profile")
 def get_profile():
     tok = request.headers.get("Authorization", "").replace("Bearer ", "")
-    if tok not in sessions:
+    sess = session_get(tok)
+    if not sess:
         return jsonify({"success": False, "message": "Unauthorized"}), 401
-    sess = sessions[tok]
     with get_db() as db:
         user    = db.execute("SELECT * FROM users WHERE id=?", (sess["user_id"],)).fetchone()
         papers  = db.execute("SELECT * FROM papers WHERE user_id=? ORDER BY created_at DESC", (sess["user_id"],)).fetchall()
@@ -2211,9 +2246,9 @@ def get_profile():
 @app.route("/api/admin/stats")
 def admin_stats():
     tok = request.headers.get("Authorization", "").replace("Bearer ", "")
-    if tok not in sessions:
+    if not session_get(tok):
         return jsonify({"success": False, "message": "Unauthorized"}), 401
-    if sessions[tok]["email"] != ADMIN_EMAIL:
+    if sessions.get(tok, {}).get("email") != ADMIN_EMAIL:
         return jsonify({"success": False, "message": "Forbidden"}), 403
     with get_db() as db:
         users    = db.execute("SELECT * FROM users ORDER BY created_at DESC").fetchall()
@@ -2274,14 +2309,15 @@ def verify_otp():
     if rec['otp'] != otp:
         return jsonify({'success': False, 'message': 'Wrong OTP.'}), 400
     tok = secrets.token_urlsafe(32)
-    sessions[tok] = {'email': email}
+    session_set(tok, email)
     del otp_store[email]
     return jsonify({'success': True, 'token': tok, 'email': email})
 
 @app.route('/api/generate', methods=['POST'])
 def generate_paper():
     tok = request.headers.get('Authorization', '').replace('Bearer ', '')
-    if tok not in sessions:
+    sess = session_get(tok)
+    if not sess:
         return jsonify({'success': False, 'message': 'Unauthorized'}), 401
 
     # Check API key before starting job
@@ -2294,7 +2330,7 @@ def generate_paper():
     nfigs  = max(3, min(15, int(data.get('num_figures', 6))))
     author = data.get('author_name', 'Anonymous').strip()
     inst   = data.get('institution', '').strip()
-    email  = sessions[tok]['email']
+    email  = sess['email']
 
     # Questionnaire fields (AI-enabled, not AI-driven)
     q_problem    = data.get('q_problem', '').strip()
@@ -2307,7 +2343,7 @@ def generate_paper():
         return jsonify({'success': False, 'message': 'Topic required'}), 400
 
     jid     = str(uuid.uuid4())
-    user_id = sessions[tok].get('user_id', email)
+    user_id = sess.get('user_id', email)
     jobs[jid] = {'status': 'queued', 'progress': 0,
                  'message': 'Queued...', 'file_path': None, 'topic': topic, 'user_id': user_id}
     with get_db() as db:
@@ -2339,7 +2375,7 @@ def generate_paper():
 @app.route('/api/status/<jid>')
 def job_status(jid):
     tok = request.headers.get('Authorization', '').replace('Bearer ', '')
-    if tok not in sessions:
+    if not session_get(tok):
         return jsonify({'success': False, 'message': 'Unauthorized'}), 401
     job = jobs.get(jid)
     if not job:
@@ -2350,7 +2386,7 @@ def job_status(jid):
 @app.route('/api/download/<jid>')
 def download_paper(jid):
     tok = request.headers.get('Authorization', '').replace('Bearer ', '')
-    if tok not in sessions:
+    if not session_get(tok):
         return jsonify({'success': False, 'message': 'Unauthorized'}), 401
     job = jobs.get(jid)
     if not job or job['status'] != 'done':
@@ -2404,5 +2440,3 @@ if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     host = "0.0.0.0" if os.environ.get("FLY_APP_NAME") or os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RENDER") or os.environ.get("SPACE_ID") else "127.0.0.1"
     app.run(host=host, port=port, debug=False, threaded=True)
-
-
