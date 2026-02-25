@@ -96,9 +96,16 @@ def session_get(token: str) -> dict | None:
         return sessions[token]
     with get_db() as db:
         row = db.execute('SELECT email FROM sessions WHERE token=?', (token,)).fetchone()
-    if row:
-        sessions[token] = {'email': row['email']}
-        return sessions[token]
+        if row:
+            email = row['email']
+            user = db.execute('SELECT id, name, picture FROM users WHERE email=?', (email,)).fetchone()
+            sessions[token] = {
+                'email': email,
+                'user_id': user['id'] if user else email,
+                'name': user['name'] if user else '',
+                'picture': user['picture'] if user else '',
+            }
+            return sessions[token]
     return None
 
 
@@ -1601,7 +1608,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   <div class="q-badge">Step 1 of 6</div>
   <div class="ct" style="margin-bottom:6px">Identification of the Problem</div>
   <div class="cs" style="margin-bottom:20px">What specific problem prompted this research? Describe it in your own words, AI will use this as the foundation. <strong style="color:var(--accent)">Optional — skip if you prefer AI to write this.</strong></div>
-  <div class="q-hint">💡 Think about: What is wrong or missing? Who is affected? What is the scale of the problem? What are the consequences of not addressing it?</div>
+  <div class="q-hint">Think about: What is wrong or missing? Who is affected? What is the scale of the problem? What are the consequences of not addressing it?</div>
   <div class="fg">
     <label>Research Topic / Title *</label>
     <input type="text" id="topic-in" placeholder="e.g. Legal Frameworks for Environmental Restoration in Post-War Reconstruction">
@@ -1623,7 +1630,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   <div class="q-badge">Step 2 of 6</div>
   <div class="ct" style="margin-bottom:6px">Literature Review</div>
   <div class="cs" style="margin-bottom:20px">What sources have you reviewed? List them and AI will expand into a full literature review. <strong style="color:var(--accent)">Optional — AI will find real papers automatically if you skip.</strong></div>
-  <div class="q-hint">💡 Include: Author names and years, key arguments, relevant reports, laws, treaties, court cases, or books. Even brief notes are fine — AI will elaborate.</div>
+  <div class="q-hint">Include: Author names and years, key arguments, relevant reports, laws, treaties, court cases, or books. Even brief notes are fine — AI will elaborate.</div>
   <div class="fg">
     <label>Key Sources & Their Main Arguments *</label>
     <textarea id="q-lit" rows="8" placeholder="List the sources you have reviewed and what they say. Examples:&#10;&#10;- Geneva Conventions (1949) & Additional Protocol I (1977) — establish basic environmental protections during armed conflict but lack post-war restoration obligations&#10;- UNEP (2009) From Conflict to Peacebuilding — documents how environmental damage sustains conflict cycles&#10;- Bothe, Bruch & Jensen (2010) — argue existing IHL is inadequate for modern environmental warfare&#10;- Rome Statute Art. 8 — criminalises widespread environmental damage but enforcement is rare&#10;- UN Compensation Commission (Kuwait, 1991) — first successful precedent for war environmental claims..."></textarea>
@@ -1640,7 +1647,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   <div class="q-badge">Step 3 of 6</div>
   <div class="ct" style="margin-bottom:6px">Research Gap</div>
   <div class="cs" style="margin-bottom:20px">What is missing from existing research? AI will use your answer as the gap statement. <strong style="color:var(--accent)">Optional — AI will identify a gap automatically if you skip.</strong></div>
-  <div class="q-hint">💡 Ask yourself: What do existing studies not cover? What contradictions exist in the literature? What context or population has been ignored? What methodology hasn't been applied?</div>
+  <div class="q-hint">Ask yourself: What do existing studies not cover? What contradictions exist in the literature? What context or population has been ignored? What methodology hasn't been applied?</div>
   <div class="fg">
     <label>The Research Gap <span style="color:var(--dim);font-weight:400">(optional)</span></label>
     <textarea id="q-gap" rows="5" placeholder="Describe what is missing from current research and why your study is needed.&#10;&#10;Example: While significant scholarship exists on environmental protection during armed conflict, there is a critical gap in research on post-war environmental restoration obligations. Existing studies either focus on pre-conflict prevention or general humanitarian law without addressing the specific legal mechanisms required for ecological recovery. Furthermore, no comparative study has examined how different post-conflict nations (Iraq, Kosovo, Lebanon, Ukraine) have implemented or failed to implement environmental restoration under international law..."></textarea>
@@ -1657,7 +1664,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   <div class="q-badge">Step 4 of 6</div>
   <div class="ct" style="margin-bottom:6px">Objectives of the Research</div>
   <div class="cs" style="margin-bottom:20px">List your research objectives — they will appear verbatim in your paper. <strong style="color:var(--accent)">Optional — AI will generate objectives aligned to your topic if you skip.</strong></div>
-  <div class="q-hint">💡 Good objectives: Start with "To examine / To analyse / To evaluate / To compare / To propose". Be specific. You need 4–6 objectives. One per line.</div>
+  <div class="q-hint">Good objectives: Start with "To examine / To analyse / To evaluate / To compare / To propose". Be specific. You need 4–6 objectives. One per line.</div>
   <div class="fg">
     <label>Research Objectives <span style="color:var(--dim);font-weight:400">(optional — one per line)</span></label>
     <textarea id="q-objectives" rows="7" placeholder="To examine the existing international legal frameworks governing environmental restoration in post-war reconstruction&#10;To analyse compensation mechanisms including liability determination, reparations, and restoration funding&#10;To evaluate practical challenges such as political instability, limited resources, and technical capacity gaps&#10;To compare legal approaches from different post-conflict contexts including Iraq, Kosovo, Lebanon, and Ukraine&#10;To propose recommendations for strengthening enforcement mechanisms and legal accountability for wartime environmental harm"></textarea>
@@ -1674,7 +1681,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   <div class="q-badge">Step 5 of 6</div>
   <div class="ct" style="margin-bottom:6px">Research Statement</div>
   <div class="cs" style="margin-bottom:20px">Your thesis in 2–4 sentences — what this research does, how, and why. <strong style="color:var(--accent)">Optional — AI will formulate a research statement if you skip.</strong></div>
-  <div class="q-hint">💡 A good research statement: Names the topic, identifies the method (doctrinal/empirical/comparative), and states the significance. Typically 2–4 sentences.</div>
+  <div class="q-hint">A good research statement: Names the topic, identifies the method (doctrinal/empirical/comparative), and states the significance. Typically 2–4 sentences.</div>
   <div class="fg">
     <label>Research Statement <span style="color:var(--dim);font-weight:400">(optional)</span></label>
     <textarea id="q-statement" rows="5" placeholder="This study investigates the legal frameworks governing environmental restoration in post-war reconstruction, focusing on obligations, compensation mechanisms, and practical implementation challenges. Through a comparative doctrinal analysis of international instruments and empirical case studies from four post-conflict regions, this research identifies critical gaps in existing law and proposes actionable reforms to strengthen ecological restoration as an integral component of sustainable peace-building."></textarea>
@@ -2347,6 +2354,11 @@ def generate_paper():
     jobs[jid] = {'status': 'queued', 'progress': 0,
                  'message': 'Queued...', 'file_path': None, 'topic': topic, 'user_id': user_id}
     with get_db() as db:
+        # Ensure user exists (guards against FK constraint failure)
+        db.execute(
+            'INSERT OR IGNORE INTO users (id, email, name, picture) VALUES (?, ?, ?, ?)',
+            (user_id, email, sess.get('name', ''), sess.get('picture', ''))
+        )
         db.execute('INSERT INTO papers (id,user_id,topic) VALUES (?,?,?)', (jid, user_id, topic))
 
     questionnaire = {
@@ -2379,7 +2391,14 @@ def job_status(jid):
         return jsonify({'success': False, 'message': 'Unauthorized'}), 401
     job = jobs.get(jid)
     if not job:
-        return jsonify({'success': False, 'message': 'Job not found'}), 404
+        # Fall back to DB — server may have restarted mid-generation
+        with get_db() as db:
+            paper = db.execute('SELECT file_path, topic FROM papers WHERE id=?', (jid,)).fetchone()
+        if not paper:
+            return jsonify({'success': False, 'message': 'Job not found'}), 404
+        if paper['file_path']:
+            return jsonify({'success': True, 'status': 'done', 'progress': 100, 'message': 'Research paper ready!'})
+        return jsonify({'success': True, 'status': 'error', 'progress': 0, 'message': 'Job lost after server restart — please generate again.'})
     return jsonify({'success': True, 'status': job['status'],
                     'progress': job['progress'], 'message': job['message']})
 
@@ -2388,13 +2407,33 @@ def download_paper(jid):
     tok = request.headers.get('Authorization', '').replace('Bearer ', '')
     if not session_get(tok):
         return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+
+    # First check in-memory jobs dict
     job = jobs.get(jid)
-    if not job or job['status'] != 'done':
-        return jsonify({'success': False, 'message': 'File not ready'}), 400
-    fp = job.get('file_path')
+    fp = None
+
+    if job:
+        if job['status'] != 'done':
+            return jsonify({'success': False, 'message': 'File not ready'}), 400
+        fp = job.get('file_path')
+    else:
+        # Server may have restarted — look up file path from DB
+        with get_db() as db:
+            paper = db.execute('SELECT file_path, topic FROM papers WHERE id=?', (jid,)).fetchone()
+        if not paper:
+            return jsonify({'success': False, 'message': 'Job not found'}), 404
+        fp = paper['file_path']
+        topic_slug = paper['topic'] if paper['topic'] else jid
+        if not fp:
+            return jsonify({'success': False, 'message': 'File not ready — please generate again'}), 400
+        # Restore minimal job info for slug below
+        jobs[jid] = {'status': 'done', 'file_path': fp, 'topic': paper['topic'] or ''}
+
     if not fp or not os.path.exists(fp):
-        return jsonify({'success': False, 'message': 'File not found'}), 404
-    slug = re.sub(r'[^\w\-]', '_', job['topic'][:40])
+        return jsonify({'success': False, 'message': 'File not found on server'}), 404
+
+    topic_for_slug = jobs[jid].get('topic', '') if jid in jobs else ''
+    slug = re.sub(r'[^\w\-]', '_', topic_for_slug[:40]) if topic_for_slug else jid[:8]
     return send_file(fp, as_attachment=True,
                      download_name=f'rdxper_{slug}.docx',
                      mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
