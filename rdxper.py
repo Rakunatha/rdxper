@@ -1407,7 +1407,7 @@ HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>rdxper — AI Research Paper Generator</title>
+<title>rdxper</title>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -1536,16 +1536,16 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 <!-- LOGIN -->
 <div class="screen active" id="s-home">
   <div class="hero">
-    <div class="htag">✦ Free AI · Real Paper Data · SPSS Charts</div>
-    <h1>Generate <em>intelligent</em><br>research papers</h1>
-    <p class="sub">Powered by Groq Llama 3.3 · Real references from Semantic Scholar &amp; CrossRef · Download as .docx</p>
+ 
+    <h1>Generate <em> Genuinely Intelligent</em><br>Research Papers</h1>
+
   </div>
   <div class="card">
     <div class="ct">Sign in to continue</div>
     <div class="cs">Use your Google account — no password needed</div>
     <div id="n-login" class="notif"></div>
     <div id="g-btn-wrap" style="display:flex;justify-content:center;min-height:44px;align-items:center"></div>
-    <p style="font-size:11px;color:var(--dim);text-align:center;margin-top:14px">Sign in with your Google account to get started</p>
+
   </div>
 </div>
 
@@ -1782,7 +1782,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   </div>
 </div>
 
-<footer>rdxper v4.0 · Free AI · Real Paper Data · © 2025</footer>
+<footer>rdxper v4.0</footer>
 </div>
 
 <script>
@@ -1939,11 +1939,11 @@ async function generate(){
         q_objectives:qObjectives, q_statement:qStatement
       })});
     const d=await r.json();
-    if(!d.success){notify('n-gen',d.message||'Failed.','error');btn.disabled=false;btn.innerHTML='✦ Generate Research Paper';return;}
+    if(!d.success){notify('n-gen',d.message||'Failed.','error');btn.disabled=false;btn.innerHTML='Generate Research Paper';return;}
     jobId=d.job_id;curTopic=topic;curFigs=nfigs;
     document.getElementById('prog-topic').textContent=topic;
     buildSecGrid();show('s-prog');pollStatus();
-  }catch(e){notify('n-gen','Connection error.','error');btn.disabled=false;btn.innerHTML='✦ Generate Research Paper';}
+  }catch(e){notify('n-gen','Connection error.','error');btn.disabled=false;btn.innerHTML='Generate Research Paper';}
 }
 
 function buildSecGrid(){
@@ -1975,7 +1975,7 @@ function pollStatus(){
         show('s-done');
       }else if(d.status==='error'){
         clearInterval(poll);
-        const btn=document.getElementById('btn-gen');btn.disabled=false;btn.innerHTML='✦ Generate Paper (Free AI)';
+        const btn=document.getElementById('btn-gen');btn.disabled=false;btn.innerHTML='Generate Paper';
         alert('Generation failed: '+d.message);show('s-gen');
       }
     }catch(e){console.error(e);}
@@ -2349,3 +2349,4 @@ if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     host = "0.0.0.0" if os.environ.get("FLY_APP_NAME") or os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RENDER") or os.environ.get("SPACE_ID") else "127.0.0.1"
     app.run(host=host, port=port, debug=False, threaded=True)
+
