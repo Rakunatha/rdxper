@@ -1817,7 +1817,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   </div>
 </div>
 
-<footer>rdxper v4.0 ·</footer>
+<footer>rdxper v4.0. A Manathra Tool.</footer>
 </div>
 
 <script>
