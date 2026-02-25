@@ -1572,18 +1572,21 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 <div class="q-panel active" id="qp-0">
   <div class="q-badge">Step 1 of 6</div>
   <div class="ct" style="margin-bottom:6px">Identification of the Problem</div>
-  <div class="cs" style="margin-bottom:20px">What specific problem, issue or gap in society/practice prompted this research? Describe it in your own words — this becomes the foundation of your paper.</div>
+  <div class="cs" style="margin-bottom:20px">What specific problem prompted this research? Describe it in your own words — AI will use this as the foundation. <strong style="color:var(--accent)">Optional — skip if you prefer AI to write this.</strong></div>
   <div class="q-hint">💡 Think about: What is wrong or missing? Who is affected? What is the scale of the problem? What are the consequences of not addressing it?</div>
   <div class="fg">
     <label>Research Topic / Title *</label>
     <input type="text" id="topic-in" placeholder="e.g. Legal Frameworks for Environmental Restoration in Post-War Reconstruction">
   </div>
   <div class="fg">
-    <label>Problem Statement *</label>
+    <label>Problem Statement <span style="color:var(--dim);font-weight:400">(optional)</span></label>
     <textarea id="q-problem" rows="5" placeholder="Describe the core problem your research addresses. What issue exists? What are its consequences? Why does it need to be studied now?&#10;&#10;Example: Armed conflicts inflict devastating environmental damage that persists long after hostilities cease. Existing legal frameworks under the Geneva Conventions and Rome Statute fail to adequately address post-war ecological restoration, leaving affected communities without legal recourse or environmental remediation. This gap in international humanitarian law creates a vacuum where neither state nor non-state actors are held accountable for long-term environmental harm..."></textarea>
   </div>
   <div style="display:flex;gap:10px;justify-content:flex-end">
-    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(0)">Next → Literature Review</button>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="nextStep(0)">Skip →</button>
+      <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(0)">Next → Literature Review</button>
+    </div>
   </div>
 </div>
 
@@ -1591,7 +1594,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 <div class="q-panel" id="qp-1">
   <div class="q-badge">Step 2 of 6</div>
   <div class="ct" style="margin-bottom:6px">Literature Review</div>
-  <div class="cs" style="margin-bottom:20px">What existing research, laws, reports or theories relate to your topic? List the key sources you have reviewed. AI will expand these into a full scholarly literature review.</div>
+  <div class="cs" style="margin-bottom:20px">What sources have you reviewed? List them and AI will expand into a full literature review. <strong style="color:var(--accent)">Optional — AI will find real papers automatically if you skip.</strong></div>
   <div class="q-hint">💡 Include: Author names and years, key arguments, relevant reports, laws, treaties, court cases, or books. Even brief notes are fine — AI will elaborate.</div>
   <div class="fg">
     <label>Key Sources & Their Main Arguments *</label>
@@ -1599,6 +1602,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   </div>
   <div style="display:flex;gap:10px;justify-content:space-between">
     <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(1)">← Back</button>
+    <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(1)">Skip →</button>
     <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(1)">Next → Research Gap</button>
   </div>
 </div>
@@ -1607,14 +1611,15 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 <div class="q-panel" id="qp-2">
   <div class="q-badge">Step 3 of 6</div>
   <div class="ct" style="margin-bottom:6px">Research Gap</div>
-  <div class="cs" style="margin-bottom:20px">What is missing from existing research? What has not been studied, or not studied well enough? This is the specific gap your paper fills.</div>
+  <div class="cs" style="margin-bottom:20px">What is missing from existing research? AI will use your answer as the gap statement. <strong style="color:var(--accent)">Optional — AI will identify a gap automatically if you skip.</strong></div>
   <div class="q-hint">💡 Ask yourself: What do existing studies not cover? What contradictions exist in the literature? What context or population has been ignored? What methodology hasn't been applied?</div>
   <div class="fg">
-    <label>The Research Gap *</label>
+    <label>The Research Gap <span style="color:var(--dim);font-weight:400">(optional)</span></label>
     <textarea id="q-gap" rows="5" placeholder="Describe what is missing from current research and why your study is needed.&#10;&#10;Example: While significant scholarship exists on environmental protection during armed conflict, there is a critical gap in research on post-war environmental restoration obligations. Existing studies either focus on pre-conflict prevention or general humanitarian law without addressing the specific legal mechanisms required for ecological recovery. Furthermore, no comparative study has examined how different post-conflict nations (Iraq, Kosovo, Lebanon, Ukraine) have implemented or failed to implement environmental restoration under international law..."></textarea>
   </div>
   <div style="display:flex;gap:10px;justify-content:space-between">
     <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(2)">← Back</button>
+    <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(2)">Skip →</button>
     <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(2)">Next → Objectives</button>
   </div>
 </div>
@@ -1623,14 +1628,15 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 <div class="q-panel" id="qp-3">
   <div class="q-badge">Step 4 of 6</div>
   <div class="ct" style="margin-bottom:6px">Objectives of the Research</div>
-  <div class="cs" style="margin-bottom:20px">What specific goals does this research aim to achieve? List your research objectives — these will appear verbatim in your paper.</div>
+  <div class="cs" style="margin-bottom:20px">List your research objectives — they will appear verbatim in your paper. <strong style="color:var(--accent)">Optional — AI will generate objectives aligned to your topic if you skip.</strong></div>
   <div class="q-hint">💡 Good objectives: Start with "To examine / To analyse / To evaluate / To compare / To propose". Be specific. You need 4–6 objectives. One per line.</div>
   <div class="fg">
-    <label>Research Objectives * (one per line)</label>
+    <label>Research Objectives <span style="color:var(--dim);font-weight:400">(optional — one per line)</span></label>
     <textarea id="q-objectives" rows="7" placeholder="To examine the existing international legal frameworks governing environmental restoration in post-war reconstruction&#10;To analyse compensation mechanisms including liability determination, reparations, and restoration funding&#10;To evaluate practical challenges such as political instability, limited resources, and technical capacity gaps&#10;To compare legal approaches from different post-conflict contexts including Iraq, Kosovo, Lebanon, and Ukraine&#10;To propose recommendations for strengthening enforcement mechanisms and legal accountability for wartime environmental harm"></textarea>
   </div>
   <div style="display:flex;gap:10px;justify-content:space-between">
     <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(3)">← Back</button>
+    <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(3)">Skip →</button>
     <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(3)">Next → Research Statement</button>
   </div>
 </div>
@@ -1639,14 +1645,15 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 <div class="q-panel" id="qp-4">
   <div class="q-badge">Step 5 of 6</div>
   <div class="ct" style="margin-bottom:6px">Research Statement</div>
-  <div class="cs" style="margin-bottom:20px">Write a single concise statement that captures what this research does, how, and why. This is your thesis / research statement — the core claim of your paper.</div>
+  <div class="cs" style="margin-bottom:20px">Your thesis in 2–4 sentences — what this research does, how, and why. <strong style="color:var(--accent)">Optional — AI will formulate a research statement if you skip.</strong></div>
   <div class="q-hint">💡 A good research statement: Names the topic, identifies the method (doctrinal/empirical/comparative), and states the significance. Typically 2–4 sentences.</div>
   <div class="fg">
-    <label>Research Statement *</label>
+    <label>Research Statement <span style="color:var(--dim);font-weight:400">(optional)</span></label>
     <textarea id="q-statement" rows="5" placeholder="This study investigates the legal frameworks governing environmental restoration in post-war reconstruction, focusing on obligations, compensation mechanisms, and practical implementation challenges. Through a comparative doctrinal analysis of international instruments and empirical case studies from four post-conflict regions, this research identifies critical gaps in existing law and proposes actionable reforms to strengthen ecological restoration as an integral component of sustainable peace-building."></textarea>
   </div>
   <div style="display:flex;gap:10px;justify-content:space-between">
     <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(4)">← Back</button>
+    <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(4)">Skip →</button>
     <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(4)">Next → Paper Settings</button>
   </div>
 </div>
@@ -1857,26 +1864,9 @@ function goStep(n){
 }
 
 function nextStep(from){
-  // Validate required fields
-  if(from===0){
-    if(!document.getElementById('topic-in').value.trim()){
-      alert('Please enter your research topic.'); return;
-    }
-    if(!document.getElementById('q-problem').value.trim()){
-      alert('Please describe the problem your research addresses.'); return;
-    }
-  }
-  if(from===1 && !document.getElementById('q-lit').value.trim()){
-    alert('Please list at least some key sources or literature you have reviewed.'); return;
-  }
-  if(from===2 && !document.getElementById('q-gap').value.trim()){
-    alert('Please describe the research gap.'); return;
-  }
-  if(from===3 && !document.getElementById('q-objectives').value.trim()){
-    alert('Please enter your research objectives.'); return;
-  }
-  if(from===4 && !document.getElementById('q-statement').value.trim()){
-    alert('Please write your research statement.'); return;
+  // Only validate the topic (required), everything else is optional
+  if(from===0 && !document.getElementById('topic-in').value.trim()){
+    alert('Please enter your research topic — this is the only required field.'); return;
   }
   currentStep = from + 1;
   if(currentStep === 5) buildSummary();
@@ -1937,7 +1927,6 @@ async function generate(){
   const qStatement  = document.getElementById('q-statement').value.trim();
 
   if(!topic){notify('n-gen','Please enter a research topic.','error');return;}
-  if(!qProblem){notify('n-gen','Please go back and fill in the Problem Identification.','error');return;}
 
   const btn=document.getElementById('btn-gen');
   btn.disabled=true;btn.innerHTML='<span class="spin"></span>Generating...';
