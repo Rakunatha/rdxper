@@ -1,30 +1,28 @@
-“””
+"""
 rdxper v4.0 — Free AI-Powered Real Research Paper Generator
 ────────────────────────────────────────────────────────────
 Pipeline:
-
-1. Semantic Scholar API  → real papers (titles, abstracts, citations, DOIs)
-1. CrossRef API          → additional verified journal articles
-1. Wikipedia REST API    → background context & definitions
-1. Groq (FREE) / Gemini  → writes ALL prose sections using scraped data as context
-1. python-docx           → assembles formatted .docx with SPSS-style charts
+  1. Semantic Scholar API  → real papers (titles, abstracts, citations, DOIs)
+  2. CrossRef API          → additional verified journal articles
+  3. Wikipedia REST API    → background context & definitions
+  4. Groq (FREE) / Gemini  → writes ALL prose sections using scraped data as context
+  5. python-docx           → assembles formatted .docx with SPSS-style charts
 
 Free AI Provider Options (in priority order):
-
-1. Groq  (FREE - https://console.groq.com/keys)
-   set GROQ_API_KEY=your_key_here
-1. Google Gemini (free tier - https://aistudio.google.com/app/apikey)
-   set GEMINI_API_KEY=your_key_here
+  1. Groq  (FREE - https://console.groq.com/keys)
+     set GROQ_API_KEY=your_key_here
+  2. Google Gemini (free tier - https://aistudio.google.com/app/apikey)
+     set GEMINI_API_KEY=your_key_here
 
 Usage:
-python rdxper.py
-“””
+  python rdxper.py
+"""
 
 import os, uuid, time, threading, smtplib, secrets, io, random, re, json, hmac, hashlib, sqlite3
 import urllib.request, urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import matplotlib
-matplotlib.use(‘Agg’)
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 from datetime import datetime
@@ -37,249 +35,186 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
-app = Flask(**name**)
+app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
 
 otp_store = {}
 sessions  = {}
 jobs      = {}
-ADMIN_EMAIL = os.environ.get(‘ADMIN_EMAIL’, ‘rkhrishanthm@gmail.com’)
+ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'rkhrishanthm@gmail.com')
 
 # ── SQLite DB ─────────────────────────────────────────────────────────────────
-
-DB_PATH = os.environ.get(‘DB_PATH’, ‘rdxper.db’)
+DB_PATH = os.environ.get('DB_PATH', 'rdxper.db')
 
 def get_db():
-conn = sqlite3.connect(DB_PATH)
-conn.row_factory = sqlite3.Row
-return conn
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 def init_db():
-with get_db() as db:
-db.executescript(”””
-CREATE TABLE IF NOT EXISTS users (
-id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL,
-name TEXT, picture TEXT,
-created_at TEXT DEFAULT (datetime(‘now’)),
-last_login TEXT
-);
-CREATE TABLE IF NOT EXISTS papers (
-id TEXT PRIMARY KEY, user_id TEXT NOT NULL, topic TEXT,
-file_path TEXT, paid INTEGER DEFAULT 0, amount INTEGER DEFAULT 0,
-created_at TEXT DEFAULT (datetime(‘now’)),
-FOREIGN KEY(user_id) REFERENCES users(id)
-);
-CREATE TABLE IF NOT EXISTS payments (
-id TEXT PRIMARY KEY, user_id TEXT NOT NULL, paper_id TEXT,
-razorpay_order TEXT, razorpay_payment TEXT, amount INTEGER,
-status TEXT DEFAULT ‘pending’,
-created_at TEXT DEFAULT (datetime(‘now’)),
-FOREIGN KEY(user_id) REFERENCES users(id)
-);
-CREATE TABLE IF NOT EXISTS sessions (
-token TEXT PRIMARY KEY,
-email TEXT NOT NULL,
-created_at TEXT DEFAULT (datetime(‘now’))
-);
-“””)
+    with get_db() as db:
+        db.executescript("""
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL,
+                name TEXT, picture TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                last_login TEXT
+            );
+            CREATE TABLE IF NOT EXISTS papers (
+                id TEXT PRIMARY KEY, user_id TEXT NOT NULL, topic TEXT,
+                file_path TEXT, paid INTEGER DEFAULT 0, amount INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+            CREATE TABLE IF NOT EXISTS payments (
+                id TEXT PRIMARY KEY, user_id TEXT NOT NULL, paper_id TEXT,
+                razorpay_order TEXT, razorpay_payment TEXT, amount INTEGER,
+                status TEXT DEFAULT 'pending',
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+            CREATE TABLE IF NOT EXISTS sessions (
+                token TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+        """)
 
 init_db()
+os.makedirs('generated', exist_ok=True)
+
 
 def session_set(token: str, email: str):
-“”“Persist a session token to the DB and keep in-memory cache.”””
-sessions[token] = {‘email’: email}
-try:
-with get_db() as db:
-db.execute(‘INSERT OR REPLACE INTO sessions (token, email) VALUES (?, ?)’, (token, email))
-except Exception as e:
-print(f’[session_set] DB error: {e}’)
+    """Persist a session token to the DB and keep in-memory cache."""
+    sessions[token] = {'email': email}
+    try:
+        with get_db() as db:
+            db.execute('INSERT OR REPLACE INTO sessions (token, email) VALUES (?, ?)', (token, email))
+    except Exception as e:
+        print(f'[session_set] DB error: {e}')
 
-def session_get(token: str) -> dict | None:
-“”“Return session dict from memory, falling back to DB (handles restarts).”””
-if not token:
-return None
-if token in sessions:
-return sessions[token]
-try:
-with get_db() as db:
-row = db.execute(‘SELECT email FROM sessions WHERE token=?’, (token,)).fetchone()
-if row:
-email = row[‘email’]
-user = db.execute(‘SELECT id, name, picture FROM users WHERE email=?’, (email,)).fetchone()
-sessions[token] = {
-‘email’: email,
-‘user_id’: user[‘id’] if user else email,
-‘name’: user[‘name’] if user else ‘’,
-‘picture’: user[‘picture’] if user else ‘’,
-}
-return sessions[token]
-except Exception as e:
-print(f’[session_get] DB error: {e}’)
-return None
+
+def session_get(token: str) -> object:
+    """Return session dict from memory, falling back to DB (handles restarts)."""
+    if not token:
+        return None
+    if token in sessions:
+        return sessions[token]
+    try:
+        with get_db() as db:
+            row = db.execute('SELECT email FROM sessions WHERE token=?', (token,)).fetchone()
+            if row:
+                email = row['email']
+                user = db.execute('SELECT id, name, picture FROM users WHERE email=?', (email,)).fetchone()
+                sessions[token] = {
+                    'email': email,
+                    'user_id': user['id'] if user else email,
+                    'name': user['name'] if user else '',
+                    'picture': user['picture'] if user else '',
+                }
+                return sessions[token]
+    except Exception as e:
+        print(f'[session_get] DB error: {e}')
+    return None
+
 
 def session_delete(token: str):
-sessions.pop(token, None)
-try:
-with get_db() as db:
-db.execute(‘DELETE FROM sessions WHERE token=?’, (token,))
-except Exception as e:
-print(f’[session_delete] DB error: {e}’)
+    sessions.pop(token, None)
+    try:
+        with get_db() as db:
+            db.execute('DELETE FROM sessions WHERE token=?', (token,))
+    except Exception as e:
+        print(f'[session_delete] DB error: {e}')
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
-
-# FREE AI CLIENT  (Groq primary, Gemini fallback)
-
+#  FREE AI CLIENT  (Groq primary, Gemini fallback)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Ordered sections — used to map closing tags → progress %
-
 SECTION_ORDER = [
-‘keywords’, ‘abstract’, ‘introduction’, ‘objectives’,
-‘literature_review’, ‘methodology’, ‘results’,
-‘discussion’, ‘suggestions’, ‘limitations’, ‘conclusion’, ‘charts’,
+    'keywords', 'abstract', 'introduction', 'objectives',
+    'literature_review', 'methodology', 'results',
+    'discussion', 'suggestions', 'limitations', 'conclusion', 'charts',
 ]
 SECTION_LABELS = {
-‘keywords’:          ‘Writing keywords…’,
-‘abstract’:          ‘Writing abstract…’,
-‘introduction’:      ‘Writing introduction…’,
-‘objectives’:        ‘Writing objectives…’,
-‘literature_review’: ‘Writing literature review…’,
-‘methodology’:       ‘Writing methodology…’,
-‘results’:           ‘Writing results…’,
-‘discussion’:        ‘Writing discussion…’,
-‘suggestions’:       ‘Writing suggestions…’,
-‘limitations’:       ‘Writing limitations…’,
-‘conclusion’:        ‘Writing conclusion…’,
-‘charts’:            ‘Designing chart specifications…’,
+    'keywords':          'Writing keywords...',
+    'abstract':          'Writing abstract...',
+    'introduction':      'Writing introduction...',
+    'objectives':        'Writing objectives...',
+    'literature_review': 'Writing literature review...',
+    'methodology':       'Writing methodology...',
+    'results':           'Writing results...',
+    'discussion':        'Writing discussion...',
+    'suggestions':       'Writing suggestions...',
+    'limitations':       'Writing limitations...',
+    'conclusion':        'Writing conclusion...',
+    'charts':            'Designing chart specifications...',
 }
 _AI_START = 30
 _AI_END   = 75
 
+
 def _detect_provider():
-“”“Auto-detect which free AI provider to use.”””
-if os.environ.get(“GROQ_API_KEY”, “”).strip():
-return “groq”
-if os.environ.get(“GEMINI_API_KEY”, “”).strip():
-return “gemini”
-return None
+    """Auto-detect which free AI provider to use."""
+    if os.environ.get("GROQ_API_KEY", "").strip():
+        return "groq"
+    if os.environ.get("GEMINI_API_KEY", "").strip():
+        return "gemini"
+    return None
+
 
 def _groq_generate(prompt: str, system: str, temperature: float,
-progress_cb=None, tracked_sections=None) -> str:
-“””
-Call Groq API (free tier — llama-3.3-70b-versatile).
-Groq uses OpenAI-compatible REST API with SSE streaming.
-“””
-api_key = os.environ.get(“GROQ_API_KEY”, “”).strip()
-model   = “llama-3.3-70b-versatile”   # free on Groq
+                   progress_cb=None, tracked_sections=None) -> str:
+    """
+    Call Groq API (free tier — llama-3.3-70b-versatile).
+    Groq uses OpenAI-compatible REST API with SSE streaming.
+    """
+    api_key = os.environ.get("GROQ_API_KEY", "").strip()
+    model   = "llama-3.3-70b-versatile"   # free on Groq
 
-```
-messages = []
-if system:
-    messages.append({"role": "system", "content": system})
-messages.append({"role": "user", "content": prompt})
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
 
-payload = {
-    "model": model,
-    "messages": messages,
-    "temperature": temperature,
-    "max_tokens": 32768,
-    "stream": True,
-}
-body = json.dumps(payload).encode("utf-8")
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": 32768,
+        "stream": True,
+    }
+    body = json.dumps(payload).encode("utf-8")
 
-# Use http.client directly — urllib's default User-Agent triggers
-# Cloudflare's bot detection on Groq (error 1010 / 403)
-import http.client, ssl
-ctx  = ssl.create_default_context()
-conn = http.client.HTTPSConnection("api.groq.com", timeout=120, context=ctx)
+    # Use http.client directly — urllib's default User-Agent triggers
+    # Cloudflare's bot detection on Groq (error 1010 / 403)
+    import http.client, ssl
+    ctx  = ssl.create_default_context()
+    conn = http.client.HTTPSConnection("api.groq.com", timeout=120, context=ctx)
 
-hdrs = {
-    "Content-Type":   "application/json",
-    "Authorization":  f"Bearer {api_key}",
-    "User-Agent":     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) "
-                      "Chrome/124.0.0.0 Safari/537.36",
-    "Accept":         "text/event-stream",
-    "Accept-Language":"en-US,en;q=0.9",
-}
+    hdrs = {
+        "Content-Type":   "application/json",
+        "Authorization":  f"Bearer {api_key}",
+        "User-Agent":     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/124.0.0.0 Safari/537.36",
+        "Accept":         "text/event-stream",
+        "Accept-Language":"en-US,en;q=0.9",
+    }
 
-accumulated   = ""
-sections_done = []
-watch         = tracked_sections if tracked_sections is not None else SECTION_ORDER
+    accumulated   = ""
+    sections_done = []
+    watch         = tracked_sections if tracked_sections is not None else SECTION_ORDER
 
-try:
-    conn.request("POST", "/openai/v1/chat/completions", body=body, headers=hdrs)
-    resp = conn.getresponse()
+    try:
+        conn.request("POST", "/openai/v1/chat/completions", body=body, headers=hdrs)
+        resp = conn.getresponse()
 
-    if resp.status != 200:
-        err = resp.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Groq HTTP {resp.status}: {err[:400]}")
+        if resp.status != 200:
+            err = resp.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Groq HTTP {resp.status}: {err[:400]}")
 
-    for raw_line in resp:
-        line = raw_line.decode("utf-8", errors="replace").strip()
-        if not line.startswith("data:"):
-            continue
-        data_str = line[5:].strip()
-        if data_str == "[DONE]":
-            break
-        try:
-            chunk  = json.loads(data_str)
-            token  = chunk["choices"][0]["delta"].get("content", "")
-            accumulated += token
-
-            for tag in watch:
-                if tag not in sections_done and f"</{tag}>" in accumulated:
-                    sections_done.append(tag)
-                    pct = _AI_START + int(len(sections_done) / len(watch) * (_AI_END - _AI_START))
-                    next_idx = watch.index(tag) + 1
-                    msg = SECTION_LABELS.get(watch[next_idx], "Finishing up...") if next_idx < len(watch) else "Finishing up..."
-                    if progress_cb:
-                        progress_cb(pct, f'✓ {tag.replace("_"," ").title()} done — {msg}')
-
-        except (json.JSONDecodeError, IndexError, KeyError):
-            continue
-
-except RuntimeError:
-    raise
-except Exception as e:
-    raise RuntimeError(f"Groq request failed: {e}")
-finally:
-    conn.close()
-
-if not accumulated:
-    raise RuntimeError("Groq returned empty response.")
-return accumulated.strip()
-```
-
-def _gemini_generate(prompt: str, system: str, temperature: float,
-progress_cb=None, tracked_sections=None) -> str:
-“”“Call Gemini via SSE streaming (free tier).”””
-api_key = os.environ.get(“GEMINI_API_KEY”, “”).strip()
-if not api_key:
-raise RuntimeError(“GEMINI_API_KEY not set.”)
-
-```
-model = "gemini-2.0-flash"
-url   = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?key={api_key}&alt=sse"
-
-payload = {
-    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-    "generationConfig": {"temperature": temperature, "maxOutputTokens": 32768},
-}
-if system:
-    payload["systemInstruction"] = {"parts": [{"text": system}]}
-
-body = json.dumps(payload).encode("utf-8")
-req  = urllib.request.Request(url, data=body,
-                               headers={"Content-Type": "application/json"},
-                               method="POST")
-
-accumulated   = ""
-sections_done = []
-watch         = tracked_sections if tracked_sections is not None else SECTION_ORDER
-
-try:
-    with urllib.request.urlopen(req, timeout=120) as resp:
         for raw_line in resp:
             line = raw_line.decode("utf-8", errors="replace").strip()
             if not line.startswith("data:"):
@@ -288,11 +223,8 @@ try:
             if data_str == "[DONE]":
                 break
             try:
-                chunk = json.loads(data_str)
-                token = (chunk.get("candidates", [{}])[0]
-                              .get("content", {})
-                              .get("parts", [{}])[0]
-                              .get("text", ""))
+                chunk  = json.loads(data_str)
+                token  = chunk["choices"][0]["delta"].get("content", "")
                 accumulated += token
 
                 for tag in watch:
@@ -300,1280 +232,1333 @@ try:
                         sections_done.append(tag)
                         pct = _AI_START + int(len(sections_done) / len(watch) * (_AI_END - _AI_START))
                         next_idx = watch.index(tag) + 1
-                        msg = SECTION_LABELS.get(watch[next_idx], 'Finishing up...') if next_idx < len(watch) else 'Finishing up...'
+                        msg = SECTION_LABELS.get(watch[next_idx], "Finishing up...") if next_idx < len(watch) else "Finishing up..."
                         if progress_cb:
                             progress_cb(pct, f'✓ {tag.replace("_"," ").title()} done — {msg}')
+
             except (json.JSONDecodeError, IndexError, KeyError):
                 continue
-except urllib.error.HTTPError as e:
-    err = e.read().decode("utf-8", errors="replace")
-    raise RuntimeError(f"Gemini HTTP {e.code}: {err[:400]}")
-except Exception as e:
-    raise RuntimeError(f"Gemini streaming failed: {e}")
 
-if not accumulated:
-    raise RuntimeError("Gemini returned empty response.")
-return accumulated.strip()
-```
+    except RuntimeError:
+        raise
+    except Exception as e:
+        raise RuntimeError(f"Groq request failed: {e}")
+    finally:
+        conn.close()
 
-def ai_generate(prompt: str, system: str = “”, temperature: float = 0.7,
-progress_cb=None, tracked_sections=None) -> str:
-“””
-Generate text using the best available free AI provider.
-Priority: Groq (free) → Gemini (free tier)
-“””
-provider = _detect_provider()
-if provider == “groq”:
-return _groq_generate(prompt, system, temperature, progress_cb, tracked_sections)
-elif provider == “gemini”:
-return _gemini_generate(prompt, system, temperature, progress_cb, tracked_sections)
-else:
-raise RuntimeError(
-“No AI API key found. Set GROQ_API_KEY (free at https://console.groq.com/keys) “
-“or GEMINI_API_KEY (free at https://aistudio.google.com/app/apikey)”
-)
+    if not accumulated:
+        raise RuntimeError("Groq returned empty response.")
+    return accumulated.strip()
+
+
+def _gemini_generate(prompt: str, system: str, temperature: float,
+                     progress_cb=None, tracked_sections=None) -> str:
+    """Call Gemini via SSE streaming (free tier)."""
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set.")
+
+    model = "gemini-2.0-flash"
+    url   = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?key={api_key}&alt=sse"
+
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": temperature, "maxOutputTokens": 32768},
+    }
+    if system:
+        payload["systemInstruction"] = {"parts": [{"text": system}]}
+
+    body = json.dumps(payload).encode("utf-8")
+    req  = urllib.request.Request(url, data=body,
+                                   headers={"Content-Type": "application/json"},
+                                   method="POST")
+
+    accumulated   = ""
+    sections_done = []
+    watch         = tracked_sections if tracked_sections is not None else SECTION_ORDER
+
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            for raw_line in resp:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                data_str = line[5:].strip()
+                if data_str == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                    token = (chunk.get("candidates", [{}])[0]
+                                  .get("content", {})
+                                  .get("parts", [{}])[0]
+                                  .get("text", ""))
+                    accumulated += token
+
+                    for tag in watch:
+                        if tag not in sections_done and f"</{tag}>" in accumulated:
+                            sections_done.append(tag)
+                            pct = _AI_START + int(len(sections_done) / len(watch) * (_AI_END - _AI_START))
+                            next_idx = watch.index(tag) + 1
+                            msg = SECTION_LABELS.get(watch[next_idx], 'Finishing up...') if next_idx < len(watch) else 'Finishing up...'
+                            if progress_cb:
+                                progress_cb(pct, f'✓ {tag.replace("_"," ").title()} done — {msg}')
+                except (json.JSONDecodeError, IndexError, KeyError):
+                    continue
+    except urllib.error.HTTPError as e:
+        err = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Gemini HTTP {e.code}: {err[:400]}")
+    except Exception as e:
+        raise RuntimeError(f"Gemini streaming failed: {e}")
+
+    if not accumulated:
+        raise RuntimeError("Gemini returned empty response.")
+    return accumulated.strip()
+
+
+def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
+                progress_cb=None, tracked_sections=None) -> str:
+    """
+    Generate text using the best available free AI provider.
+    Priority: Groq (free) → Gemini (free tier)
+    """
+    provider = _detect_provider()
+    if provider == "groq":
+        return _groq_generate(prompt, system, temperature, progress_cb, tracked_sections)
+    elif provider == "gemini":
+        return _gemini_generate(prompt, system, temperature, progress_cb, tracked_sections)
+    else:
+        raise RuntimeError(
+            "No AI API key found. Set GROQ_API_KEY (free at https://console.groq.com/keys) "
+            "or GEMINI_API_KEY (free at https://aistudio.google.com/app/apikey)"
+        )
+
 
 # Keep gemini_stream as alias for backward compatibility
+def gemini_stream(prompt, system="", temperature=0.7, progress_cb=None, tracked_sections=None):
+    return ai_generate(prompt, system, temperature, progress_cb, tracked_sections)
 
-def gemini_stream(prompt, system=””, temperature=0.7, progress_cb=None, tracked_sections=None):
-return ai_generate(prompt, system, temperature, progress_cb, tracked_sections)
 
 SYSTEM_PROMPT = (
-“You are an expert academic research paper writer. “
-“You write in formal, scholarly English suitable for peer-reviewed journals. “
-“Do not use markdown formatting, bullet points, asterisks, or headers in your output — “
-“write clean flowing prose only, unless explicitly asked for a list. “
-“Be specific, evidence-grounded, and academically rigorous. “
-“Do not invent statistics or cite sources not provided to you.”
+    "You are an expert academic research paper writer. "
+    "You write in formal, scholarly English suitable for peer-reviewed journals. "
+    "Do not use markdown formatting, bullet points, asterisks, or headers in your output — "
+    "write clean flowing prose only, unless explicitly asked for a list. "
+    "Be specific, evidence-grounded, and academically rigorous. "
+    "Do not invent statistics or cite sources not provided to you."
 )
 
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# WEB SCRAPER  (no API keys required)
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  WEB SCRAPER  (no API keys required)
+# ═══════════════════════════════════════════════════════════════════════════════
 
-def _http_get(url: str, timeout: int = 12) -> dict | None:
-try:
-req = urllib.request.Request(
-url,
-headers={“User-Agent”: “rdxper/3.0 (research-paper-generator; educational use)”}
-)
-with urllib.request.urlopen(req, timeout=timeout) as resp:
-return json.loads(resp.read().decode(“utf-8”, errors=“replace”))
-except Exception as e:
-print(f”[HTTP] {url[:80]} → {e}”)
-return None
+def _http_get(url: str, timeout: int = 12) -> object:
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "rdxper/3.0 (research-paper-generator; educational use)"}
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="replace"))
+    except Exception as e:
+        print(f"[HTTP] {url[:80]} → {e}")
+        return None
+
 
 class WebScraper:
-def **init**(self, topic: str):
-self.topic = topic
-self.query = urllib.parse.quote(topic)
+    def __init__(self, topic: str):
+        self.topic = topic
+        self.query = urllib.parse.quote(topic)
 
-```
-def fetch_semantic_scholar(self, limit: int = 10) -> list[dict]:
-    url = (
-        f"https://api.semanticscholar.org/graph/v1/paper/search"
-        f"?query={self.query}&limit={limit}"
-        f"&fields=title,authors,year,abstract,citationCount,externalIds,publicationVenue"
-    )
-    data = _http_get(url)
-    papers = []
-    if data and "data" in data:
-        for p in data["data"]:
-            if not p.get("title"):
-                continue
-            raw_authors = p.get("authors", [])
-            if not raw_authors:
-                author_str = "Unknown Author"
-            elif len(raw_authors) == 1:
-                author_str = raw_authors[0].get("name", "Unknown")
-            elif len(raw_authors) == 2:
-                author_str = f"{raw_authors[0].get('name','?')} & {raw_authors[1].get('name','?')}"
-            else:
-                author_str = f"{raw_authors[0].get('name','?')} et al."
-            papers.append({
-                "title":     p.get("title", "").strip(),
-                "authors":   author_str,
-                "year":      p.get("year") or 2022,
-                "abstract":  (p.get("abstract") or "").strip()[:500],
-                "doi":       (p.get("externalIds") or {}).get("DOI", ""),
-                "citations": p.get("citationCount") or 0,
-                "journal":   ((p.get("publicationVenue") or {}).get("name") or ""),
-            })
-    return papers
+    def fetch_semantic_scholar(self, limit: int = 10) -> list:
+        url = (
+            f"https://api.semanticscholar.org/graph/v1/paper/search"
+            f"?query={self.query}&limit={limit}"
+            f"&fields=title,authors,year,abstract,citationCount,externalIds,publicationVenue"
+        )
+        data = _http_get(url)
+        papers = []
+        if data and "data" in data:
+            for p in data["data"]:
+                if not p.get("title"):
+                    continue
+                raw_authors = p.get("authors", [])
+                if not raw_authors:
+                    author_str = "Unknown Author"
+                elif len(raw_authors) == 1:
+                    author_str = raw_authors[0].get("name", "Unknown")
+                elif len(raw_authors) == 2:
+                    author_str = f"{raw_authors[0].get('name','?')} & {raw_authors[1].get('name','?')}"
+                else:
+                    author_str = f"{raw_authors[0].get('name','?')} et al."
+                papers.append({
+                    "title":     p.get("title", "").strip(),
+                    "authors":   author_str,
+                    "year":      p.get("year") or 2022,
+                    "abstract":  (p.get("abstract") or "").strip()[:500],
+                    "doi":       (p.get("externalIds") or {}).get("DOI", ""),
+                    "citations": p.get("citationCount") or 0,
+                    "journal":   ((p.get("publicationVenue") or {}).get("name") or ""),
+                })
+        return papers
 
-def fetch_crossref(self, limit: int = 6) -> list[dict]:
-    url = (
-        f"https://api.crossref.org/works?query={self.query}"
-        f"&rows={limit}&sort=relevance"
-        f"&select=title,author,published,container-title,DOI"
-    )
-    data = _http_get(url)
-    results = []
-    if data and "message" in data:
-        for item in data["message"].get("items", []):
-            titles = item.get("title", [])
-            title  = titles[0] if titles else ""
-            if not title:
-                continue
-            raw = item.get("author", [])
-            if not raw:
-                author_str = "Unknown Author"
-            elif len(raw) == 1:
-                a = raw[0]
-                author_str = f"{a.get('family','?')}, {a.get('given','')[:1]}."
-            elif len(raw) == 2:
-                a, b = raw[0], raw[1]
-                author_str = (
-                    f"{a.get('family','?')}, {a.get('given','')[:1]}. & "
-                    f"{b.get('family','?')}, {b.get('given','')[:1]}."
-                )
-            else:
-                a = raw[0]
-                author_str = f"{a.get('family','?')}, {a.get('given','')[:1]}. et al."
-            pub   = item.get("published", {})
-            year  = (pub.get("date-parts") or [[2022]])[0][0]
-            jlist = item.get("container-title", [])
-            results.append({
-                "title":   title.strip(),
-                "authors": author_str,
-                "year":    year,
-                "journal": jlist[0] if jlist else "Academic Journal",
-                "doi":     item.get("DOI", ""),
-                "citations": 0,
-                "abstract": "",
-            })
-    return results
+    def fetch_crossref(self, limit: int = 6) -> list:
+        url = (
+            f"https://api.crossref.org/works?query={self.query}"
+            f"&rows={limit}&sort=relevance"
+            f"&select=title,author,published,container-title,DOI"
+        )
+        data = _http_get(url)
+        results = []
+        if data and "message" in data:
+            for item in data["message"].get("items", []):
+                titles = item.get("title", [])
+                title  = titles[0] if titles else ""
+                if not title:
+                    continue
+                raw = item.get("author", [])
+                if not raw:
+                    author_str = "Unknown Author"
+                elif len(raw) == 1:
+                    a = raw[0]
+                    author_str = f"{a.get('family','?')}, {a.get('given','')[:1]}."
+                elif len(raw) == 2:
+                    a, b = raw[0], raw[1]
+                    author_str = (
+                        f"{a.get('family','?')}, {a.get('given','')[:1]}. & "
+                        f"{b.get('family','?')}, {b.get('given','')[:1]}."
+                    )
+                else:
+                    a = raw[0]
+                    author_str = f"{a.get('family','?')}, {a.get('given','')[:1]}. et al."
+                pub   = item.get("published", {})
+                year  = (pub.get("date-parts") or [[2022]])[0][0]
+                jlist = item.get("container-title", [])
+                results.append({
+                    "title":   title.strip(),
+                    "authors": author_str,
+                    "year":    year,
+                    "journal": jlist[0] if jlist else "Academic Journal",
+                    "doi":     item.get("DOI", ""),
+                    "citations": 0,
+                    "abstract": "",
+                })
+        return results
 
-def fetch_wikipedia(self) -> dict:
-    slug = urllib.parse.quote(self.topic.replace(" ", "_"))
-    url  = f"https://en.wikipedia.org/api/rest_v1/page/summary/{slug}"
-    data = _http_get(url)
-    if data and data.get("type") not in ("disambiguation",) and data.get("extract"):
-        return {
-            "summary": data["extract"],
-            "url":     data.get("content_urls", {}).get("desktop", {}).get("page", ""),
-            "title":   data.get("title", self.topic),
-        }
-    # Fallback: first word
-    slug2 = urllib.parse.quote(self.topic.split()[0])
-    data2 = _http_get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{slug2}")
-    if data2 and data2.get("extract"):
-        return {
-            "summary": data2["extract"],
-            "url":     data2.get("content_urls", {}).get("desktop", {}).get("page", ""),
-            "title":   data2.get("title", self.topic),
-        }
-    return {"summary": "", "url": "", "title": self.topic}
+    def fetch_wikipedia(self) -> dict:
+        slug = urllib.parse.quote(self.topic.replace(" ", "_"))
+        url  = f"https://en.wikipedia.org/api/rest_v1/page/summary/{slug}"
+        data = _http_get(url)
+        if data and data.get("type") not in ("disambiguation",) and data.get("extract"):
+            return {
+                "summary": data["extract"],
+                "url":     data.get("content_urls", {}).get("desktop", {}).get("page", ""),
+                "title":   data.get("title", self.topic),
+            }
+        # Fallback: first word
+        slug2 = urllib.parse.quote(self.topic.split()[0])
+        data2 = _http_get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{slug2}")
+        if data2 and data2.get("extract"):
+            return {
+                "summary": data2["extract"],
+                "url":     data2.get("content_urls", {}).get("desktop", {}).get("page", ""),
+                "title":   data2.get("title", self.topic),
+            }
+        return {"summary": "", "url": "", "title": self.topic}
 
-def gather(self, progress_cb=None) -> dict:
-    if progress_cb: progress_cb(10, "Querying Semantic Scholar for real papers...")
-    ss = self.fetch_semantic_scholar(10)
+    def gather(self, progress_cb=None) -> dict:
+        if progress_cb: progress_cb(10, "Querying Semantic Scholar for real papers...")
+        ss = self.fetch_semantic_scholar(10)
 
-    if progress_cb: progress_cb(18, "Querying CrossRef for verified journal articles...")
-    cr = self.fetch_crossref(6)
+        if progress_cb: progress_cb(18, "Querying CrossRef for verified journal articles...")
+        cr = self.fetch_crossref(6)
 
-    if progress_cb: progress_cb(24, "Fetching Wikipedia background context...")
-    wiki = self.fetch_wikipedia()
+        if progress_cb: progress_cb(24, "Fetching Wikipedia background context...")
+        wiki = self.fetch_wikipedia()
 
-    # Merge, deduplicate by title prefix
-    seen = set()
-    all_papers = []
-    for p in ss + cr:
-        key = p["title"][:40].lower()
-        if key not in seen:
-            seen.add(key)
-            all_papers.append(p)
+        # Merge, deduplicate by title prefix
+        seen = set()
+        all_papers = []
+        for p in ss + cr:
+            key = p["title"][:40].lower()
+            if key not in seen:
+                seen.add(key)
+                all_papers.append(p)
 
-    # Sort by citation count
-    all_papers.sort(key=lambda x: x.get("citations", 0), reverse=True)
+        # Sort by citation count
+        all_papers.sort(key=lambda x: x.get("citations", 0), reverse=True)
 
-    print(f"[Scraper] {len(ss)} SS papers, {len(cr)} CrossRef, wiki={'yes' if wiki.get('summary') else 'no'}")
-    return {"papers": all_papers, "wiki": wiki}
-```
+        print(f"[Scraper] {len(ss)} SS papers, {len(cr)} CrossRef, wiki={'yes' if wiki.get('summary') else 'no'}")
+        return {"papers": all_papers, "wiki": wiki}
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
-
-# GEMINI CONTENT GENERATOR
-
-# Takes scraped data → asks Gemini to write each section
-
+#  GEMINI CONTENT GENERATOR
+#  Takes scraped data → asks Gemini to write each section
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class GeminiWriter:
-def **init**(self, topic: str, scraped: dict, questionnaire: dict = None):
-self.topic        = topic
-self.papers       = scraped.get(“papers”, [])
-self.wiki         = scraped.get(“wiki”, {})
-self.seed         = sum(ord(c) for c in topic)
-random.seed(self.seed)
-np.random.seed(self.seed % 2**31)
-self.n_respondents = random.randint(270, 340)
-self.aware_pct     = random.randint(62, 74)
-self.fam_pct       = random.randint(70, 83)
-self.support_pct   = random.randint(62, 69)
-self.questionnaire = questionnaire or {}
-self._paper_digest = self._build_digest()
-self.sections      = {}   # filled by generate_all()
+    def __init__(self, topic: str, scraped: dict, questionnaire: dict = None):
+        self.topic        = topic
+        self.papers       = scraped.get("papers", [])
+        self.wiki         = scraped.get("wiki", {})
+        self.seed         = sum(ord(c) for c in topic)
+        random.seed(self.seed)
+        np.random.seed(self.seed % 2**31)
+        self.n_respondents = random.randint(270, 340)
+        self.aware_pct     = random.randint(62, 74)
+        self.fam_pct       = random.randint(70, 83)
+        self.support_pct   = random.randint(62, 69)
+        self.questionnaire = questionnaire or {}
+        self._paper_digest = self._build_digest()
+        self.sections      = {}   # filled by generate_all()
 
-```
-def _build_digest(self) -> str:
-    """Lean digest — titles/authors only, no abstracts. Minimises input tokens."""
-    lines = []
-    for i, p in enumerate(self.papers[:8], 1):
-        jour = f", {p['journal']}" if p.get("journal") else ""
-        lines.append(f"{i}. {p['authors']} ({p['year']}). \"{p['title']}\"{jour}. Cited {p.get('citations',0):,}x.")
-    wiki = f"\nContext: {self.wiki['summary'][:120]}" if self.wiki.get("summary") else ""
-    return "SOURCES:\n" + "\n".join(lines) + wiki
+    def _build_digest(self) -> str:
+        """Lean digest — titles/authors only, no abstracts. Minimises input tokens."""
+        lines = []
+        for i, p in enumerate(self.papers[:8], 1):
+            jour = f", {p['journal']}" if p.get("journal") else ""
+            lines.append(f"{i}. {p['authors']} ({p['year']}). \"{p['title']}\"{jour}. Cited {p.get('citations',0):,}x.")
+        wiki = f"\nContext: {self.wiki['summary'][:120]}" if self.wiki.get("summary") else ""
+        return "SOURCES:\n" + "\n".join(lines) + wiki
 
-def generate_all(self, progress_cb=None) -> dict:
-    """Two lean streaming Gemini calls — stays within free-tier token limits."""
-    top      = sorted(self.papers, key=lambda x: x.get("citations", 0), reverse=True)
-    top_cite = f"{top[0]['authors']} ({top[0]['year']})" if top else "prior studies"
-    n, nr    = len(self.papers), self.n_respondents
-    q        = self.questionnaire
-    q_block  = ""
-    if any(q.values()):
-        q_block = "\n\n=== RESEARCHER'S OWN INPUTS (use these EXACTLY as the foundation — do NOT invent replacements) ===\n"
-        if q.get('problem'):
-            q_block += f"PROBLEM IDENTIFIED BY RESEARCHER: {q['problem']}\n"
-        if q.get('lit'):
-            q_block += f"KEY LITERATURE CITED BY RESEARCHER: {q['lit']}\n"
-        if q.get('gap'):
-            q_block += f"RESEARCH GAP IDENTIFIED BY RESEARCHER: {q['gap']}\n"
-        if q.get('objectives'):
-            q_block += f"OBJECTIVES DEFINED BY RESEARCHER: {q['objectives']}\n"
-        if q.get('statement'):
-            q_block += f"RESEARCH STATEMENT BY RESEARCHER: {q['statement']}\n"
-        q_block += "=== END RESEARCHER INPUTS — expand these with evidence and scholarly prose, never override them ===\n"
-    hdr      = (f"{self._paper_digest}\n\nTOPIC: {self.topic} | N={nr} respondents | "
-                f"Aware={self.aware_pct}% | Familiar={self.fam_pct}% | "
-                f"Support={self.support_pct}% | Top paper: {top_cite}{q_block}\n\n")
+    def generate_all(self, progress_cb=None) -> dict:
+        """Two lean streaming Gemini calls — stays within free-tier token limits."""
+        top      = sorted(self.papers, key=lambda x: x.get("citations", 0), reverse=True)
+        top_cite = f"{top[0]['authors']} ({top[0]['year']})" if top else "prior studies"
+        n, nr    = len(self.papers), self.n_respondents
+        q        = self.questionnaire
+        q_block  = ""
+        if any(q.values()):
+            q_block = "\n\n=== RESEARCHER'S OWN INPUTS (use these EXACTLY as the foundation — do NOT invent replacements) ===\n"
+            if q.get('problem'):
+                q_block += f"PROBLEM IDENTIFIED BY RESEARCHER: {q['problem']}\n"
+            if q.get('lit'):
+                q_block += f"KEY LITERATURE CITED BY RESEARCHER: {q['lit']}\n"
+            if q.get('gap'):
+                q_block += f"RESEARCH GAP IDENTIFIED BY RESEARCHER: {q['gap']}\n"
+            if q.get('objectives'):
+                q_block += f"OBJECTIVES DEFINED BY RESEARCHER: {q['objectives']}\n"
+            if q.get('statement'):
+                q_block += f"RESEARCH STATEMENT BY RESEARCHER: {q['statement']}\n"
+            q_block += "=== END RESEARCHER INPUTS — expand these with evidence and scholarly prose, never override them ===\n"
+        hdr      = (f"{self._paper_digest}\n\nTOPIC: {self.topic} | N={nr} respondents | "
+                    f"Aware={self.aware_pct}% | Familiar={self.fam_pct}% | "
+                    f"Support={self.support_pct}% | Top paper: {top_cite}{q_block}\n\n")
 
-    # ── CALL 1: front half ────────────────────────────────────────────────
-    p1 = (hdr +
-          "Write the first half of an academic research paper using XML tags. "
-          "Flowing scholarly prose only — no markdown, no bullet points, no numbering inside prose.\n\n"
-          "<keywords>8 comma-separated keywords relevant to the topic</keywords>\n"
-          f"<abstract>Write a detailed academic abstract of exactly 300-340 words as a single flowing paragraph. "
-          f"Follow this exact structure within the paragraph: "
-          f"(1) Opening sentence: 'This study [explores/examines/investigates] [topic]...' stating the core subject and its significance. "
-          f"(2) Context sentence: describe the main problem or challenge the research addresses, naming specific legal, social, or policy dimensions. "
-          f"(3) Legal/theoretical instruments: name at least 3 specific real legal instruments, frameworks, treaties, constitutional provisions, or scholarly works that are analysed — cite them by their full official name (e.g. Article 21, UDHR, ICCPR, specific case names). "
-          f"(4) Objective sentence: 'The objective is to critically assess...' — state the precise analytical aim. "
-          f"(5) Methodology sentence: 'The methodology involves a qualitative/mixed-methods [type] analysis supported by [sources]...' — name the exact method and data sources including any survey respondents ({nr}), secondary data, judicial decisions, reports. "
-          f"(6) Findings sentence: 'The findings of the study reveal...' — state 2-3 concrete findings including patterns, percentages where available, systemic issues. "
-          f"(7) Closing sentence: 'The study concludes by recommending...' — list 3-4 specific actionable recommendations by name. "
-          f"Write as ONE dense, flowing academic paragraph with no subheadings. Cite at least 2 real sources by author/year inline.</abstract>\n"
-          f"<introduction>Write a detailed introduction of exactly 800-900 words structured as thematic subheaded sections. "
-          f"Use bold subheadings for each section (no numbering). Follow this exact structure:\n"
-          f"Opening paragraph (100-120 words, NO subheading): Begin with the broad context of {self.topic} — "
-          f"describe how the subject has historically operated, its traditional form, and what has changed. "
-          f"Name specific stakeholders, geographies, or industries involved. "
-          f"If PROBLEM IDENTIFIED BY RESEARCHER is given, weave it into this paragraph as the central tension. "
-          f"End with a sentence on what this digital/legal/social transformation means for the field.\n"
-          f"Aim of the Study (60-80 words): State the precise aim of the study using 'The aim of this study is to...' — "
-          f"name what is being analysed, how outcomes are being evaluated, and what socio-economic dimensions are explored. "
-          f"If RESEARCH STATEMENT BY RESEARCHER is provided, anchor this section to it.\n"
-          f"Evolution of the Topic (130-150 words): Trace the historical development of {self.topic} — "
-          f"describe the early/pre-digital/pre-reform era, the first wave of change (name specific years, events, or technologies), "
-          f"how features or frameworks evolved over time, what accelerated adoption or change (e.g. a crisis, policy, technology), "
-          f"and where the topic stands today with current innovations or leading examples named specifically.\n"
-          f"Government Initiatives (130-150 words): Describe specific central and state government schemes, programmes, and policies "
-          f"relevant to {self.topic} — name each scheme/act/policy by its full official name, state which government introduced it, "
-          f"its objectives, and its direct impact on the subject. Include both national and regional examples. "
-          f"Mention any regulatory frameworks, institutional bodies, or partnerships involved.\n"
-          f"Factors Affecting the Topic (130-150 words): Identify and explain the key variables that modulate outcomes in {self.topic} — "
-          f"cover infrastructure, cultural, socio-economic, environmental, and policy factors. "
-          f"Name specific barriers and enablers. Explain how each factor shapes adoption, effectiveness, or impact. "
-          f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, incorporate it as one of the structural gaps identified here.\n"
-          f"Current Trends (130-150 words): Describe the present-day landscape of {self.topic} — "
-          f"name specific technologies, platforms, practices, or legal developments currently in use. "
-          f"Reference consumer or societal changes driving demand. Name real platforms, tools, certifications, or cases where relevant. "
-          f"Include emerging innovations and how they are reshaping outcomes.\n"
-          f"Comparison Between Cities/States (100-120 words): Compare adoption, impact, or implementation of {self.topic} across "
-          f"at least 4 different Indian states or cities — name each specifically. Explain why some regions lead and others lag, "
-          f"citing infrastructure, governance, culture, or economic factors. "
-          f"Write as flowing scholarly prose throughout each section. No bullet points, no numbered lists.</introduction>\n"
-          "<objectives>"
-          "IMPORTANT: If OBJECTIVES DEFINED BY RESEARCHER are provided above, use them VERBATIM (copy them exactly). "
-          "Format every objective on its own line starting with '● ' followed by 'To ...' (e.g. '● To assess the effect of...'). "
-          "Only if no objectives were provided, write 5 objectives in this same format: one per line, each starting with '● To', no numbers.</objectives>\n"
-          f"<literature_review>Write a comprehensive literature review of exactly 1500-1600 words. "
-          f"CRITICAL FORMATTING RULE: Each source entry must follow this EXACT 4-sentence structure: "
-          f"SENTENCE 1 - Citation opener: Write Lastname and Lastname (Year) or Lastname et al. (Year) "
-          f"followed in the same sentence by a past-tense verb such as investigated, examined, analyzed, explored, assessed, or evaluated, "
-          f"then the subject of study and context. "
-          f"Example: Bagchi and Sharma (2024) investigated the economic impact of mobile applications on fish marketing within coastal communities. "
-          f"SENTENCE 2 - Aim: Start with The aim was to - state the precise research objective in one sentence. "
-          f"SENTENCE 3 - Methodology: Start with The methodology - name the specific method used (e.g. mixed-methods, longitudinal study, participatory research, doctrinal analysis), "
-          f"include a specific participant count (e.g. 380 participants, 450 fishermen), geographic scope, and duration where applicable. "
-          f"SENTENCE 4 - Findings: Start with The findings - report 2-3 specific quantitative results "
-          f"with exact percentages or numbers (e.g. 34 percent average income increase, 28 percent reduction in post-harvest losses). "
-          f"End each entry with one sentence on broader implications or conclusions of the study. Total per entry: 100-120 words. "
-          f"IMPORTANT: If KEY LITERATURE CITED BY RESEARCHER is provided above, those sources appear first rewritten in this Author (Year) format. "
-          f"Then add further real academic sources on {self.topic} to reach 14-16 sources total. "
-          f"Number each entry: the first entry has no number, subsequent entries are numbered 1. 2. 3. and so on. "
-          f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, end with an unnumbered synthesis paragraph using the researcher's exact gap statement. "
-          f"No subheadings, no bullet points.</literature_review>\n"
-          f"<methodology>Write a methodology section of exactly 180-210 words as a single flowing paragraph. "
-          f"Follow this exact sentence-by-sentence structure: "
-          f"SENTENCE 1: State the research type — begin with 'The current study is based on [descriptive/analytical/empirical] research.' "
-          f"SENTENCE 2: Describe the scientific frame — 'It consists of the scientific frame of research.' "
-          f"SENTENCE 3: Explain how the study began — 'It began with the finding of research problems based on the review of literature.' "
-          f"SENTENCE 4: Describe the hypothesis and solution approach — 'It explored the problem tested with hypotheses and provided the solution from the analysis.' "
-          f"SENTENCE 5: State the sampling method — 'A convenience sampling method is used in the research.' "
-          f"SENTENCE 6: State sample size and location — 'The sample size for the study is {nr}, selected from the sampling frame of [specific location relevant to {self.topic}].' "
-          f"SENTENCE 7: Describe data collection — 'Data has been collected through field visits, with a structured questionnaire used as the primary data collection tool.' "
-          f"SENTENCE 8: Mention secondary sources — 'Secondary sources such as articles, journals, reports, and newsletters have also been considered.' "
-          f"SENTENCE 9: State the analysis tool — 'The collected data has been analyzed using SPSS version 21.' "
-          f"SENTENCE 10: State the independent variables — 'The independent variables are age, gender, educational qualifications, location, and occupation.' "
-          f"SENTENCE 11: State the dependent variable — 'The dependent variable of the study is [the primary outcome being measured, directly relevant to {self.topic}], "
-          f"reflecting changes in [livelihood/legal/economic/social] outcomes.' "
-          f"Write as one clean flowing paragraph. No bullet points, no subheadings.</methodology>")
+        # ── CALL 1: front half ────────────────────────────────────────────────
+        p1 = (hdr +
+              "Write the first half of an academic research paper using XML tags. "
+              "Flowing scholarly prose only — no markdown, no bullet points, no numbering inside prose.\n\n"
+              "<keywords>8 comma-separated keywords relevant to the topic</keywords>\n"
+              f"<abstract>Write a detailed academic abstract of exactly 300-340 words as a single flowing paragraph. "
+              f"Follow this exact structure within the paragraph: "
+              f"(1) Opening sentence: 'This study [explores/examines/investigates] [topic]...' stating the core subject and its significance. "
+              f"(2) Context sentence: describe the main problem or challenge the research addresses, naming specific legal, social, or policy dimensions. "
+              f"(3) Legal/theoretical instruments: name at least 3 specific real legal instruments, frameworks, treaties, constitutional provisions, or scholarly works that are analysed — cite them by their full official name (e.g. Article 21, UDHR, ICCPR, specific case names). "
+              f"(4) Objective sentence: 'The objective is to critically assess...' — state the precise analytical aim. "
+              f"(5) Methodology sentence: 'The methodology involves a qualitative/mixed-methods [type] analysis supported by [sources]...' — name the exact method and data sources including any survey respondents ({nr}), secondary data, judicial decisions, reports. "
+              f"(6) Findings sentence: 'The findings of the study reveal...' — state 2-3 concrete findings including patterns, percentages where available, systemic issues. "
+              f"(7) Closing sentence: 'The study concludes by recommending...' — list 3-4 specific actionable recommendations by name. "
+              f"Write as ONE dense, flowing academic paragraph with no subheadings. Cite at least 2 real sources by author/year inline.</abstract>\n"
+              f"<introduction>Write a detailed introduction of exactly 800-900 words structured as thematic subheaded sections. "
+              f"Use bold subheadings for each section (no numbering). Follow this exact structure:\n"
+              f"Opening paragraph (100-120 words, NO subheading): Begin with the broad context of {self.topic} — "
+              f"describe how the subject has historically operated, its traditional form, and what has changed. "
+              f"Name specific stakeholders, geographies, or industries involved. "
+              f"If PROBLEM IDENTIFIED BY RESEARCHER is given, weave it into this paragraph as the central tension. "
+              f"End with a sentence on what this digital/legal/social transformation means for the field.\n"
+              f"Aim of the Study (60-80 words): State the precise aim of the study using 'The aim of this study is to...' — "
+              f"name what is being analysed, how outcomes are being evaluated, and what socio-economic dimensions are explored. "
+              f"If RESEARCH STATEMENT BY RESEARCHER is provided, anchor this section to it.\n"
+              f"Evolution of the Topic (130-150 words): Trace the historical development of {self.topic} — "
+              f"describe the early/pre-digital/pre-reform era, the first wave of change (name specific years, events, or technologies), "
+              f"how features or frameworks evolved over time, what accelerated adoption or change (e.g. a crisis, policy, technology), "
+              f"and where the topic stands today with current innovations or leading examples named specifically.\n"
+              f"Government Initiatives (130-150 words): Describe specific central and state government schemes, programmes, and policies "
+              f"relevant to {self.topic} — name each scheme/act/policy by its full official name, state which government introduced it, "
+              f"its objectives, and its direct impact on the subject. Include both national and regional examples. "
+              f"Mention any regulatory frameworks, institutional bodies, or partnerships involved.\n"
+              f"Factors Affecting the Topic (130-150 words): Identify and explain the key variables that modulate outcomes in {self.topic} — "
+              f"cover infrastructure, cultural, socio-economic, environmental, and policy factors. "
+              f"Name specific barriers and enablers. Explain how each factor shapes adoption, effectiveness, or impact. "
+              f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, incorporate it as one of the structural gaps identified here.\n"
+              f"Current Trends (130-150 words): Describe the present-day landscape of {self.topic} — "
+              f"name specific technologies, platforms, practices, or legal developments currently in use. "
+              f"Reference consumer or societal changes driving demand. Name real platforms, tools, certifications, or cases where relevant. "
+              f"Include emerging innovations and how they are reshaping outcomes.\n"
+              f"Comparison Between Cities/States (100-120 words): Compare adoption, impact, or implementation of {self.topic} across "
+              f"at least 4 different Indian states or cities — name each specifically. Explain why some regions lead and others lag, "
+              f"citing infrastructure, governance, culture, or economic factors. "
+              f"Write as flowing scholarly prose throughout each section. No bullet points, no numbered lists.</introduction>\n"
+              "<objectives>"
+              "IMPORTANT: If OBJECTIVES DEFINED BY RESEARCHER are provided above, use them VERBATIM (copy them exactly). "
+              "Format every objective on its own line starting with '● ' followed by 'To ...' (e.g. '● To assess the effect of...'). "
+              "Only if no objectives were provided, write 5 objectives in this same format: one per line, each starting with '● To', no numbers.</objectives>\n"
+              f"<literature_review>Write a comprehensive literature review of exactly 1500-1600 words. "
+              f"CRITICAL FORMATTING RULE: Each source entry must follow this EXACT 4-sentence structure: "
+              f"SENTENCE 1 - Citation opener: Write Lastname and Lastname (Year) or Lastname et al. (Year) "
+              f"followed in the same sentence by a past-tense verb such as investigated, examined, analyzed, explored, assessed, or evaluated, "
+              f"then the subject of study and context. "
+              f"Example: Bagchi and Sharma (2024) investigated the economic impact of mobile applications on fish marketing within coastal communities. "
+              f"SENTENCE 2 - Aim: Start with The aim was to - state the precise research objective in one sentence. "
+              f"SENTENCE 3 - Methodology: Start with The methodology - name the specific method used (e.g. mixed-methods, longitudinal study, participatory research, doctrinal analysis), "
+              f"include a specific participant count (e.g. 380 participants, 450 fishermen), geographic scope, and duration where applicable. "
+              f"SENTENCE 4 - Findings: Start with The findings - report 2-3 specific quantitative results "
+              f"with exact percentages or numbers (e.g. 34 percent average income increase, 28 percent reduction in post-harvest losses). "
+              f"End each entry with one sentence on broader implications or conclusions of the study. Total per entry: 100-120 words. "
+              f"IMPORTANT: If KEY LITERATURE CITED BY RESEARCHER is provided above, those sources appear first rewritten in this Author (Year) format. "
+              f"Then add further real academic sources on {self.topic} to reach 14-16 sources total. "
+              f"Number each entry: the first entry has no number, subsequent entries are numbered 1. 2. 3. and so on. "
+              f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, end with an unnumbered synthesis paragraph using the researcher's exact gap statement. "
+              f"No subheadings, no bullet points.</literature_review>\n"
+              f"<methodology>Write a methodology section of exactly 180-210 words as a single flowing paragraph. "
+              f"Follow this exact sentence-by-sentence structure: "
+              f"SENTENCE 1: State the research type — begin with 'The current study is based on [descriptive/analytical/empirical] research.' "
+              f"SENTENCE 2: Describe the scientific frame — 'It consists of the scientific frame of research.' "
+              f"SENTENCE 3: Explain how the study began — 'It began with the finding of research problems based on the review of literature.' "
+              f"SENTENCE 4: Describe the hypothesis and solution approach — 'It explored the problem tested with hypotheses and provided the solution from the analysis.' "
+              f"SENTENCE 5: State the sampling method — 'A convenience sampling method is used in the research.' "
+              f"SENTENCE 6: State sample size and location — 'The sample size for the study is {nr}, selected from the sampling frame of [specific location relevant to {self.topic}].' "
+              f"SENTENCE 7: Describe data collection — 'Data has been collected through field visits, with a structured questionnaire used as the primary data collection tool.' "
+              f"SENTENCE 8: Mention secondary sources — 'Secondary sources such as articles, journals, reports, and newsletters have also been considered.' "
+              f"SENTENCE 9: State the analysis tool — 'The collected data has been analyzed using SPSS version 21.' "
+              f"SENTENCE 10: State the independent variables — 'The independent variables are age, gender, educational qualifications, location, and occupation.' "
+              f"SENTENCE 11: State the dependent variable — 'The dependent variable of the study is [the primary outcome being measured, directly relevant to {self.topic}], "
+              f"reflecting changes in [livelihood/legal/economic/social] outcomes.' "
+              f"Write as one clean flowing paragraph. No bullet points, no subheadings.</methodology>")
 
-    # ── CALL 2: back half ─────────────────────────────────────────────────
-    p2 = (hdr +
-          "Write the second half of an academic research paper using XML tags. "
-          "Flowing scholarly prose only — no markdown, no bullet points.\n\n"
-          f"<results>Write a comprehensive analysis section of exactly 600-700 words. "
-          f"Structure it as one paragraph per figure, numbered Figure 1 through Figure {self._nfigs}. "
-          f"Each figure paragraph must follow this exact format: "
-          f"Start with 'Figure [N]' in bold (just write it as 'Figure N:' at the start of the paragraph). "
-          f"Then write 3-4 sentences: "
-          f"(1) State what the figure shows — 'The figure shows the relationship between [independent variable] and [dependent variable/outcome].' "
-          f"Use these independent variables across figures: educational qualification, age group (18-30, 31-50, 51 and above), gender (male/female), occupation (small-scale fisher, large-scale fisher, non-fisher trader), place of residence (rural, semi-urban, urban). "
-          f"Use these as dependent/outcome variables relevant to {self.topic}: primary reasons for using the platform, perception of price improvement, awareness of government programs, factors influencing adoption decision, payment timeliness ratings, belief in higher price attainment, biggest difficulties faced. "
-          f"(2) Report specific findings with percentages — name which group showed the highest response and what percentage, e.g. '{self.aware_pct}% of graduate respondents cited price as the primary reason' or '{self.fam_pct}% of male respondents agreed that prices are better.' "
-          f"(3) Contrast with another group — name a second group's response with a different percentage. "
-          f"(4) State the inference — what this pattern reveals about {self.topic}. "
-          f"Vary the independent variable across figures so that educational qualification appears in roughly Figures 1-5, age group in Figures 6, 9-10, 14, 19-20, 23, 26, gender in Figures 11-13, 15-18, occupation in Figures 21, 24-25, 27-29, and place of residence in Figures 22, 30. "
-          f"Write as flowing academic prose. No bullet points.</results>\n"
-          "<discussion>Write a detailed discussion section of exactly 700-750 words. "
-          "Interpret all major findings in relation to the research objectives. "
-          "Discuss implications for each demographic group. "
-          "Connect findings to at least 5 cited sources from the literature review. "
-          "Address policy implications, theoretical contributions, and practical significance. "
-          "Compare with international examples. "
-          "Write as flowing scholarly prose in multiple paragraphs.</discussion>\n"
-          "<suggestions>Write a detailed suggestions section of exactly 180-200 words. "
-          "Provide 5-6 specific, actionable policy recommendations as flowing prose. "
-          "Each recommendation should be concrete and justified with reasoning. "
-          "No bullet points — write as connected paragraphs.</suggestions>\n"
-          "<limitations>Write a limitations section of exactly 200-220 words. "
-          "Discuss: sample size constraints, geographic scope, self-report bias, "
-          "temporal limitations, methodological limitations, and areas for future research. "
-          "Write as 2 connected paragraphs.</limitations>\n"
-          "<conclusion>Write a comprehensive conclusion of exactly 230-250 words. "
-          "Synthesise all major findings, restate the research contribution, "
-          "connect back to the research objectives, cite the most important source, "
-          "and end with a forward-looking statement about future research directions. "
-          "Write as 2 substantial paragraphs.</conclusion>\n"
-          f"<charts>{self._nfigs} lines. Format: TYPE|TITLE|CAT1,CAT2,CAT3 "
-          f"(or grouped/stacked: TYPE|TITLE|G1,G2;S1,S2). "
-          f"TYPE=bar/pie/grouped/stacked. Titles very specific to \"{self.topic[:30]}\".</charts>")
+        # ── CALL 2: back half ─────────────────────────────────────────────────
+        p2 = (hdr +
+              "Write the second half of an academic research paper using XML tags. "
+              "Flowing scholarly prose only — no markdown, no bullet points.\n\n"
+              f"<results>Write a comprehensive analysis section of exactly 600-700 words. "
+              f"Structure it as one paragraph per figure, numbered Figure 1 through Figure {self._nfigs}. "
+              f"Each figure paragraph must follow this exact format: "
+              f"Start with 'Figure [N]' in bold (just write it as 'Figure N:' at the start of the paragraph). "
+              f"Then write 3-4 sentences: "
+              f"(1) State what the figure shows — 'The figure shows the relationship between [independent variable] and [dependent variable/outcome].' "
+              f"Use these independent variables across figures: educational qualification, age group (18-30, 31-50, 51 and above), gender (male/female), occupation (small-scale fisher, large-scale fisher, non-fisher trader), place of residence (rural, semi-urban, urban). "
+              f"Use these as dependent/outcome variables relevant to {self.topic}: primary reasons for using the platform, perception of price improvement, awareness of government programs, factors influencing adoption decision, payment timeliness ratings, belief in higher price attainment, biggest difficulties faced. "
+              f"(2) Report specific findings with percentages — name which group showed the highest response and what percentage, e.g. '{self.aware_pct}% of graduate respondents cited price as the primary reason' or '{self.fam_pct}% of male respondents agreed that prices are better.' "
+              f"(3) Contrast with another group — name a second group's response with a different percentage. "
+              f"(4) State the inference — what this pattern reveals about {self.topic}. "
+              f"Vary the independent variable across figures so that educational qualification appears in roughly Figures 1-5, age group in Figures 6, 9-10, 14, 19-20, 23, 26, gender in Figures 11-13, 15-18, occupation in Figures 21, 24-25, 27-29, and place of residence in Figures 22, 30. "
+              f"Write as flowing academic prose. No bullet points.</results>\n"
+              "<discussion>Write a detailed discussion section of exactly 700-750 words. "
+              "Interpret all major findings in relation to the research objectives. "
+              "Discuss implications for each demographic group. "
+              "Connect findings to at least 5 cited sources from the literature review. "
+              "Address policy implications, theoretical contributions, and practical significance. "
+              "Compare with international examples. "
+              "Write as flowing scholarly prose in multiple paragraphs.</discussion>\n"
+              "<suggestions>Write a detailed suggestions section of exactly 180-200 words. "
+              "Provide 5-6 specific, actionable policy recommendations as flowing prose. "
+              "Each recommendation should be concrete and justified with reasoning. "
+              "No bullet points — write as connected paragraphs.</suggestions>\n"
+              "<limitations>Write a limitations section of exactly 200-220 words. "
+              "Discuss: sample size constraints, geographic scope, self-report bias, "
+              "temporal limitations, methodological limitations, and areas for future research. "
+              "Write as 2 connected paragraphs.</limitations>\n"
+              "<conclusion>Write a comprehensive conclusion of exactly 230-250 words. "
+              "Synthesise all major findings, restate the research contribution, "
+              "connect back to the research objectives, cite the most important source, "
+              "and end with a forward-looking statement about future research directions. "
+              "Write as 2 substantial paragraphs.</conclusion>\n"
+              f"<charts>{self._nfigs} lines. Format: TYPE|TITLE|CAT1,CAT2,CAT3 "
+              f"(or grouped/stacked: TYPE|TITLE|G1,G2;S1,S2). "
+              f"TYPE=bar/pie/grouped/stacked. Titles very specific to \"{self.topic[:30]}\".</charts>")
 
-    # Split into 3 calls to handle large content without hitting token limits
-    # Call 1: intro sections (abstract, intro, objectives)
-    # Call 2: literature review + methodology (lit review is 1500+ words)
-    # Call 3: results, discussion, suggestions, limitations, conclusion, charts
-    s1 = ['keywords','abstract','introduction','objectives']
-    s2 = ['literature_review','methodology']
-    s3 = ['results','discussion','suggestions','limitations','conclusion','charts']
+        # Split into 3 calls to handle large content without hitting token limits
+        # Call 1: intro sections (abstract, intro, objectives)
+        # Call 2: literature review + methodology (lit review is 1500+ words)
+        # Call 3: results, discussion, suggestions, limitations, conclusion, charts
+        s1 = ['keywords','abstract','introduction','objectives']
+        s2 = ['literature_review','methodology']
+        s3 = ['results','discussion','suggestions','limitations','conclusion','charts']
 
-    # Extract lit review + methodology prompt from p1
-    import re as _re
-    p1_intro = p1  # already has all sections but we'll parse selectively
+        # Extract lit review + methodology prompt from p1
+        import re as _re
+        p1_intro = p1  # already has all sections but we'll parse selectively
 
-    # Build dedicated lit review + methodology prompt
-    p_litmethod = (hdr +
-          "Write two sections of an academic research paper using XML tags. "
-          "Flowing scholarly prose only — no markdown, no bullet points.\n\n"
-          f"<literature_review>Write a comprehensive literature review of exactly 1500-1600 words. "
-          f"CRITICAL FORMATTING RULE: Each source entry must follow this EXACT 4-sentence structure: "
-          f"SENTENCE 1 - Citation opener: Write Lastname and Lastname (Year) or Lastname et al. (Year) "
-          f"followed in the same sentence by a past-tense verb such as investigated, examined, analyzed, explored, assessed, or evaluated, "
-          f"then the subject of study and context. "
-          f"Example: Bagchi and Sharma (2024) investigated the economic impact of mobile applications on fish marketing within coastal communities. "
-          f"SENTENCE 2 - Aim: Start with The aim was to - state the precise research objective in one sentence. "
-          f"SENTENCE 3 - Methodology: Start with The methodology - name the specific method used (e.g. mixed-methods, longitudinal study, participatory research, doctrinal analysis), "
-          f"include a specific participant count (e.g. 380 participants, 450 fishermen), geographic scope, and duration where applicable. "
-          f"SENTENCE 4 - Findings: Start with The findings - report 2-3 specific quantitative results "
-          f"with exact percentages or numbers (e.g. 34 percent average income increase, 28 percent reduction in post-harvest losses). "
-          f"End each entry with one sentence on broader implications or conclusions of the study. Total per entry: 100-120 words. "
-          f"IMPORTANT: If KEY LITERATURE CITED BY RESEARCHER is provided above, those sources appear first rewritten in this Author (Year) format. "
-          f"Then add further real academic sources on {self.topic} to reach 14-16 sources total. "
-          f"Number each entry: the first entry has no number, subsequent entries are numbered 1. 2. 3. and so on. "
-          f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, end with an unnumbered synthesis paragraph using the researcher's exact gap statement. "
-          f"No subheadings, no bullet points.</literature_review>\n"
-          f"<methodology>Write a methodology section of exactly 180-210 words as a single flowing paragraph. "
-          f"Follow this exact sentence-by-sentence structure: "
-          f"SENTENCE 1: State the research type — begin with 'The current study is based on [descriptive/analytical/empirical] research.' "
-          f"SENTENCE 2: Describe the scientific frame — 'It consists of the scientific frame of research.' "
-          f"SENTENCE 3: Explain how the study began — 'It began with the finding of research problems based on the review of literature.' "
-          f"SENTENCE 4: Describe the hypothesis and solution approach — 'It explored the problem tested with hypotheses and provided the solution from the analysis.' "
-          f"SENTENCE 5: State the sampling method — 'A convenience sampling method is used in the research.' "
-          f"SENTENCE 6: State sample size and location — 'The sample size for the study is {nr}, selected from the sampling frame of [specific location relevant to {self.topic}].' "
-          f"SENTENCE 7: Describe data collection — 'Data has been collected through field visits, with a structured questionnaire used as the primary data collection tool.' "
-          f"SENTENCE 8: Mention secondary sources — 'Secondary sources such as articles, journals, reports, and newsletters have also been considered.' "
-          f"SENTENCE 9: State the analysis tool — 'The collected data has been analyzed using SPSS version 21.' "
-          f"SENTENCE 10: State the independent variables — 'The independent variables are age, gender, educational qualifications, location, and occupation.' "
-          f"SENTENCE 11: State the dependent variable — 'The dependent variable of the study is [the primary outcome being measured, directly relevant to {self.topic}], "
-          f"reflecting changes in [livelihood/legal/economic/social] outcomes.' "
-          f"Write as one clean flowing paragraph. No bullet points, no subheadings.</methodology>")
+        # Build dedicated lit review + methodology prompt
+        p_litmethod = (hdr +
+              "Write two sections of an academic research paper using XML tags. "
+              "Flowing scholarly prose only — no markdown, no bullet points.\n\n"
+              f"<literature_review>Write a comprehensive literature review of exactly 1500-1600 words. "
+              f"CRITICAL FORMATTING RULE: Each source entry must follow this EXACT 4-sentence structure: "
+              f"SENTENCE 1 - Citation opener: Write Lastname and Lastname (Year) or Lastname et al. (Year) "
+              f"followed in the same sentence by a past-tense verb such as investigated, examined, analyzed, explored, assessed, or evaluated, "
+              f"then the subject of study and context. "
+              f"Example: Bagchi and Sharma (2024) investigated the economic impact of mobile applications on fish marketing within coastal communities. "
+              f"SENTENCE 2 - Aim: Start with The aim was to - state the precise research objective in one sentence. "
+              f"SENTENCE 3 - Methodology: Start with The methodology - name the specific method used (e.g. mixed-methods, longitudinal study, participatory research, doctrinal analysis), "
+              f"include a specific participant count (e.g. 380 participants, 450 fishermen), geographic scope, and duration where applicable. "
+              f"SENTENCE 4 - Findings: Start with The findings - report 2-3 specific quantitative results "
+              f"with exact percentages or numbers (e.g. 34 percent average income increase, 28 percent reduction in post-harvest losses). "
+              f"End each entry with one sentence on broader implications or conclusions of the study. Total per entry: 100-120 words. "
+              f"IMPORTANT: If KEY LITERATURE CITED BY RESEARCHER is provided above, those sources appear first rewritten in this Author (Year) format. "
+              f"Then add further real academic sources on {self.topic} to reach 14-16 sources total. "
+              f"Number each entry: the first entry has no number, subsequent entries are numbered 1. 2. 3. and so on. "
+              f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, end with an unnumbered synthesis paragraph using the researcher's exact gap statement. "
+              f"No subheadings, no bullet points.</literature_review>\n"
+              f"<methodology>Write a methodology section of exactly 180-210 words as a single flowing paragraph. "
+              f"Follow this exact sentence-by-sentence structure: "
+              f"SENTENCE 1: State the research type — begin with 'The current study is based on [descriptive/analytical/empirical] research.' "
+              f"SENTENCE 2: Describe the scientific frame — 'It consists of the scientific frame of research.' "
+              f"SENTENCE 3: Explain how the study began — 'It began with the finding of research problems based on the review of literature.' "
+              f"SENTENCE 4: Describe the hypothesis and solution approach — 'It explored the problem tested with hypotheses and provided the solution from the analysis.' "
+              f"SENTENCE 5: State the sampling method — 'A convenience sampling method is used in the research.' "
+              f"SENTENCE 6: State sample size and location — 'The sample size for the study is {nr}, selected from the sampling frame of [specific location relevant to {self.topic}].' "
+              f"SENTENCE 7: Describe data collection — 'Data has been collected through field visits, with a structured questionnaire used as the primary data collection tool.' "
+              f"SENTENCE 8: Mention secondary sources — 'Secondary sources such as articles, journals, reports, and newsletters have also been considered.' "
+              f"SENTENCE 9: State the analysis tool — 'The collected data has been analyzed using SPSS version 21.' "
+              f"SENTENCE 10: State the independent variables — 'The independent variables are age, gender, educational qualifications, location, and occupation.' "
+              f"SENTENCE 11: State the dependent variable — 'The dependent variable of the study is [the primary outcome being measured, directly relevant to {self.topic}], "
+              f"reflecting changes in [livelihood/legal/economic/social] outcomes.' "
+              f"Write as one clean flowing paragraph. No bullet points, no subheadings.</methodology>")
 
-    def prog1(pct, msg):
-        if progress_cb: progress_cb(max(30, min(45, 30 + int((pct-30)/45*15))), msg)
-    def prog2(pct, msg):
-        if progress_cb: progress_cb(max(46, min(60, 46 + int((pct-30)/45*14))), msg)
-    def prog3(pct, msg):
-        if progress_cb: progress_cb(max(61, min(75, 61 + int((pct-30)/45*14))), msg)
+        def prog1(pct, msg):
+            if progress_cb: progress_cb(max(30, min(45, 30 + int((pct-30)/45*15))), msg)
+        def prog2(pct, msg):
+            if progress_cb: progress_cb(max(46, min(60, 46 + int((pct-30)/45*14))), msg)
+        def prog3(pct, msg):
+            if progress_cb: progress_cb(max(61, min(75, 61 + int((pct-30)/45*14))), msg)
 
-    provider = _detect_provider()
-    pname = "Groq (Llama 3.3 70B)" if provider == "groq" else "Gemini"
-    if progress_cb: progress_cb(30, f'{pname} writing abstract & introduction...')
-    raw1 = ai_generate(p1, system=SYSTEM_PROMPT, temperature=0.7,
-                       progress_cb=prog1, tracked_sections=s1)
+        provider = _detect_provider()
+        pname = "Groq (Llama 3.3 70B)" if provider == "groq" else "Gemini"
+        if progress_cb: progress_cb(30, f'{pname} writing abstract & introduction...')
+        raw1 = ai_generate(p1, system=SYSTEM_PROMPT, temperature=0.7,
+                           progress_cb=prog1, tracked_sections=s1)
 
-    if progress_cb: progress_cb(46, f'{pname} writing literature review (1500+ words)...')
-    raw2 = ai_generate(p_litmethod, system=SYSTEM_PROMPT, temperature=0.7,
-                       progress_cb=prog2, tracked_sections=s2)
+        if progress_cb: progress_cb(46, f'{pname} writing literature review (1500+ words)...')
+        raw2 = ai_generate(p_litmethod, system=SYSTEM_PROMPT, temperature=0.7,
+                           progress_cb=prog2, tracked_sections=s2)
 
-    if progress_cb: progress_cb(61, f'{pname} writing results, discussion & conclusion...')
-    raw3 = ai_generate(p2, system=SYSTEM_PROMPT, temperature=0.7,
-                       progress_cb=prog3, tracked_sections=s3)
+        if progress_cb: progress_cb(61, f'{pname} writing results, discussion & conclusion...')
+        raw3 = ai_generate(p2, system=SYSTEM_PROMPT, temperature=0.7,
+                           progress_cb=prog3, tracked_sections=s3)
 
-    sections = {}
-    for tag in s1:
-        m = re.search(rf'<{tag}>(.*?)</{tag}>', raw1, re.DOTALL)
-        sections[tag] = m.group(1).strip() if m else ''
-    for tag in s2:
-        m = re.search(rf'<{tag}>(.*?)</{tag}>', raw2, re.DOTALL)
-        sections[tag] = m.group(1).strip() if m else ''
-    for tag in s3:
-        m = re.search(rf'<{tag}>(.*?)</{tag}>', raw3, re.DOTALL)
-        sections[tag] = m.group(1).strip() if m else ''
+        sections = {}
+        for tag in s1:
+            m = re.search(rf'<{tag}>(.*?)</{tag}>', raw1, re.DOTALL)
+            sections[tag] = m.group(1).strip() if m else ''
+        for tag in s2:
+            m = re.search(rf'<{tag}>(.*?)</{tag}>', raw2, re.DOTALL)
+            sections[tag] = m.group(1).strip() if m else ''
+        for tag in s3:
+            m = re.search(rf'<{tag}>(.*?)</{tag}>', raw3, re.DOTALL)
+            sections[tag] = m.group(1).strip() if m else ''
 
-    # Remove lit review and methodology from p1 since they now come from p_litmethod
-    # (they'll have empty strings from raw1 which is fine — already set from raw2)''
+        # Remove lit review and methodology from p1 since they now come from p_litmethod
+        # (they'll have empty strings from raw1 which is fine — already set from raw2)''
 
-    fallbacks = {
-        'keywords':          f'{self.topic}, empirical study, stakeholder analysis, policy framework',
-        'abstract':          f'This study examines {self.topic} through {n} papers and a survey of {nr} respondents.',
-        'introduction':      f'This paper investigates {self.topic}. {top_cite} made foundational contributions.',
-        'objectives':        '1. To examine the topic.\n2. To review literature.\n3. To analyse perceptions.\n4. To identify implications.\n5. To recommend improvements.',
-        'literature_review': f'A growing body of work addresses {self.topic}. {top_cite} provide a foundational framework.',
-        'methodology':       f'A mixed-methods approach combined {n} papers with a survey of {nr} respondents analysed via SPSS.',
-        'results':           f'{nr} respondents: {self.aware_pct}% aware, {self.fam_pct}% familiar with tools, {self.support_pct}% support change.',
-        'discussion':        f'Results align with {top_cite}. Awareness is growing; trust in frameworks remains limited.',
-        'suggestions':       'Policymakers should invest in awareness, transparent governance, and stakeholder engagement.',
-        'limitations':       f'Sample size and self-reported data limit generalisability. The {n}-paper review is not exhaustive.',
-        'conclusion':        f'This study advances understanding of {self.topic}. Longitudinal research is recommended.',
-        'charts':            '',
-    }
-    for k, fb in fallbacks.items():
-        if not sections.get(k): sections[k] = fb
+        fallbacks = {
+            'keywords':          f'{self.topic}, empirical study, stakeholder analysis, policy framework',
+            'abstract':          f'This study examines {self.topic} through {n} papers and a survey of {nr} respondents.',
+            'introduction':      f'This paper investigates {self.topic}. {top_cite} made foundational contributions.',
+            'objectives':        '1. To examine the topic.\n2. To review literature.\n3. To analyse perceptions.\n4. To identify implications.\n5. To recommend improvements.',
+            'literature_review': f'A growing body of work addresses {self.topic}. {top_cite} provide a foundational framework.',
+            'methodology':       f'A mixed-methods approach combined {n} papers with a survey of {nr} respondents analysed via SPSS.',
+            'results':           f'{nr} respondents: {self.aware_pct}% aware, {self.fam_pct}% familiar with tools, {self.support_pct}% support change.',
+            'discussion':        f'Results align with {top_cite}. Awareness is growing; trust in frameworks remains limited.',
+            'suggestions':       'Policymakers should invest in awareness, transparent governance, and stakeholder engagement.',
+            'limitations':       f'Sample size and self-reported data limit generalisability. The {n}-paper review is not exhaustive.',
+            'conclusion':        f'This study advances understanding of {self.topic}. Longitudinal research is recommended.',
+            'charts':            '',
+        }
+        for k, fb in fallbacks.items():
+            if not sections.get(k): sections[k] = fb
 
-    self.sections = sections
-    return sections
+        self.sections = sections
+        return sections
 
-def parse_chart_specs(self, n: int) -> list[dict]:
-    """Parse the <charts> block from Gemini into renderable spec dicts."""
-    C   = ['#4472C4','#ED7D31','#A9D18E','#FFC000','#7030A0','#FF0000','#00B050']
-    rng = random.Random(self.seed + 7)
+    def parse_chart_specs(self, n: int) -> list:
+        """Parse the <charts> block from Gemini into renderable spec dicts."""
+        C   = ['#4472C4','#ED7D31','#A9D18E','#FFC000','#7030A0','#FF0000','#00B050']
+        rng = random.Random(self.seed + 7)
 
-    def rv(items):
-        base  = [rng.uniform(10, 38) for _ in items]
-        total = sum(base)
-        return [round(v / total * 100, 1) for v in base]
+        def rv(items):
+            base  = [rng.uniform(10, 38) for _ in items]
+            total = sum(base)
+            return [round(v / total * 100, 1) for v in base]
 
-    specs = []
-    raw   = self.sections.get('charts', '')
+        specs = []
+        raw   = self.sections.get('charts', '')
 
-    for line in raw.strip().splitlines():
-        line = line.strip()
-        if not line or '|' not in line:
-            continue
-        parts = [p.strip() for p in line.split('|')]
-        if len(parts) < 3:
-            continue
-        chart_type = parts[0].lower()
-        title      = parts[1]
-        labels_raw = parts[2]
+        for line in raw.strip().splitlines():
+            line = line.strip()
+            if not line or '|' not in line:
+                continue
+            parts = [p.strip() for p in line.split('|')]
+            if len(parts) < 3:
+                continue
+            chart_type = parts[0].lower()
+            title      = parts[1]
+            labels_raw = parts[2]
 
-        try:
-            if chart_type in ('bar', 'pie'):
-                cats = [c.strip() for c in labels_raw.split(',') if c.strip()][:6]
-                if len(cats) < 2:
-                    continue
-                vals = rv(cats)
-                if chart_type == 'bar':
-                    legend_text = f'A figure shows the relationship between {title.split(" by ")[-1] if " by " in title else "demographic group"} and {title.split(" by ")[0] if " by " in title else title} ({", ".join(cats)}).'
-                    specs.append({'type':'bar','title':title,'cats':cats,'vals':vals,
-                                  'color':C[len(specs)%len(C)],
-                                  'legend': legend_text,
-                                  'interp':f'Distribution across {len(cats)} response categories.'})
-                else:
-                    specs.append({'type':'pie','title':title,'labels':cats,'vals':vals,
+            try:
+                if chart_type in ('bar', 'pie'):
+                    cats = [c.strip() for c in labels_raw.split(',') if c.strip()][:6]
+                    if len(cats) < 2:
+                        continue
+                    vals = rv(cats)
+                    if chart_type == 'bar':
+                        legend_text = f'A figure shows the relationship between {title.split(" by ")[-1] if " by " in title else "demographic group"} and {title.split(" by ")[0] if " by " in title else title} ({", ".join(cats)}).'
+                        specs.append({'type':'bar','title':title,'cats':cats,'vals':vals,
+                                      'color':C[len(specs)%len(C)],
+                                      'legend': legend_text,
+                                      'interp':f'Distribution across {len(cats)} response categories.'})
+                    else:
+                        specs.append({'type':'pie','title':title,'labels':cats,'vals':vals,
+                                      'legend':f'{title}.',
+                                      'interp':f'Proportional breakdown of responses.'})
+
+                elif chart_type in ('grouped', 'stacked'):
+                    if ';' in labels_raw:
+                        g_part, s_part = labels_raw.split(';', 1)
+                        groups = [g.strip() for g in g_part.split(',') if g.strip()][:4]
+                        series = [s.strip() for s in s_part.split(',') if s.strip()][:3]
+                    else:
+                        groups = [g.strip() for g in labels_raw.split(',') if g.strip()][:4]
+                        series = ['Positive','Neutral','Negative']
+                    if not groups or not series:
+                        continue
+                    matrix = [rv(groups) for _ in series]
+                    specs.append({'type':chart_type,'title':title,'groups':groups,'labels':series,
+                                  'matrix':matrix,
                                   'legend':f'{title}.',
-                                  'interp':f'Proportional breakdown of responses.'})
+                                  'interp':f'Cross-tabulation of responses by group.'})
+            except Exception as e:
+                print(f"[Chart parse] skipped: {line!r} → {e}")
+                continue
 
-            elif chart_type in ('grouped', 'stacked'):
-                if ';' in labels_raw:
-                    g_part, s_part = labels_raw.split(';', 1)
-                    groups = [g.strip() for g in g_part.split(',') if g.strip()][:4]
-                    series = [s.strip() for s in s_part.split(',') if s.strip()][:3]
-                else:
-                    groups = [g.strip() for g in labels_raw.split(',') if g.strip()][:4]
-                    series = ['Positive','Neutral','Negative']
-                if not groups or not series:
-                    continue
-                matrix = [rv(groups) for _ in series]
-                specs.append({'type':chart_type,'title':title,'groups':groups,'labels':series,
-                              'matrix':matrix,
-                              'legend':f'{title}.',
-                              'interp':f'Cross-tabulation of responses by group.'})
-        except Exception as e:
-            print(f"[Chart parse] skipped: {line!r} → {e}")
-            continue
+            if len(specs) >= n:
+                break
 
-        if len(specs) >= n:
+        # Pad with fallbacks if needed
+        while len(specs) < n:
+            specs.extend(self._fallback_specs(n - len(specs)))
             break
 
-    # Pad with fallbacks if needed
-    while len(specs) < n:
-        specs.extend(self._fallback_specs(n - len(specs)))
-        break
+        return specs[:n]
 
-    return specs[:n]
+    def references(self) -> list:
+        refs, seen = [], set()
+        for p in self.papers[:12]:
+            key = p["title"][:35].lower()
+            if key in seen: continue
+            seen.add(key)
+            journal = p.get("journal") or "Academic Journal"
+            doi_str = f" https://doi.org/{p['doi']}" if p.get("doi") else ""
+            refs.append(f"{p['authors']} ({p['year']}). {p['title']}. {journal}.{doi_str}")
+        if self.wiki.get("url"):
+            refs.append(f"Wikipedia contributors. ({datetime.now().year}). {self.wiki.get('title', self.topic)}. Wikipedia. {self.wiki['url']}")
+        refs += [
+            "WIPO. (2024). Intellectual Property and Emerging Technologies. World Intellectual Property Organization.",
+            "UNESCO. (2021). Recommendation on the Ethics of Artificial Intelligence. UNESCO.",
+            "Floridi, L., & Cowls, J. (2019). A Unified Framework of Five Principles for AI in Society. Harvard Data Science Review, 1(1).",
+        ]
+        return list(dict.fromkeys(refs))[:15]
 
-def references(self) -> list[str]:
-    refs, seen = [], set()
-    for p in self.papers[:12]:
-        key = p["title"][:35].lower()
-        if key in seen: continue
-        seen.add(key)
-        journal = p.get("journal") or "Academic Journal"
-        doi_str = f" https://doi.org/{p['doi']}" if p.get("doi") else ""
-        refs.append(f"{p['authors']} ({p['year']}). {p['title']}. {journal}.{doi_str}")
-    if self.wiki.get("url"):
-        refs.append(f"Wikipedia contributors. ({datetime.now().year}). {self.wiki.get('title', self.topic)}. Wikipedia. {self.wiki['url']}")
-    refs += [
-        "WIPO. (2024). Intellectual Property and Emerging Technologies. World Intellectual Property Organization.",
-        "UNESCO. (2021). Recommendation on the Ethics of Artificial Intelligence. UNESCO.",
-        "Floridi, L., & Cowls, J. (2019). A Unified Framework of Five Principles for AI in Society. Harvard Data Science Review, 1(1).",
-    ]
-    return list(dict.fromkeys(refs))[:15]
+    def _fallback_specs(self, n: int) -> list:
+        """Safe fallback chart specs requiring no Gemini call."""
+        C = ['#4472C4','#ED7D31','#A9D18E','#FFC000','#7030A0','#FF0000','#00B050']
+        rng = random.Random(self.seed)
+        def rv(cats):
+            base = [rng.uniform(10, 35) for _ in cats]
+            t = sum(base)
+            return [round(v/t*100, 1) for v in base]
+        pool = [
+            {'type':'bar','title':f'Awareness of {self.topic[:35]}','cats':['Not Aware','Slightly Aware','Moderately Aware','Well Aware','Expert'],'color':C[0]},
+            {'type':'pie','title':'Gender Distribution of Respondents','labels':['Female','Male','Non-binary','Prefer not to say']},
+            {'type':'bar','title':'Level of Support for Policy Reform','cats':['Strongly Oppose','Oppose','Neutral','Support','Strongly Support'],'color':C[4]},
+            {'type':'grouped','title':'Perception by Age Group','groups':['16–18','19–35','36–55','55+'],'labels':['Positive','Neutral','Negative'],'matrix':[[rv(['16–18','19–35','36–55','55+'])[i] for i in range(4)] for _ in range(3)]},
+            {'type':'bar','title':'Key Implementation Barriers','cats':['Lack of Awareness','Regulatory Gaps','Resource Constraints','Resistance to Change','Technical Barriers'],'color':C[1]},
+            {'type':'stacked','title':'Trust in Frameworks by Occupation','groups':['Students','Practitioners','Academics','Policymakers'],'labels':['High Trust','Moderate','Low Trust'],'matrix':[[rv(['S','P','A','Po'])[i] for i in range(4)] for _ in range(3)]},
+        ]
+        specs = []
+        for sp in pool[:n]:
+            if sp['type'] == 'bar':
+                specs.append({**sp, 'vals': rv(sp['cats']), 'legend': sp['title'], 'interp': f"Survey responses for {sp['title'].lower()}."})
+            elif sp['type'] == 'pie':
+                specs.append({**sp, 'vals': rv(sp['labels']), 'legend': sp['title'], 'interp': f"Proportional breakdown: {sp['title'].lower()}."})
+            else:
+                specs.append({**sp, 'legend': sp['title'], 'interp': f"Cross-tabulation: {sp['title'].lower()}."})
+        return specs[:n]
 
-def _fallback_specs(self, n: int) -> list[dict]:
-    """Safe fallback chart specs requiring no Gemini call."""
-    C = ['#4472C4','#ED7D31','#A9D18E','#FFC000','#7030A0','#FF0000','#00B050']
-    rng = random.Random(self.seed)
-    def rv(cats):
-        base = [rng.uniform(10, 35) for _ in cats]
-        t = sum(base)
-        return [round(v/t*100, 1) for v in base]
-    pool = [
-        {'type':'bar','title':f'Awareness of {self.topic[:35]}','cats':['Not Aware','Slightly Aware','Moderately Aware','Well Aware','Expert'],'color':C[0]},
-        {'type':'pie','title':'Gender Distribution of Respondents','labels':['Female','Male','Non-binary','Prefer not to say']},
-        {'type':'bar','title':'Level of Support for Policy Reform','cats':['Strongly Oppose','Oppose','Neutral','Support','Strongly Support'],'color':C[4]},
-        {'type':'grouped','title':'Perception by Age Group','groups':['16–18','19–35','36–55','55+'],'labels':['Positive','Neutral','Negative'],'matrix':[[rv(['16–18','19–35','36–55','55+'])[i] for i in range(4)] for _ in range(3)]},
-        {'type':'bar','title':'Key Implementation Barriers','cats':['Lack of Awareness','Regulatory Gaps','Resource Constraints','Resistance to Change','Technical Barriers'],'color':C[1]},
-        {'type':'stacked','title':'Trust in Frameworks by Occupation','groups':['Students','Practitioners','Academics','Policymakers'],'labels':['High Trust','Moderate','Low Trust'],'matrix':[[rv(['S','P','A','Po'])[i] for i in range(4)] for _ in range(3)]},
-    ]
-    specs = []
-    for sp in pool[:n]:
-        if sp['type'] == 'bar':
-            specs.append({**sp, 'vals': rv(sp['cats']), 'legend': sp['title'], 'interp': f"Survey responses for {sp['title'].lower()}."})
-        elif sp['type'] == 'pie':
-            specs.append({**sp, 'vals': rv(sp['labels']), 'legend': sp['title'], 'interp': f"Proportional breakdown: {sp['title'].lower()}."})
-        else:
-            specs.append({**sp, 'legend': sp['title'], 'interp': f"Cross-tabulation: {sp['title'].lower()}."})
-    return specs[:n]
-```
 
 # ═══════════════════════════════════════════════════════════════════════════════
-
-# CHART RENDERING  (matplotlib SPSS-style)
-
+#  CHART RENDERING  (matplotlib SPSS-style)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-SPSS_COLORS = [’#4472C4’,’#ED7D31’,’#A9D18E’,’#FFC000’,’#7030A0’,’#FF0000’,’#00B050’,’#0070C0’]
+SPSS_COLORS = ['#4472C4','#ED7D31','#A9D18E','#FFC000','#7030A0','#FF0000','#00B050','#0070C0']
 
 def _spss_style(ax, fig, title):
-ax.set_facecolor(’#FFFFFF’)
-fig.patch.set_facecolor(’#FFFFFF’)
-for sp in [‘top’, ‘right’]:
-ax.spines[sp].set_visible(False)
-ax.spines[‘left’].set_color(’#AAAAAA’)
-ax.spines[‘bottom’].set_color(’#AAAAAA’)
-ax.tick_params(colors=’#333333’, labelsize=9)
-ax.set_title(title, fontsize=11, fontweight=‘bold’, color=’#222222’, pad=12)
-ax.yaxis.grid(True, linestyle=’–’, alpha=0.5, color=’#CCCCCC’)
-ax.set_axisbelow(True)
+    ax.set_facecolor('#FFFFFF')
+    fig.patch.set_facecolor('#FFFFFF')
+    for sp in ['top', 'right']:
+        ax.spines[sp].set_visible(False)
+    ax.spines['left'].set_color('#AAAAAA')
+    ax.spines['bottom'].set_color('#AAAAAA')
+    ax.tick_params(colors='#333333', labelsize=9)
+    ax.set_title(title, fontsize=11, fontweight='bold', color='#222222', pad=12)
+    ax.yaxis.grid(True, linestyle='--', alpha=0.5, color='#CCCCCC')
+    ax.set_axisbelow(True)
 
 def _bar_chart(title, cats, vals, color=None):
-fig, ax = plt.subplots(figsize=(7, 4))
-c    = color or SPSS_COLORS[0]
-bars = ax.bar(cats, vals, color=c, width=0.5, edgecolor=‘white’, linewidth=0.5)
-for bar, v in zip(bars, vals):
-ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.5,
-f’{v:.1f}%’, ha=‘center’, va=‘bottom’, fontsize=8, color=’#333’)
-_spss_style(ax, fig, title)
-ax.set_ylabel(‘Percent’, fontsize=9, color=’#444’)
-ax.set_xticks(range(len(cats)))
-ax.set_xticklabels(cats, fontsize=8,
-rotation=20 if max((len(c) for c in cats), default=0) > 10 else 0,
-ha=‘right’ if max((len(c) for c in cats), default=0) > 10 else ‘center’)
-ax.set_ylim(0, max(vals) * 1.25 + 3)
-plt.tight_layout()
-buf = io.BytesIO()
-plt.savefig(buf, format=‘png’, dpi=150, bbox_inches=‘tight’)
-plt.close()
-buf.seek(0)
-return buf
+    fig, ax = plt.subplots(figsize=(7, 4))
+    c    = color or SPSS_COLORS[0]
+    bars = ax.bar(cats, vals, color=c, width=0.5, edgecolor='white', linewidth=0.5)
+    for bar, v in zip(bars, vals):
+        ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.5,
+                f'{v:.1f}%', ha='center', va='bottom', fontsize=8, color='#333')
+    _spss_style(ax, fig, title)
+    ax.set_ylabel('Percent', fontsize=9, color='#444')
+    ax.set_xticks(range(len(cats)))
+    ax.set_xticklabels(cats, fontsize=8,
+                       rotation=20 if max((len(c) for c in cats), default=0) > 10 else 0,
+                       ha='right' if max((len(c) for c in cats), default=0) > 10 else 'center')
+    ax.set_ylim(0, max(vals) * 1.25 + 3)
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+    plt.close()
+    buf.seek(0)
+    return buf
 
 def _pie_chart(title, labels, vals):
-fig, ax = plt.subplots(figsize=(6, 4.5))
-total   = sum(vals) or 1
-norm    = [v / total * 100 for v in vals]
-colors  = SPSS_COLORS[:len(labels)]
-wedges, texts, autotexts = ax.pie(
-norm, labels=labels, colors=colors, autopct=’%1.1f%%’,
-startangle=90, pctdistance=0.75,
-wedgeprops=dict(edgecolor=‘white’, linewidth=1.5)
-)
-for t in texts:    t.set_fontsize(9)
-for at in autotexts: at.set_fontsize(8); at.set_color(’#333’)
-ax.set_title(title, fontsize=11, fontweight=‘bold’, color=’#222’, pad=12)
-fig.patch.set_facecolor(’#FFFFFF’)
-plt.tight_layout()
-buf = io.BytesIO()
-plt.savefig(buf, format=‘png’, dpi=150, bbox_inches=‘tight’)
-plt.close()
-buf.seek(0)
-return buf
+    fig, ax = plt.subplots(figsize=(6, 4.5))
+    total   = sum(vals) or 1
+    norm    = [v / total * 100 for v in vals]
+    colors  = SPSS_COLORS[:len(labels)]
+    wedges, texts, autotexts = ax.pie(
+        norm, labels=labels, colors=colors, autopct='%1.1f%%',
+        startangle=90, pctdistance=0.75,
+        wedgeprops=dict(edgecolor='white', linewidth=1.5)
+    )
+    for t in texts:    t.set_fontsize(9)
+    for at in autotexts: at.set_fontsize(8); at.set_color('#333')
+    ax.set_title(title, fontsize=11, fontweight='bold', color='#222', pad=12)
+    fig.patch.set_facecolor('#FFFFFF')
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+    plt.close()
+    buf.seek(0)
+    return buf
 
 def _grouped_chart(title, groups, labels, matrix):
-fig, ax = plt.subplots(figsize=(8, 4.5))
-x = np.arange(len(groups))
-n = len(labels)
-width = 0.7 / n
-for i, (label, values) in enumerate(zip(labels, matrix)):
-offset = (i - n/2 + 0.5) * width
-bars = ax.bar(x + offset, values, width, label=label,
-color=SPSS_COLORS[i % len(SPSS_COLORS)], edgecolor=‘white’, linewidth=0.3)
-for bar, v in zip(bars, values):
-if v > 1:
-ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.3,
-f’{v:.1f}%’, ha=‘center’, va=‘bottom’, fontsize=6, color=’#333’)
-ax.set_xticks(x)
-ax.set_xticklabels(groups, fontsize=8)
-ax.legend(fontsize=7, loc=‘upper right’, framealpha=0.9, ncol=1 if n <= 3 else 2)
-_spss_style(ax, fig, title)
-ax.set_ylabel(‘Percent’, fontsize=9, color=’#444’)
-ax.set_ylim(0, max(max(d) for d in matrix) * 1.3 + 5)
-plt.tight_layout()
-buf = io.BytesIO()
-plt.savefig(buf, format=‘png’, dpi=150, bbox_inches=‘tight’)
-plt.close()
-buf.seek(0)
-return buf
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    x = np.arange(len(groups))
+    n = len(labels)
+    width = 0.7 / n
+    for i, (label, values) in enumerate(zip(labels, matrix)):
+        offset = (i - n/2 + 0.5) * width
+        bars = ax.bar(x + offset, values, width, label=label,
+                      color=SPSS_COLORS[i % len(SPSS_COLORS)], edgecolor='white', linewidth=0.3)
+        for bar, v in zip(bars, values):
+            if v > 1:
+                ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.3,
+                        f'{v:.1f}%', ha='center', va='bottom', fontsize=6, color='#333')
+    ax.set_xticks(x)
+    ax.set_xticklabels(groups, fontsize=8)
+    ax.legend(fontsize=7, loc='upper right', framealpha=0.9, ncol=1 if n <= 3 else 2)
+    _spss_style(ax, fig, title)
+    ax.set_ylabel('Percent', fontsize=9, color='#444')
+    ax.set_ylim(0, max(max(d) for d in matrix) * 1.3 + 5)
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+    plt.close()
+    buf.seek(0)
+    return buf
 
 def _stacked_chart(title, groups, labels, matrix):
-fig, ax = plt.subplots(figsize=(8, 4.5))
-x      = np.arange(len(groups))
-bottom = np.zeros(len(groups))
-for i, (label, values) in enumerate(zip(labels, matrix)):
-vals = np.array(values)
-ax.bar(x, vals, 0.5, bottom=bottom, label=label,
-color=SPSS_COLORS[i % len(SPSS_COLORS)], edgecolor=‘white’, linewidth=0.3)
-for j, (v, b) in enumerate(zip(vals, bottom)):
-if v > 4:
-ax.text(x[j], b + v/2, f’{v:.0f}%’, ha=‘center’, va=‘center’,
-fontsize=7, color=‘white’, fontweight=‘bold’)
-bottom += vals
-ax.set_xticks(x)
-ax.set_xticklabels(groups, fontsize=8)
-ax.legend(fontsize=7, loc=‘upper right’, framealpha=0.9)
-_spss_style(ax, fig, title)
-ax.set_ylabel(‘Percent’, fontsize=9, color=’#444’)
-plt.tight_layout()
-buf = io.BytesIO()
-plt.savefig(buf, format=‘png’, dpi=150, bbox_inches=‘tight’)
-plt.close()
-buf.seek(0)
-return buf
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    x      = np.arange(len(groups))
+    bottom = np.zeros(len(groups))
+    for i, (label, values) in enumerate(zip(labels, matrix)):
+        vals = np.array(values)
+        ax.bar(x, vals, 0.5, bottom=bottom, label=label,
+               color=SPSS_COLORS[i % len(SPSS_COLORS)], edgecolor='white', linewidth=0.3)
+        for j, (v, b) in enumerate(zip(vals, bottom)):
+            if v > 4:
+                ax.text(x[j], b + v/2, f'{v:.0f}%', ha='center', va='center',
+                        fontsize=7, color='white', fontweight='bold')
+        bottom += vals
+    ax.set_xticks(x)
+    ax.set_xticklabels(groups, fontsize=8)
+    ax.legend(fontsize=7, loc='upper right', framealpha=0.9)
+    _spss_style(ax, fig, title)
+    ax.set_ylabel('Percent', fontsize=9, color='#444')
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+    plt.close()
+    buf.seek(0)
+    return buf
 
 def make_chart(spec: dict) -> io.BytesIO:
-t = spec[“type”]
-if t == “bar”:     return _bar_chart(spec[“title”], spec[“cats”], spec[“vals”], spec.get(“color”))
-if t == “pie”:     return _pie_chart(spec[“title”], spec[“labels”], spec[“vals”])
-if t == “grouped”: return _grouped_chart(spec[“title”], spec[“groups”], spec[“labels”], spec[“matrix”])
-if t == “stacked”: return _stacked_chart(spec[“title”], spec[“groups”], spec[“labels”], spec[“matrix”])
-return _bar_chart(spec[“title”], spec.get(“cats”, [“A”, “B”]), spec.get(“vals”, [50, 50]))
+    t = spec["type"]
+    if t == "bar":     return _bar_chart(spec["title"], spec["cats"], spec["vals"], spec.get("color"))
+    if t == "pie":     return _pie_chart(spec["title"], spec["labels"], spec["vals"])
+    if t == "grouped": return _grouped_chart(spec["title"], spec["groups"], spec["labels"], spec["matrix"])
+    if t == "stacked": return _stacked_chart(spec["title"], spec["groups"], spec["labels"], spec["matrix"])
+    return _bar_chart(spec["title"], spec.get("cats", ["A", "B"]), spec.get("vals", [50, 50]))
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
-
-# DOCX BUILDER
-
+#  DOCX BUILDER
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _set_cell_bg(cell, color: str):
-tc  = cell._tc
-pr  = tc.get_or_add_tcPr()
-shd = OxmlElement(‘w:shd’)
-shd.set(qn(‘w:val’), ‘clear’)
-shd.set(qn(‘w:color’), ‘auto’)
-shd.set(qn(‘w:fill’), color)
-pr.append(shd)
+    tc  = cell._tc
+    pr  = tc.get_or_add_tcPr()
+    shd = OxmlElement('w:shd')
+    shd.set(qn('w:val'), 'clear')
+    shd.set(qn('w:color'), 'auto')
+    shd.set(qn('w:fill'), color)
+    pr.append(shd)
 
-def _add_table(doc, caption: str, rows: list, hcol: str = ‘1F3864’):
-p = doc.add_paragraph()
-p.paragraph_format.space_before = Pt(8)
-r = p.add_run(caption)
-r.bold = True
-r.font.size = Pt(10)
-t = doc.add_table(rows=len(rows), cols=len(rows[0]))
-t.style = ‘Table Grid’
-for ri, row in enumerate(rows):
-for ci, txt in enumerate(row):
-cell = t.cell(ri, ci)
-cell.text = ‘’
-para = cell.paragraphs[0]
-para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-run  = para.add_run(str(txt))
-run.font.size = Pt(9)
-if ri == 0:
-run.bold = True
-run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
-_set_cell_bg(cell, hcol.upper())
-elif ri % 2 == 0:
-_set_cell_bg(cell, ‘EBF3FB’)
-doc.add_paragraph()
+def _add_table(doc, caption: str, rows: list, hcol: str = '1F3864'):
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(8)
+    r = p.add_run(caption)
+    r.bold = True
+    r.font.size = Pt(10)
+    t = doc.add_table(rows=len(rows), cols=len(rows[0]))
+    t.style = 'Table Grid'
+    for ri, row in enumerate(rows):
+        for ci, txt in enumerate(row):
+            cell = t.cell(ri, ci)
+            cell.text = ''
+            para = cell.paragraphs[0]
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run  = para.add_run(str(txt))
+            run.font.size = Pt(9)
+            if ri == 0:
+                run.bold = True
+                run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+                _set_cell_bg(cell, hcol.upper())
+            elif ri % 2 == 0:
+                _set_cell_bg(cell, 'EBF3FB')
+    doc.add_paragraph()
+
 
 class DocBuilder:
-def **init**(self, topic, author, inst, email, writer: GeminiWriter,
-sections: dict, specs: list, charts: list, papers: list):
-self.topic    = topic
-self.author   = author
-self.inst     = inst
-self.email    = email
-self.writer   = writer
-self.sections = sections   # pre-generated text from Gemini
-self.specs    = specs
-self.charts   = charts
-self.papers   = papers
+    def __init__(self, topic, author, inst, email, writer: GeminiWriter,
+                 sections: dict, specs: list, charts: list, papers: list):
+        self.topic    = topic
+        self.author   = author
+        self.inst     = inst
+        self.email    = email
+        self.writer   = writer
+        self.sections = sections   # pre-generated text from Gemini
+        self.specs    = specs
+        self.charts   = charts
+        self.papers   = papers
 
-```
-def build(self) -> Document:
-    doc = Document()
+    def build(self) -> Document:
+        doc = Document()
 
-    # ── PAGE SETUP: A4, 1" all margins ───────────────────────────────────
-    from docx.shared import Cm
-    for sec in doc.sections:
-        sec.page_width    = Inches(8.27)
-        sec.page_height   = Inches(11.69)
-        sec.top_margin    = Inches(1)
-        sec.bottom_margin = Inches(1)
-        sec.left_margin   = Inches(1)
-        sec.right_margin  = Inches(1)
+        # ── PAGE SETUP: A4, 1" all margins ───────────────────────────────────
+        from docx.shared import Cm
+        for sec in doc.sections:
+            sec.page_width    = Inches(8.27)
+            sec.page_height   = Inches(11.69)
+            sec.top_margin    = Inches(1)
+            sec.bottom_margin = Inches(1)
+            sec.left_margin   = Inches(1)
+            sec.right_margin  = Inches(1)
 
-    # ── HELPERS ───────────────────────────────────────────────────────────
-    def add_para(text='', align=WD_ALIGN_PARAGRAPH.LEFT,
-                 bold=False, italic=False, sz=12,
-                 space_before=None, space_after=None,
-                 first_indent=None, left_indent=None,
-                 font_name='Times New Roman', color=None):
-        p = doc.add_paragraph()
-        p.alignment = align
-        pf = p.paragraph_format
-        pf.space_before = Pt(space_before) if space_before is not None else None
-        pf.space_after  = Pt(space_after)  if space_after  is not None else None
-        if first_indent is not None:
-            pf.first_line_indent = Inches(first_indent)
-        if left_indent is not None:
-            pf.left_indent = Inches(left_indent)
-        if text:
+        # ── HELPERS ───────────────────────────────────────────────────────────
+        def add_para(text='', align=WD_ALIGN_PARAGRAPH.LEFT,
+                     bold=False, italic=False, sz=12,
+                     space_before=None, space_after=None,
+                     first_indent=None, left_indent=None,
+                     font_name='Times New Roman', color=None):
+            p = doc.add_paragraph()
+            p.alignment = align
+            pf = p.paragraph_format
+            pf.space_before = Pt(space_before) if space_before is not None else None
+            pf.space_after  = Pt(space_after)  if space_after  is not None else None
+            if first_indent is not None:
+                pf.first_line_indent = Inches(first_indent)
+            if left_indent is not None:
+                pf.left_indent = Inches(left_indent)
+            if text:
+                r = p.add_run(text)
+                r.bold       = bold
+                r.italic     = italic
+                r.font.size  = Pt(sz)
+                r.font.name  = font_name
+                if color:
+                    r.font.color.rgb = RGBColor(
+                        int(color[0:2],16), int(color[2:4],16), int(color[4:6],16))
+            return p
+
+        def section_heading(text):
+            """Bold, justified, 12pt Times New Roman, space 12pt before/after"""
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            pf = p.paragraph_format
+            pf.space_before = Pt(12)
+            pf.space_after  = Pt(12)
             r = p.add_run(text)
-            r.bold       = bold
-            r.italic     = italic
-            r.font.size  = Pt(sz)
-            r.font.name  = font_name
-            if color:
-                r.font.color.rgb = RGBColor(
-                    int(color[0:2],16), int(color[2:4],16), int(color[4:6],16))
-        return p
+            r.bold      = True
+            r.font.size = Pt(12)
+            r.font.name = 'Times New Roman'
+            return p
 
-    def section_heading(text):
-        """Bold, justified, 12pt Times New Roman, space 12pt before/after"""
-        p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-        pf = p.paragraph_format
-        pf.space_before = Pt(12)
-        pf.space_after  = Pt(12)
-        r = p.add_run(text)
-        r.bold      = True
-        r.font.size = Pt(12)
-        r.font.name = 'Times New Roman'
-        return p
+        def body_para(text, space_before=12, space_after=12,
+                      align=WD_ALIGN_PARAGRAPH.JUSTIFY,
+                      first_indent=None):
+            p = doc.add_paragraph()
+            p.alignment = align
+            pf = p.paragraph_format
+            pf.space_before = Pt(space_before)
+            pf.space_after  = Pt(space_after)
+            if first_indent is not None:
+                pf.first_line_indent = Inches(first_indent)
+            r = p.add_run(text)
+            r.font.size = Pt(12)
+            r.font.name = 'Times New Roman'
+            return p
 
-    def body_para(text, space_before=12, space_after=12,
-                  align=WD_ALIGN_PARAGRAPH.JUSTIFY,
-                  first_indent=None):
-        p = doc.add_paragraph()
-        p.alignment = align
-        pf = p.paragraph_format
-        pf.space_before = Pt(space_before)
-        pf.space_after  = Pt(space_after)
-        if first_indent is not None:
-            pf.first_line_indent = Inches(first_indent)
-        r = p.add_run(text)
-        r.font.size = Pt(12)
-        r.font.name = 'Times New Roman'
-        return p
+        def ref_para(text, space_before=0, space_after=0):
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            pf = p.paragraph_format
+            pf.space_before      = Pt(space_before)
+            pf.space_after       = Pt(space_after)
+            pf.first_line_indent = Inches(-0.25)
+            pf.left_indent       = Inches(0.25)
+            r = p.add_run(text)
+            r.font.size = Pt(12)
+            r.font.name = 'Times New Roman'
+            return p
 
-    def ref_para(text, space_before=0, space_after=0):
-        p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-        pf = p.paragraph_format
-        pf.space_before      = Pt(space_before)
-        pf.space_after       = Pt(space_after)
-        pf.first_line_indent = Inches(-0.25)
-        pf.left_indent       = Inches(0.25)
-        r = p.add_run(text)
-        r.font.size = Pt(12)
-        r.font.name = 'Times New Roman'
-        return p
+        def blank():
+            p = doc.add_paragraph()
+            p.paragraph_format.space_before = Pt(0)
+            p.paragraph_format.space_after  = Pt(0)
+            return p
 
-    def blank():
-        p = doc.add_paragraph()
-        p.paragraph_format.space_before = Pt(0)
-        p.paragraph_format.space_after  = Pt(0)
-        return p
+        def figure_label(num, legend_text):
+            """FIGURE N label bold centered, then LEGEND bold centered"""
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            pf = p.paragraph_format
+            pf.space_before = Pt(12)
+            pf.space_after  = Pt(12)
+            r = p.add_run(f'FIGURE {num}')
+            r.bold = True; r.font.size = Pt(12); r.font.name = 'Times New Roman'
 
-    def figure_label(num, legend_text):
-        """FIGURE N label bold centered, then LEGEND bold centered"""
-        p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        pf = p.paragraph_format
-        pf.space_before = Pt(12)
-        pf.space_after  = Pt(12)
-        r = p.add_run(f'FIGURE {num}')
-        r.bold = True; r.font.size = Pt(12); r.font.name = 'Times New Roman'
+            leg = doc.add_paragraph()
+            leg.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            pf2 = leg.paragraph_format
+            pf2.space_before = Pt(12); pf2.space_after = Pt(12)
+            rl = leg.add_run(f'LEGEND : {legend_text}')
+            rl.bold = True; rl.font.size = Pt(12); rl.font.name = 'Times New Roman'
 
-        leg = doc.add_paragraph()
-        leg.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        pf2 = leg.paragraph_format
-        pf2.space_before = Pt(12); pf2.space_after = Pt(12)
-        rl = leg.add_run(f'LEGEND : {legend_text}')
-        rl.bold = True; rl.font.size = Pt(12); rl.font.name = 'Times New Roman'
+        # ── TITLE PAGE ────────────────────────────────────────────────────────
+        # Title - centered, bold, 12pt TNR
+        t = add_para(self.topic.upper(),
+                     align=WD_ALIGN_PARAGRAPH.CENTER,
+                     bold=True, sz=12, font_name='Times New Roman')
 
-    # ── TITLE PAGE ────────────────────────────────────────────────────────
-    # Title - centered, bold, 12pt TNR
-    t = add_para(self.topic.upper(),
+        blank()
+        blank()
+
+        # AUTHOR block
+        add_para('AUTHOR',
                  align=WD_ALIGN_PARAGRAPH.CENTER,
                  bold=True, sz=12, font_name='Times New Roman')
-
-    blank()
-    blank()
-
-    # AUTHOR block
-    add_para('AUTHOR',
-             align=WD_ALIGN_PARAGRAPH.CENTER,
-             bold=True, sz=12, font_name='Times New Roman')
-    add_para(self.author,
-             align=WD_ALIGN_PARAGRAPH.CENTER,
-             sz=12, font_name='Times New Roman')
-    if self.inst:
-        add_para(self.inst,
+        add_para(self.author,
                  align=WD_ALIGN_PARAGRAPH.CENTER,
                  sz=12, font_name='Times New Roman')
-    if self.email:
-        add_para(f'E-mail: {self.email}',
+        if self.inst:
+            add_para(self.inst,
+                     align=WD_ALIGN_PARAGRAPH.CENTER,
+                     sz=12, font_name='Times New Roman')
+        if self.email:
+            add_para(f'E-mail: {self.email}',
+                     align=WD_ALIGN_PARAGRAPH.CENTER,
+                     sz=12, font_name='Times New Roman')
+
+        blank()
+        blank()
+
+        # Repeat title before abstract (as in sample)
+        add_para(self.topic.upper(),
                  align=WD_ALIGN_PARAGRAPH.CENTER,
-                 sz=12, font_name='Times New Roman')
+                 bold=True, sz=12, font_name='Times New Roman')
+        blank()
 
-    blank()
-    blank()
+        # Authors right-aligned (as in sample page 2)
+        add_para(self.author,
+                 align=WD_ALIGN_PARAGRAPH.RIGHT,
+                 bold=True, sz=12, font_name='Times New Roman',
+                 space_before=12, space_after=12)
 
-    # Repeat title before abstract (as in sample)
-    add_para(self.topic.upper(),
-             align=WD_ALIGN_PARAGRAPH.CENTER,
-             bold=True, sz=12, font_name='Times New Roman')
-    blank()
+        # ── ABSTRACT ──────────────────────────────────────────────────────────
+        # "Abstract" bold, not justified, no special align (LEFT/NONE like sample)
+        p_abs_hd = doc.add_paragraph()
+        p_abs_hd.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        r_abs = p_abs_hd.add_run('Abstract')
+        r_abs.bold = True; r_abs.font.size = Pt(12); r_abs.font.name = 'Times New Roman'
 
-    # Authors right-aligned (as in sample page 2)
-    add_para(self.author,
-             align=WD_ALIGN_PARAGRAPH.RIGHT,
-             bold=True, sz=12, font_name='Times New Roman',
-             space_before=12, space_after=12)
+        body_para(self.sections['abstract'])
 
-    # ── ABSTRACT ──────────────────────────────────────────────────────────
-    # "Abstract" bold, not justified, no special align (LEFT/NONE like sample)
-    p_abs_hd = doc.add_paragraph()
-    p_abs_hd.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    r_abs = p_abs_hd.add_run('Abstract')
-    r_abs.bold = True; r_abs.font.size = Pt(12); r_abs.font.name = 'Times New Roman'
+        # Keywords line: bold "Keywords –" then normal text
+        kw_p = doc.add_paragraph()
+        kw_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        kw_p.paragraph_format.space_before = Pt(12)
+        kw_p.paragraph_format.space_after  = Pt(12)
+        kr1 = kw_p.add_run('Keywords – ')
+        kr1.bold = True; kr1.font.size = Pt(12); kr1.font.name = 'Times New Roman'
+        kr2 = kw_p.add_run(self.sections['keywords'])
+        kr2.font.size = Pt(12); kr2.font.name = 'Times New Roman'
 
-    body_para(self.sections['abstract'])
+        # ── INTRODUCTION ──────────────────────────────────────────────────────
+        section_heading('Introduction')
+        for para in self.sections['introduction'].split('\n\n'):
+            para = para.strip()
+            if para:
+                body_para(para)
 
-    # Keywords line: bold "Keywords –" then normal text
-    kw_p = doc.add_paragraph()
-    kw_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    kw_p.paragraph_format.space_before = Pt(12)
-    kw_p.paragraph_format.space_after  = Pt(12)
-    kr1 = kw_p.add_run('Keywords – ')
-    kr1.bold = True; kr1.font.size = Pt(12); kr1.font.name = 'Times New Roman'
-    kr2 = kw_p.add_run(self.sections['keywords'])
-    kr2.font.size = Pt(12); kr2.font.name = 'Times New Roman'
+        # ── OBJECTIVES ────────────────────────────────────────────────────────
+        section_heading('Objectives:')
+        lines = [l.strip() for l in self.sections['objectives'].splitlines() if l.strip()]
+        for i, line in enumerate(lines):
+            line = re.sub(r'^\d+[\.)]\s*', '', line).strip()
+            line = re.sub(r'^[●•\-]\s*', '', line).strip()
+            if not line:
+                continue
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            pf = p.paragraph_format
+            pf.space_before      = Pt(6)
+            pf.space_after       = Pt(6)
+            pf.left_indent       = Inches(0.4)
+            pf.first_line_indent = Inches(-0.25)
+            bullet_run = p.add_run('\u25cf       ')
+            bullet_run.font.size = Pt(12)
+            bullet_run.font.name = 'Times New Roman'
+            r = p.add_run(line)
+            r.font.size = Pt(12)
+            r.font.name = 'Times New Roman'
 
-    # ── INTRODUCTION ──────────────────────────────────────────────────────
-    section_heading('Introduction')
-    for para in self.sections['introduction'].split('\n\n'):
-        para = para.strip()
-        if para:
-            body_para(para)
+        # ── LITERATURE REVIEW ─────────────────────────────────────────────────
+        section_heading('Literature Review')
+        refs_for_lit = self.sections.get('references', [])
+        lit_paras = self.sections['literature_review'].split('\n\n')
+        for i, para in enumerate(lit_paras):
+            para = para.strip()
+            if not para:
+                continue
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            pf = p.paragraph_format
+            pf.space_before      = Pt(12) if i == 0 else Pt(0)
+            pf.space_after       = Pt(12) if i == len(lit_paras)-1 else Pt(0)
+            pf.first_line_indent = Inches(-0.25)
+            pf.left_indent       = Inches(0.25)
+            r = p.add_run(para)
+            r.font.size = Pt(12); r.font.name = 'Times New Roman'
 
-    # ── OBJECTIVES ────────────────────────────────────────────────────────
-    section_heading('Objectives:')
-    lines = [l.strip() for l in self.sections['objectives'].splitlines() if l.strip()]
-    for i, line in enumerate(lines):
-        line = re.sub(r'^\d+[\.)]\s*', '', line).strip()
-        line = re.sub(r'^[●•\-]\s*', '', line).strip()
-        if not line:
-            continue
-        p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        pf = p.paragraph_format
-        pf.space_before      = Pt(6)
-        pf.space_after       = Pt(6)
-        pf.left_indent       = Inches(0.4)
-        pf.first_line_indent = Inches(-0.25)
-        bullet_run = p.add_run('\u25cf       ')
-        bullet_run.font.size = Pt(12)
-        bullet_run.font.name = 'Times New Roman'
-        r = p.add_run(line)
-        r.font.size = Pt(12)
-        r.font.name = 'Times New Roman'
+        # ── METHODOLOGY ───────────────────────────────────────────────────────
+        # Use Heading 3 style like sample (bold, 12pt TNR, justified)
+        meth_hd = doc.add_paragraph()
+        meth_hd.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        pf_m = meth_hd.paragraph_format
+        pf_m.space_before = Pt(14); pf_m.space_after = Pt(0)
+        rm = meth_hd.add_run('Methodology')
+        rm.bold = True; rm.font.size = Pt(12); rm.font.name = 'Times New Roman'
+        rm.font.color.rgb = RGBColor(0, 0, 0)
 
-    # ── LITERATURE REVIEW ─────────────────────────────────────────────────
-    section_heading('Literature Review')
-    refs_for_lit = self.sections.get('references', [])
-    lit_paras = self.sections['literature_review'].split('\n\n')
-    for i, para in enumerate(lit_paras):
-        para = para.strip()
-        if not para:
-            continue
-        p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-        pf = p.paragraph_format
-        pf.space_before      = Pt(12) if i == 0 else Pt(0)
-        pf.space_after       = Pt(12) if i == len(lit_paras)-1 else Pt(0)
-        pf.first_line_indent = Inches(-0.25)
-        pf.left_indent       = Inches(0.25)
-        r = p.add_run(para)
-        r.font.size = Pt(12); r.font.name = 'Times New Roman'
+        for para in self.sections['methodology'].split('\n\n'):
+            para = para.strip()
+            if para:
+                body_para(para, space_before=0, space_after=0)
 
-    # ── METHODOLOGY ───────────────────────────────────────────────────────
-    # Use Heading 3 style like sample (bold, 12pt TNR, justified)
-    meth_hd = doc.add_paragraph()
-    meth_hd.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-    pf_m = meth_hd.paragraph_format
-    pf_m.space_before = Pt(14); pf_m.space_after = Pt(0)
-    rm = meth_hd.add_run('Methodology')
-    rm.bold = True; rm.font.size = Pt(12); rm.font.name = 'Times New Roman'
-    rm.font.color.rgb = RGBColor(0, 0, 0)
+        # ── DATA ANALYSIS (FIGURES) ───────────────────────────────────────────
+        # "Analysis - 1" label (bold, no align/LEFT, 12pt, space 12 before/after)
+        an_hd = doc.add_paragraph()
+        an_hd.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        pf_an = an_hd.paragraph_format
+        pf_an.space_before = Pt(12); pf_an.space_after = Pt(12)
+        r_an = an_hd.add_run('Analysis - 1')
+        r_an.bold = True; r_an.font.size = Pt(12); r_an.font.name = 'Times New Roman'
 
-    for para in self.sections['methodology'].split('\n\n'):
-        para = para.strip()
-        if para:
-            body_para(para, space_before=0, space_after=0)
+        # Parse results section into per-figure analysis paragraphs
+        results_text = self.sections.get('results', '')
+        import re as _re
+        fig_analyses = {}
+        # Split on "Figure N:" or "Figure N " patterns
+        fig_blocks = _re.split(r'(?i)(?:^|\n)\s*Figure\s+(\d+)\s*[:\-]?\s*', results_text)
+        if len(fig_blocks) > 1:
+            for idx in range(1, len(fig_blocks), 2):
+                fig_num = int(fig_blocks[idx])
+                fig_text = fig_blocks[idx + 1].strip() if idx + 1 < len(fig_blocks) else ''
+                if fig_text:
+                    fig_analyses[fig_num] = fig_text
 
-    # ── DATA ANALYSIS (FIGURES) ───────────────────────────────────────────
-    # "Analysis - 1" label (bold, no align/LEFT, 12pt, space 12 before/after)
-    an_hd = doc.add_paragraph()
-    an_hd.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    pf_an = an_hd.paragraph_format
-    pf_an.space_before = Pt(12); pf_an.space_after = Pt(12)
-    r_an = an_hd.add_run('Analysis - 1')
-    r_an.bold = True; r_an.font.size = Pt(12); r_an.font.name = 'Times New Roman'
+        for i, (spec, buf) in enumerate(zip(self.specs, self.charts), 1):
+            buf.seek(0)
+            # Chart image centered
+            img_p = doc.add_paragraph()
+            img_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            img_p.paragraph_format.space_before = Pt(12)
+            img_p.paragraph_format.space_after  = Pt(6)
+            img_p.add_run().add_picture(buf, width=Inches(5.5))
 
-    # Parse results section into per-figure analysis paragraphs
-    results_text = self.sections.get('results', '')
-    import re as _re
-    fig_analyses = {}
-    # Split on "Figure N:" or "Figure N " patterns
-    fig_blocks = _re.split(r'(?i)(?:^|\n)\s*Figure\s+(\d+)\s*[:\-]?\s*', results_text)
-    if len(fig_blocks) > 1:
-        for idx in range(1, len(fig_blocks), 2):
-            fig_num = int(fig_blocks[idx])
-            fig_text = fig_blocks[idx + 1].strip() if idx + 1 < len(fig_blocks) else ''
-            if fig_text:
-                fig_analyses[fig_num] = fig_text
+            # FIGURE N label
+            fig_p = doc.add_paragraph()
+            fig_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            pf_fig = fig_p.paragraph_format
+            pf_fig.space_before = Pt(6); pf_fig.space_after = Pt(4)
+            r_fig = fig_p.add_run(f'Figure {i}')
+            r_fig.bold = True; r_fig.font.size = Pt(12); r_fig.font.name = 'Times New Roman'
 
-    for i, (spec, buf) in enumerate(zip(self.specs, self.charts), 1):
-        buf.seek(0)
-        # Chart image centered
-        img_p = doc.add_paragraph()
-        img_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        img_p.paragraph_format.space_before = Pt(12)
-        img_p.paragraph_format.space_after  = Pt(6)
-        img_p.add_run().add_picture(buf, width=Inches(5.5))
+            # LEGEND line
+            leg_p = doc.add_paragraph()
+            leg_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            pf_leg = leg_p.paragraph_format
+            pf_leg.space_before = Pt(4); pf_leg.space_after = Pt(6)
+            r_leg_lbl = leg_p.add_run('Legend: ')
+            r_leg_lbl.bold = True; r_leg_lbl.font.size = Pt(12); r_leg_lbl.font.name = 'Times New Roman'
+            r_leg_txt = leg_p.add_run(spec["legend"])
+            r_leg_txt.bold = False; r_leg_txt.font.size = Pt(12); r_leg_txt.font.name = 'Times New Roman'
 
-        # FIGURE N label
-        fig_p = doc.add_paragraph()
-        fig_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        pf_fig = fig_p.paragraph_format
-        pf_fig.space_before = Pt(6); pf_fig.space_after = Pt(4)
-        r_fig = fig_p.add_run(f'Figure {i}')
-        r_fig.bold = True; r_fig.font.size = Pt(12); r_fig.font.name = 'Times New Roman'
+            # Analysis paragraph for this figure
+            analysis_text = fig_analyses.get(i, spec.get('interp', ''))
+            if analysis_text:
+                ana_p = doc.add_paragraph()
+                ana_p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+                pf_ana = ana_p.paragraph_format
+                pf_ana.space_before = Pt(6); pf_ana.space_after = Pt(12)
+                pf_ana.first_line_indent = Inches(0.5)
+                r_ana = ana_p.add_run(analysis_text)
+                r_ana.font.size = Pt(12); r_ana.font.name = 'Times New Roman'
 
-        # LEGEND line
-        leg_p = doc.add_paragraph()
-        leg_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        pf_leg = leg_p.paragraph_format
-        pf_leg.space_before = Pt(4); pf_leg.space_after = Pt(6)
-        r_leg_lbl = leg_p.add_run('Legend: ')
-        r_leg_lbl.bold = True; r_leg_lbl.font.size = Pt(12); r_leg_lbl.font.name = 'Times New Roman'
-        r_leg_txt = leg_p.add_run(spec["legend"])
-        r_leg_txt.bold = False; r_leg_txt.font.size = Pt(12); r_leg_txt.font.name = 'Times New Roman'
+        # ── CHI-SQUARE / STATS TABLES ─────────────────────────────────────────
+        rng = random.Random(self.writer.seed)
+        n   = self.writer.n_respondents
 
-        # Analysis paragraph for this figure
-        analysis_text = fig_analyses.get(i, spec.get('interp', ''))
-        if analysis_text:
-            ana_p = doc.add_paragraph()
-            ana_p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            pf_ana = ana_p.paragraph_format
-            pf_ana.space_before = Pt(6); pf_ana.space_after = Pt(12)
-            pf_ana.first_line_indent = Inches(0.5)
-            r_ana = ana_p.add_run(analysis_text)
-            r_ana.font.size = Pt(12); r_ana.font.name = 'Times New Roman'
+        # Build chi-square table rows
+        chi_vars = [
+            ('age',                f'adoption of digital platforms for {self.writer.topic[:40]}'),
+            ('gender',             f'perception of income improvement through {self.writer.topic[:40]}'),
+            ('education',          f'awareness of government support programs for {self.writer.topic[:40]}'),
+            ('employment status',  f'challenges faced in using e-commerce for {self.writer.topic[:40]}'),
+            ('area',               f'overall satisfaction with {self.writer.topic[:40]}'),
+        ]
 
-    # ── CHI-SQUARE / STATS TABLES ─────────────────────────────────────────
-    rng = random.Random(self.writer.seed)
-    n   = self.writer.n_respondents
+        for ti, (var1, var2) in enumerate(chi_vars, 1):
+            # TABLE label
+            tbl_hd = doc.add_paragraph()
+            tbl_hd.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            pf_t = tbl_hd.paragraph_format
+            pf_t.space_before = Pt(12); pf_t.space_after = Pt(12)
+            r_t = tbl_hd.add_run(f'TABLE {ti}')
+            r_t.bold = True; r_t.font.size = Pt(12); r_t.font.name = 'Times New Roman'
 
-    # Build chi-square table rows
-    chi_vars = [
-        ('age',                f'adoption of digital platforms for {self.writer.topic[:40]}'),
-        ('gender',             f'perception of income improvement through {self.writer.topic[:40]}'),
-        ('education',          f'awareness of government support programs for {self.writer.topic[:40]}'),
-        ('employment status',  f'challenges faced in using e-commerce for {self.writer.topic[:40]}'),
-        ('area',               f'overall satisfaction with {self.writer.topic[:40]}'),
-    ]
+            # HYPOTHESIS line
+            hyp_p = doc.add_paragraph()
+            hyp_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            pf_h = hyp_p.paragraph_format
+            pf_h.space_before = Pt(12); pf_h.space_after = Pt(12)
+            r_h = hyp_p.add_run('HYPOTHESIS : Null hypothesis is rejected and Alternative hypothesis is accepted')
+            r_h.bold = True; r_h.font.size = Pt(12); r_h.font.name = 'Times New Roman'
 
-    for ti, (var1, var2) in enumerate(chi_vars, 1):
-        # TABLE label
-        tbl_hd = doc.add_paragraph()
-        tbl_hd.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        pf_t = tbl_hd.paragraph_format
-        pf_t.space_before = Pt(12); pf_t.space_after = Pt(12)
-        r_t = tbl_hd.add_run(f'TABLE {ti}')
-        r_t.bold = True; r_t.font.size = Pt(12); r_t.font.name = 'Times New Roman'
+            # Actual table (chi-square values)
+            chi_val  = round(rng.uniform(1.2, 8.5), 3)
+            df_val   = rng.choice([2, 3, 4])
+            sig_val  = round(rng.uniform(0.05, 0.55), 3)
+            lr_val   = round(rng.uniform(1.1, 8.0), 3)
+            lra_val  = round(rng.uniform(0.05, 2.0), 3)
+            lra_sig  = round(rng.uniform(0.1, 0.9), 3)
+            _add_table(doc, '', [
+                ['', 'Value', 'df', 'Asymp. Sig. (2-sided)'],
+                ['Pearson Chi-Square', f'{chi_val}', str(df_val), f'{sig_val}'],
+                ['Likelihood Ratio',   f'{lr_val}',  str(df_val), f'{round(rng.uniform(0.05,0.55),3)}'],
+                ['Linear-by-Linear',   f'{lra_val}', '1',         f'{lra_sig}'],
+                ['N of Valid Cases',   str(n), '', ''],
+            ])
 
-        # HYPOTHESIS line
-        hyp_p = doc.add_paragraph()
-        hyp_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        pf_h = hyp_p.paragraph_format
-        pf_h.space_before = Pt(12); pf_h.space_after = Pt(12)
-        r_h = hyp_p.add_run('HYPOTHESIS : Null hypothesis is rejected and Alternative hypothesis is accepted')
-        r_h.bold = True; r_h.font.size = Pt(12); r_h.font.name = 'Times New Roman'
+            # LEGEND
+            leg2_p = doc.add_paragraph()
+            leg2_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            pf_l2 = leg2_p.paragraph_format
+            pf_l2.space_before = Pt(12); pf_l2.space_after = Pt(12)
+            r_l2 = leg2_p.add_run('LEGEND : The above table shows chi square test')
+            r_l2.bold = True; r_l2.font.size = Pt(12); r_l2.font.name = 'Times New Roman'
 
-        # Actual table (chi-square values)
-        chi_val  = round(rng.uniform(1.2, 8.5), 3)
-        df_val   = rng.choice([2, 3, 4])
-        sig_val  = round(rng.uniform(0.05, 0.55), 3)
-        lr_val   = round(rng.uniform(1.1, 8.0), 3)
-        lra_val  = round(rng.uniform(0.05, 2.0), 3)
-        lra_sig  = round(rng.uniform(0.1, 0.9), 3)
-        _add_table(doc, '', [
-            ['', 'Value', 'df', 'Asymp. Sig. (2-sided)'],
-            ['Pearson Chi-Square', f'{chi_val}', str(df_val), f'{sig_val}'],
-            ['Likelihood Ratio',   f'{lr_val}',  str(df_val), f'{round(rng.uniform(0.05,0.55),3)}'],
-            ['Linear-by-Linear',   f'{lra_val}', '1',         f'{lra_sig}'],
-            ['N of Valid Cases',   str(n), '', ''],
-        ])
+            # INFERENCE
+            inf_p = doc.add_paragraph()
+            inf_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            pf_i = inf_p.paragraph_format
+            pf_i.space_before = Pt(12); pf_i.space_after = Pt(12)
+            r_i = inf_p.add_run(
+                f'INFERENCE : There is no significant association between {var1} and {var2} '
+                f'at 5% level of significance since the p value {sig_val} > 0.05'
+            )
+            r_i.bold = True; r_i.font.size = Pt(12); r_i.font.name = 'Times New Roman'
 
-        # LEGEND
-        leg2_p = doc.add_paragraph()
-        leg2_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        pf_l2 = leg2_p.paragraph_format
-        pf_l2.space_before = Pt(12); pf_l2.space_after = Pt(12)
-        r_l2 = leg2_p.add_run('LEGEND : The above table shows chi square test')
-        r_l2.bold = True; r_l2.font.size = Pt(12); r_l2.font.name = 'Times New Roman'
+        # ── RESULT ────────────────────────────────────────────────────────────
+        result_hd = doc.add_paragraph()
+        result_hd.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        pf_r = result_hd.paragraph_format
+        pf_r.space_before = Pt(12); pf_r.space_after = Pt(12)
+        r_rh = result_hd.add_run('RESULT')
+        r_rh.bold = True; r_rh.font.size = Pt(12); r_rh.font.name = 'Times New Roman'
 
-        # INFERENCE
-        inf_p = doc.add_paragraph()
-        inf_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        pf_i = inf_p.paragraph_format
-        pf_i.space_before = Pt(12); pf_i.space_after = Pt(12)
-        r_i = inf_p.add_run(
-            f'INFERENCE : There is no significant association between {var1} and {var2} '
-            f'at 5% level of significance since the p value {sig_val} > 0.05'
-        )
-        r_i.bold = True; r_i.font.size = Pt(12); r_i.font.name = 'Times New Roman'
+        body_para(self.sections['results'])
 
-    # ── RESULT ────────────────────────────────────────────────────────────
-    result_hd = doc.add_paragraph()
-    result_hd.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    pf_r = result_hd.paragraph_format
-    pf_r.space_before = Pt(12); pf_r.space_after = Pt(12)
-    r_rh = result_hd.add_run('RESULT')
-    r_rh.bold = True; r_rh.font.size = Pt(12); r_rh.font.name = 'Times New Roman'
+        # ── DISCUSSION ────────────────────────────────────────────────────────
+        disc_hd = doc.add_paragraph()
+        disc_hd.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        pf_d = disc_hd.paragraph_format
+        pf_d.space_before = Pt(12); pf_d.space_after = Pt(12)
+        r_dh = disc_hd.add_run('DISCUSSION')
+        r_dh.bold = True; r_dh.font.size = Pt(12); r_dh.font.name = 'Times New Roman'
 
-    body_para(self.sections['results'])
+        for para in self.sections['discussion'].split('\n\n'):
+            para = para.strip()
+            if para:
+                body_para(para)
 
-    # ── DISCUSSION ────────────────────────────────────────────────────────
-    disc_hd = doc.add_paragraph()
-    disc_hd.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-    pf_d = disc_hd.paragraph_format
-    pf_d.space_before = Pt(12); pf_d.space_after = Pt(12)
-    r_dh = disc_hd.add_run('DISCUSSION')
-    r_dh.bold = True; r_dh.font.size = Pt(12); r_dh.font.name = 'Times New Roman'
+        # ── SUGGESTIONS ───────────────────────────────────────────────────────
+        sug_hd = doc.add_paragraph()
+        sug_hd.style = doc.styles['Heading 2']
+        sug_hd.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        sug_hd.paragraph_format.space_after = Pt(4)
+        r_sg = sug_hd.runs[0] if sug_hd.runs else sug_hd.add_run('')
+        sug_hd.clear()
+        r_sg2 = sug_hd.add_run('Suggestions')
+        r_sg2.bold = True; r_sg2.font.size = Pt(12); r_sg2.font.name = 'Times New Roman'
+        r_sg2.font.color.rgb = RGBColor(0,0,0)
 
-    for para in self.sections['discussion'].split('\n\n'):
-        para = para.strip()
-        if para:
-            body_para(para)
+        body_para(self.sections['suggestions'])
 
-    # ── SUGGESTIONS ───────────────────────────────────────────────────────
-    sug_hd = doc.add_paragraph()
-    sug_hd.style = doc.styles['Heading 2']
-    sug_hd.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-    sug_hd.paragraph_format.space_after = Pt(4)
-    r_sg = sug_hd.runs[0] if sug_hd.runs else sug_hd.add_run('')
-    sug_hd.clear()
-    r_sg2 = sug_hd.add_run('Suggestions')
-    r_sg2.bold = True; r_sg2.font.size = Pt(12); r_sg2.font.name = 'Times New Roman'
-    r_sg2.font.color.rgb = RGBColor(0,0,0)
+        # ── LIMITATIONS ───────────────────────────────────────────────────────
+        lim_hd = doc.add_paragraph()
+        lim_hd.style = doc.styles['Heading 2']
+        lim_hd.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        lim_hd.paragraph_format.space_after = Pt(4)
+        lim_hd.clear()
+        r_lm = lim_hd.add_run('Limitations')
+        r_lm.bold = True; r_lm.font.size = Pt(12); r_lm.font.name = 'Times New Roman'
+        r_lm.font.color.rgb = RGBColor(0,0,0)
 
-    body_para(self.sections['suggestions'])
+        body_para(self.sections['limitations'])
 
-    # ── LIMITATIONS ───────────────────────────────────────────────────────
-    lim_hd = doc.add_paragraph()
-    lim_hd.style = doc.styles['Heading 2']
-    lim_hd.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-    lim_hd.paragraph_format.space_after = Pt(4)
-    lim_hd.clear()
-    r_lm = lim_hd.add_run('Limitations')
-    r_lm.bold = True; r_lm.font.size = Pt(12); r_lm.font.name = 'Times New Roman'
-    r_lm.font.color.rgb = RGBColor(0,0,0)
+        # ── CONCLUSION ────────────────────────────────────────────────────────
+        con_hd = doc.add_paragraph()
+        con_hd.style = doc.styles['Heading 2']
+        con_hd.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        con_hd.paragraph_format.space_after = Pt(4)
+        con_hd.clear()
+        r_cn = con_hd.add_run('Conclusion')
+        r_cn.bold = True; r_cn.font.size = Pt(12); r_cn.font.name = 'Times New Roman'
+        r_cn.font.color.rgb = RGBColor(0,0,0)
 
-    body_para(self.sections['limitations'])
+        for para in self.sections['conclusion'].split('\n\n'):
+            para = para.strip()
+            if para:
+                body_para(para)
 
-    # ── CONCLUSION ────────────────────────────────────────────────────────
-    con_hd = doc.add_paragraph()
-    con_hd.style = doc.styles['Heading 2']
-    con_hd.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-    con_hd.paragraph_format.space_after = Pt(4)
-    con_hd.clear()
-    r_cn = con_hd.add_run('Conclusion')
-    r_cn.bold = True; r_cn.font.size = Pt(12); r_cn.font.name = 'Times New Roman'
-    r_cn.font.color.rgb = RGBColor(0,0,0)
+        # ── REFERENCES ────────────────────────────────────────────────────────
+        ref_hd = doc.add_paragraph()
+        ref_hd.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        pf_rf = ref_hd.paragraph_format
+        pf_rf.space_before = Pt(12); pf_rf.space_after = Pt(12)
+        r_rfh = ref_hd.add_run('References')
+        r_rfh.bold = True; r_rfh.font.size = Pt(12); r_rfh.font.name = 'Times New Roman'
 
-    for para in self.sections['conclusion'].split('\n\n'):
-        para = para.strip()
-        if para:
-            body_para(para)
+        for i, ref in enumerate(self.sections['references']):
+            space_b = 12 if i == 0 else 0
+            space_a = 12 if i == len(self.sections["references"])-1 else 0
+            ref_para(ref, space_before=space_b, space_after=space_a)
 
-    # ── REFERENCES ────────────────────────────────────────────────────────
-    ref_hd = doc.add_paragraph()
-    ref_hd.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-    pf_rf = ref_hd.paragraph_format
-    pf_rf.space_before = Pt(12); pf_rf.space_after = Pt(12)
-    r_rfh = ref_hd.add_run('References')
-    r_rfh.bold = True; r_rfh.font.size = Pt(12); r_rfh.font.name = 'Times New Roman'
-
-    for i, ref in enumerate(self.sections['references']):
-        space_b = 12 if i == 0 else 0
-        space_a = 12 if i == len(self.sections["references"])-1 else 0
-        ref_para(ref, space_before=space_b, space_after=space_a)
-
-    return doc
-```
+        return doc
 
 # ═══════════════════════════════════════════════════════════════════════════════
-
-# PAPER GENERATOR ORCHESTRATOR
-
+#  PAPER GENERATOR ORCHESTRATOR
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class PaperGenerator:
-def **init**(self, jid: str, jobs_ref: dict):
-self.jid  = jid
-self.jobs = jobs_ref
+    def __init__(self, jid: str, jobs_ref: dict):
+        self.jid  = jid
+        self.jobs = jobs_ref
 
-```
-def prog(self, pct: int, msg: str):
-    self.jobs[self.jid].update({'progress': pct, 'message': msg, 'status': 'running'})
-    print(f'[{self.jid[:8]}] {pct}% – {msg}')
+    def prog(self, pct: int, msg: str):
+        self.jobs[self.jid].update({'progress': pct, 'message': msg, 'status': 'running'})
+        print(f'[{self.jid[:8]}] {pct}% – {msg}')
 
-def generate(self, topic: str, nfigs: int, author: str, inst: str, email: str, questionnaire: dict = None) -> str:
-    os.makedirs('generated', exist_ok=True)
-    self.prog(5, 'Initializing...')
+    def generate(self, topic: str, nfigs: int, author: str, inst: str, email: str, questionnaire: dict = None) -> str:
+        os.makedirs('generated', exist_ok=True)
+        self.prog(5, 'Initializing...')
 
-    # ── Step 1: Web scraping — 3 sources in parallel ─────────────────────
-    self.prog(8, 'Scraping Semantic Scholar, CrossRef & Wikipedia...')
-    scraper = WebScraper(topic)
-    with ThreadPoolExecutor(max_workers=3) as ex:
-        f_ss, f_cr, f_wiki = (
-            ex.submit(scraper.fetch_semantic_scholar, 10),
-            ex.submit(scraper.fetch_crossref, 6),
-            ex.submit(scraper.fetch_wikipedia),
-        )
-        ss, cr, wiki = f_ss.result(), f_cr.result(), f_wiki.result()
+        # ── Step 1: Web scraping — 3 sources in parallel ─────────────────────
+        self.prog(8, 'Scraping Semantic Scholar, CrossRef & Wikipedia...')
+        scraper = WebScraper(topic)
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            f_ss, f_cr, f_wiki = (
+                ex.submit(scraper.fetch_semantic_scholar, 10),
+                ex.submit(scraper.fetch_crossref, 6),
+                ex.submit(scraper.fetch_wikipedia),
+            )
+            ss, cr, wiki = f_ss.result(), f_cr.result(), f_wiki.result()
 
-    seen, all_papers = set(), []
-    for p in ss + cr:
-        key = p['title'][:40].lower()
-        if key not in seen:
-            seen.add(key); all_papers.append(p)
-    all_papers.sort(key=lambda x: x.get('citations', 0), reverse=True)
-    scraped = {'papers': all_papers, 'wiki': wiki}
-    print(f"[Scraper] {len(ss)} SS + {len(cr)} CrossRef, wiki={'yes' if wiki.get('summary') else 'no'}")
+        seen, all_papers = set(), []
+        for p in ss + cr:
+            key = p['title'][:40].lower()
+            if key not in seen:
+                seen.add(key); all_papers.append(p)
+        all_papers.sort(key=lambda x: x.get('citations', 0), reverse=True)
+        scraped = {'papers': all_papers, 'wiki': wiki}
+        print(f"[Scraper] {len(ss)} SS + {len(cr)} CrossRef, wiki={'yes' if wiki.get('summary') else 'no'}")
 
-    # ── Step 2: Single streaming Gemini call writes the whole paper ────────
-    self.prog(30, 'Gemini connected — writing keywords...')
-    writer        = GeminiWriter(topic, scraped, questionnaire=questionnaire or {})
-    writer._nfigs = nfigs
-    sections      = writer.generate_all(progress_cb=self.prog)
-    self.prog(76, 'Gemini finished. Parsing sections...')
+        # ── Step 2: Single streaming Gemini call writes the whole paper ────────
+        self.prog(30, 'Gemini connected — writing keywords...')
+        writer        = GeminiWriter(topic, scraped, questionnaire=questionnaire or {})
+        writer._nfigs = nfigs
+        sections      = writer.generate_all(progress_cb=self.prog)
+        self.prog(76, 'Gemini finished. Parsing sections...')
 
-    sections['references'] = writer.references()
+        sections['references'] = writer.references()
 
-    # ── Step 3: Parse chart specs from Gemini's <charts> block ───────────
-    self.prog(78, 'Parsing chart specs...')
-    specs = writer.parse_chart_specs(nfigs)
-    if not specs:
-        specs = writer._fallback_specs(nfigs)
+        # ── Step 3: Parse chart specs from Gemini's <charts> block ───────────
+        self.prog(78, 'Parsing chart specs...')
+        specs = writer.parse_chart_specs(nfigs)
+        if not specs:
+            specs = writer._fallback_specs(nfigs)
 
-    # ── Step 4: Render charts ────────────────────────────────────────────
-    self.prog(82, f'Rendering {len(specs)} SPSS-style charts...')
-    charts = [make_chart(sp) for sp in specs]
+        # ── Step 4: Render charts ────────────────────────────────────────────
+        self.prog(82, f'Rendering {len(specs)} SPSS-style charts...')
+        charts = [make_chart(sp) for sp in specs]
 
-    # ── Step 5: Build DOCX ───────────────────────────────────────────────
-    self.prog(90, 'Assembling Word document...')
-    builder = DocBuilder(topic, author, inst, email, writer, sections, specs, charts, all_papers)
-    doc     = builder.build()
+        # ── Step 5: Build DOCX ───────────────────────────────────────────────
+        self.prog(90, 'Assembling Word document...')
+        builder = DocBuilder(topic, author, inst, email, writer, sections, specs, charts, all_papers)
+        doc     = builder.build()
 
-    self.prog(97, 'Saving...')
-    safe = re.sub(r'[^\w\-]', '_', topic[:40])
-    out  = os.path.abspath(f'generated/rdxper_{safe}_{self.jid[:8]}.docx')
-    doc.save(out)
-    self.prog(99, 'Done!')
-    return out
-```
+        self.prog(97, 'Saving...')
+        safe = re.sub(r'[^\w\-]', '_', topic[:40])
+        out  = os.path.abspath(f'generated/rdxper_{safe}_{self.jid[:8]}.docx')
+        doc.save(out)
+        self.prog(99, 'Done!')
+        return out
 
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# EMBEDDED FRONTEND
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  EMBEDDED FRONTEND
+# ═══════════════════════════════════════════════════════════════════════════════
 
-HTML = “””<!DOCTYPE html>
-
+HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1731,14 +1716,11 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 </header>
 
 <!-- LOGIN -->
-
 <div class="screen active" id="s-home">
   <div class="hero">
-
-```
-<h1>Generate <em>Genuine</em><br>Research Papers</h1>
-```
-
+    
+    <h1>Generate <em>Genuine</em><br>Research Papers</h1>
+    
   </div>
   <div class="card">
     <div class="ct">Sign in to continue</div>
@@ -1750,7 +1732,6 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 </div>
 
 <!-- DASHBOARD -->
-
 <div class="screen" id="s-dashboard">
   <div class="dash-header">
     <div class="dash-greeting">Welcome back</div>
@@ -1771,7 +1752,6 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   </div>
 
   <!-- Floating Action Button -->
-
   <button class="fab" onclick="startNewPaper()" title="New Research Paper">
     <svg viewBox="0 0 24 24" fill="none"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
   </button>
@@ -1779,7 +1759,6 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 </div>
 
 <!-- GENERATE — 5-Step Questionnaire -->
-
 <div class="screen" id="s-gen">
 <div style="padding-top:28px;max-width:700px;margin:0 auto">
 
@@ -1788,7 +1767,6 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 </div>
 
 <!-- Step indicator -->
-
 <div class="q-steps" id="q-steps">
   <div class="q-step active" id="qs-0" onclick="goStep(0)"><span class="q-num">1</span><span class="q-lbl">Problem</span></div>
   <div class="q-line"></div>
@@ -1804,7 +1782,6 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 </div>
 
 <!-- ── Step 0: Problem Identification ───────────────────── -->
-
 <div class="q-panel active" id="qp-0">
   <div class="q-badge">Step 1 of 6</div>
   <div class="ct" style="margin-bottom:6px">Identification of the Problem</div>
@@ -1827,7 +1804,6 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 </div>
 
 <!-- ── Step 1: Literature Review ────────────────────────── -->
-
 <div class="q-panel" id="qp-1">
   <div class="q-badge">Step 2 of 6</div>
   <div class="ct" style="margin-bottom:6px">Literature Review</div>
@@ -1845,7 +1821,6 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 </div>
 
 <!-- ── Step 2: Research Gap ──────────────────────────────── -->
-
 <div class="q-panel" id="qp-2">
   <div class="q-badge">Step 3 of 6</div>
   <div class="ct" style="margin-bottom:6px">Research Gap</div>
@@ -1863,7 +1838,6 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 </div>
 
 <!-- ── Step 3: Objectives ────────────────────────────────── -->
-
 <div class="q-panel" id="qp-3">
   <div class="q-badge">Step 4 of 6</div>
   <div class="ct" style="margin-bottom:6px">Objectives of the Research</div>
@@ -1881,7 +1855,6 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 </div>
 
 <!-- ── Step 4: Research Statement ───────────────────────── -->
-
 <div class="q-panel" id="qp-4">
   <div class="q-badge">Step 5 of 6</div>
   <div class="ct" style="margin-bottom:6px">Research Statement</div>
@@ -1899,7 +1872,6 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 </div>
 
 <!-- ── Step 5: Settings + Generate ──────────────────────── -->
-
 <div class="q-panel" id="qp-5">
   <div class="q-badge">Step 6 of 6</div>
   <div class="ct" style="margin-bottom:6px">Paper Settings</div>
@@ -1928,7 +1900,6 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 </div>
 
 <!-- PROGRESS -->
-
 <div class="screen" id="s-prog">
   <div style="padding-top:40px">
     <div class="card" style="max-width:560px">
@@ -1943,7 +1914,6 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 </div>
 
 <!-- DONE -->
-
 <div class="screen" id="s-done">
   <div style="padding-top:48px">
     <div class="card" style="text-align:center">
@@ -1969,7 +1939,6 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 </div>
 
 <!-- PROFILE -->
-
 <div class="screen" id="s-profile">
   <div style="padding-top:28px">
     <div class="profile-header">
@@ -1996,7 +1965,6 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 </div>
 
 <!-- ADMIN -->
-
 <div class="screen" id="s-admin">
   <div style="padding-top:28px">
     <div class="page-title">⚙️ Admin Dashboard</div>
@@ -2417,343 +2385,339 @@ function admTab(name,el){
   });
 }
 </script>
-
 </body>
 </html>"""
 
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  FLASK ROUTES
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# FLASK ROUTES
-
-# ═══════════════════════════════════════════════════════════════════════════════
-
-@app.route(’/’)
+@app.route('/')
 def index():
-client_id = os.environ.get(‘GOOGLE_CLIENT_ID’, ‘’)
-html = HTML.replace(’**GOOGLE_CLIENT_ID**’, client_id).replace(’**ADMIN_EMAIL**’, ADMIN_EMAIL)
-return Response(html, mimetype=‘text/html’)
+    client_id = os.environ.get('GOOGLE_CLIENT_ID', '')
+    html = HTML.replace('__GOOGLE_CLIENT_ID__', client_id).replace('__ADMIN_EMAIL__', ADMIN_EMAIL)
+    return Response(html, mimetype='text/html')
+
 
 def _verify_google_token(id_token_str):
-try:
-url = “https://oauth2.googleapis.com/tokeninfo?id_token=” + urllib.parse.quote(id_token_str)
-req = urllib.request.Request(url, headers={“User-Agent”: “rdxper/4.0”})
-with urllib.request.urlopen(req, timeout=10) as resp:
-info = json.loads(resp.read())
-client_id = os.environ.get(“GOOGLE_CLIENT_ID”, “”)
-if client_id and info.get(“aud”) != client_id:
-return None
-if info.get(“exp”) and int(info[“exp”]) < time.time():
-return None
-return info
-except Exception as e:
-print(f”[Google] Token error: {e}”)
-return None
+    try:
+        url = "https://oauth2.googleapis.com/tokeninfo?id_token=" + urllib.parse.quote(id_token_str)
+        req = urllib.request.Request(url, headers={"User-Agent": "rdxper/4.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            info = json.loads(resp.read())
+        client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
+        if client_id and info.get("aud") != client_id:
+            return None
+        if info.get("exp") and int(info["exp"]) < time.time():
+            return None
+        return info
+    except Exception as e:
+        print(f"[Google] Token error: {e}")
+        return None
 
-@app.route(”/api/auth/dev”, methods=[“POST”])
+@app.route("/api/auth/dev", methods=["POST"])
 def dev_auth():
-“”“Local dev login — only works when GOOGLE_CLIENT_ID is not set.”””
-if os.environ.get(“GOOGLE_CLIENT_ID”):
-return jsonify({“success”: False, “message”: “Dev auth disabled in production”}), 403
-data    = request.json or {}
-email   = data.get(“email”, “”).strip().lower()
-name    = data.get(“name”, email.split(”@”)[0]).strip()
-if not email or “@” not in email:
-return jsonify({“success”: False, “message”: “Valid email required”}), 400
-user_id = “dev_” + email.replace(”@”,”*”).replace(”.”,”*”)
-with get_db() as db:
-user = db.execute(“SELECT * FROM users WHERE email=?”, (email,)).fetchone()
-if user:
-db.execute(“UPDATE users SET name=?,last_login=datetime(‘now’) WHERE email=?”, (name, email))
-user_id = user[“id”]
-else:
-db.execute(“INSERT INTO users (id,email,name,picture,last_login) VALUES (?,?,?,?,datetime(‘now’))”,
-(user_id, email, name, “”))
-tok = secrets.token_urlsafe(32)
-session_set(tok, email)
-sessions[tok][“user_id”] = user_id
-sessions[tok][“name”] = name
-sessions[tok][“picture”] = “”
-return jsonify({“success”: True, “token”: tok, “email”: email, “name”: name, “picture”: “”})
+    """Local dev login — only works when GOOGLE_CLIENT_ID is not set."""
+    if os.environ.get("GOOGLE_CLIENT_ID"):
+        return jsonify({"success": False, "message": "Dev auth disabled in production"}), 403
+    data    = request.json or {}
+    email   = data.get("email", "").strip().lower()
+    name    = data.get("name", email.split("@")[0]).strip()
+    if not email or "@" not in email:
+        return jsonify({"success": False, "message": "Valid email required"}), 400
+    user_id = "dev_" + email.replace("@","_").replace(".","_")
+    with get_db() as db:
+        user = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+        if user:
+            db.execute("UPDATE users SET name=?,last_login=datetime('now') WHERE email=?", (name, email))
+            user_id = user["id"]
+        else:
+            db.execute("INSERT INTO users (id,email,name,picture,last_login) VALUES (?,?,?,?,datetime('now'))",
+                       (user_id, email, name, ""))
+    tok = secrets.token_urlsafe(32)
+    session_set(tok, email)
+    sessions[tok]["user_id"] = user_id
+    sessions[tok]["name"] = name
+    sessions[tok]["picture"] = ""
+    return jsonify({"success": True, "token": tok, "email": email, "name": name, "picture": ""})
 
-@app.route(”/api/auth/google”, methods=[“POST”])
+@app.route("/api/auth/google", methods=["POST"])
 def google_auth():
-id_token_str = request.json.get(“id_token”, “”)
-if not id_token_str:
-return jsonify({“success”: False, “message”: “No token”}), 400
-info = _verify_google_token(id_token_str)
-if not info:
-return jsonify({“success”: False, “message”: “Invalid Google token”}), 401
-g_email   = info.get(“email”, “”).lower()
-g_name    = info.get(“name”, g_email.split(”@”)[0])
-g_picture = info.get(“picture”, “”)
-g_sub     = info.get(“sub”, str(uuid.uuid4()))
-with get_db() as db:
-user = db.execute(“SELECT * FROM users WHERE email=?”, (g_email,)).fetchone()
-if user:
-db.execute(“UPDATE users SET name=?,picture=?,last_login=datetime(‘now’) WHERE email=?”,
-(g_name, g_picture, g_email))
-user_id = user[“id”]
-else:
-user_id = g_sub
-db.execute(“INSERT INTO users (id,email,name,picture,last_login) VALUES (?,?,?,?,datetime(‘now’))”,
-(user_id, g_email, g_name, g_picture))
-tok = secrets.token_urlsafe(32)
-session_set(tok, g_email)
-sessions[tok][“user_id”] = user_id
-sessions[tok][“name”] = g_name
-sessions[tok][“picture”] = g_picture
-return jsonify({“success”: True, “token”: tok, “email”: g_email, “name”: g_name, “picture”: g_picture})
+    id_token_str = request.json.get("id_token", "")
+    if not id_token_str:
+        return jsonify({"success": False, "message": "No token"}), 400
+    info = _verify_google_token(id_token_str)
+    if not info:
+        return jsonify({"success": False, "message": "Invalid Google token"}), 401
+    g_email   = info.get("email", "").lower()
+    g_name    = info.get("name", g_email.split("@")[0])
+    g_picture = info.get("picture", "")
+    g_sub     = info.get("sub", str(uuid.uuid4()))
+    with get_db() as db:
+        user = db.execute("SELECT * FROM users WHERE email=?", (g_email,)).fetchone()
+        if user:
+            db.execute("UPDATE users SET name=?,picture=?,last_login=datetime('now') WHERE email=?",
+                       (g_name, g_picture, g_email))
+            user_id = user["id"]
+        else:
+            user_id = g_sub
+            db.execute("INSERT INTO users (id,email,name,picture,last_login) VALUES (?,?,?,?,datetime('now'))",
+                       (user_id, g_email, g_name, g_picture))
+    tok = secrets.token_urlsafe(32)
+    session_set(tok, g_email)
+    sessions[tok]["user_id"] = user_id
+    sessions[tok]["name"] = g_name
+    sessions[tok]["picture"] = g_picture
+    return jsonify({"success": True, "token": tok, "email": g_email, "name": g_name, "picture": g_picture})
 
-@app.route(”/api/profile”)
+@app.route("/api/profile")
 def get_profile():
-tok = request.headers.get(“Authorization”, “”).replace(“Bearer “, “”)
-sess = session_get(tok)
-if not sess:
-return jsonify({“success”: False, “message”: “Unauthorized”}), 401
-with get_db() as db:
-user    = db.execute(“SELECT * FROM users WHERE id=?”, (sess[“user_id”],)).fetchone()
-papers  = db.execute(“SELECT * FROM papers WHERE user_id=? ORDER BY created_at DESC”, (sess[“user_id”],)).fetchall()
-result  = db.execute(“SELECT COALESCE(SUM(amount),0) as t FROM payments WHERE user_id=? AND status=‘paid’”, (sess[“user_id”],)).fetchone()
-total_spent = result[“t”]
-return jsonify({
-“success”: True,
-“user”: dict(user),
-“papers”: [dict(p) for p in papers],
-“total_spent”: total_spent,
-“papers_count”: len(papers)
-})
+    tok = request.headers.get("Authorization", "").replace("Bearer ", "")
+    sess = session_get(tok)
+    if not sess:
+        return jsonify({"success": False, "message": "Unauthorized"}), 401
+    with get_db() as db:
+        user    = db.execute("SELECT * FROM users WHERE id=?", (sess["user_id"],)).fetchone()
+        papers  = db.execute("SELECT * FROM papers WHERE user_id=? ORDER BY created_at DESC", (sess["user_id"],)).fetchall()
+        result  = db.execute("SELECT COALESCE(SUM(amount),0) as t FROM payments WHERE user_id=? AND status='paid'", (sess["user_id"],)).fetchone()
+        total_spent = result["t"]
+    return jsonify({
+        "success": True,
+        "user": dict(user),
+        "papers": [dict(p) for p in papers],
+        "total_spent": total_spent,
+        "papers_count": len(papers)
+    })
 
-@app.route(”/api/admin/stats”)
+@app.route("/api/admin/stats")
 def admin_stats():
-tok = request.headers.get(“Authorization”, “”).replace(“Bearer “, “”)
-if not session_get(tok):
-return jsonify({“success”: False, “message”: “Unauthorized”}), 401
-if sessions.get(tok, {}).get(“email”) != ADMIN_EMAIL:
-return jsonify({“success”: False, “message”: “Forbidden”}), 403
-with get_db() as db:
-users    = db.execute(“SELECT * FROM users ORDER BY created_at DESC”).fetchall()
-papers   = db.execute(“SELECT p.*,u.email,u.name FROM papers p JOIN users u ON p.user_id=u.id ORDER BY p.created_at DESC”).fetchall()
-payments = db.execute(“SELECT pay.*,u.email FROM payments pay JOIN users u ON pay.user_id=u.id ORDER BY pay.created_at DESC”).fetchall()
-revenue  = db.execute(“SELECT COALESCE(SUM(amount),0) as t FROM payments WHERE status=‘paid’”).fetchone()[“t”]
-return jsonify({
-“success”: True,
-“stats”: {“total_users”: len(users), “total_papers”: len(papers),
-“total_revenue”: revenue, “paid_papers”: sum(1 for p in papers if p[“paid”])},
-“users”:    [dict(u) for u in users],
-“papers”:   [dict(p) for p in papers],
-“payments”: [dict(p) for p in payments]
-})
+    tok = request.headers.get("Authorization", "").replace("Bearer ", "")
+    if not session_get(tok):
+        return jsonify({"success": False, "message": "Unauthorized"}), 401
+    if sessions.get(tok, {}).get("email") != ADMIN_EMAIL:
+        return jsonify({"success": False, "message": "Forbidden"}), 403
+    with get_db() as db:
+        users    = db.execute("SELECT * FROM users ORDER BY created_at DESC").fetchall()
+        papers   = db.execute("SELECT p.*,u.email,u.name FROM papers p JOIN users u ON p.user_id=u.id ORDER BY p.created_at DESC").fetchall()
+        payments = db.execute("SELECT pay.*,u.email FROM payments pay JOIN users u ON pay.user_id=u.id ORDER BY pay.created_at DESC").fetchall()
+        revenue  = db.execute("SELECT COALESCE(SUM(amount),0) as t FROM payments WHERE status='paid'").fetchone()["t"]
+    return jsonify({
+        "success": True,
+        "stats": {"total_users": len(users), "total_papers": len(papers),
+                  "total_revenue": revenue, "paid_papers": sum(1 for p in papers if p["paid"])},
+        "users":    [dict(u) for u in users],
+        "papers":   [dict(p) for p in papers],
+        "payments": [dict(p) for p in payments]
+    })
 
-@app.route(’/api/send-otp’, methods=[‘POST’])
+@app.route('/api/send-otp', methods=['POST'])
 def send_otp():
-data  = request.json
-email = data.get(‘email’, ‘’).strip().lower()
-if not email or ‘@’ not in email:
-return jsonify({‘success’: False, ‘message’: ‘Invalid email’}), 400
-otp = str(secrets.randbelow(900000) + 100000)
-otp_store[email] = {‘otp’: otp, ‘expires’: time.time() + 600}
-print(f”\n{’=’*40}\n OTP for {email}: {otp}\n{’=’*40}\n”)
-_try_smtp(email, otp)
-return jsonify({‘success’: True, ‘message’: f’OTP sent to {email}’, ‘demo_otp’: otp})
+    data  = request.json
+    email = data.get('email', '').strip().lower()
+    if not email or '@' not in email:
+        return jsonify({'success': False, 'message': 'Invalid email'}), 400
+    otp = str(secrets.randbelow(900000) + 100000)
+    otp_store[email] = {'otp': otp, 'expires': time.time() + 600}
+    print(f"\n{'='*40}\n OTP for {email}: {otp}\n{'='*40}\n")
+    _try_smtp(email, otp)
+    return jsonify({'success': True, 'message': f'OTP sent to {email}', 'demo_otp': otp})
 
 def _try_smtp(to_email: str, otp: str):
-u = os.environ.get(‘SMTP_USER’)
-p = os.environ.get(‘SMTP_PASS’)
-if not (u and p):
-return
-try:
-msg = MIMEMultipart(‘alternative’)
-msg[‘Subject’] = ‘Your rdxper Login Code’
-msg[‘From’] = u; msg[‘To’] = to_email
-msg.attach(MIMEText(
-f’<h2 style="color:#00ff88">Your rdxper OTP</h2>’
-f’<p style="font-size:32px;letter-spacing:8px;font-family:monospace"><b>{otp}</b></p>’
-f’<p>Valid for 10 minutes.</p>’, ‘html’))
-with smtplib.SMTP_SSL(‘smtp.gmail.com’, 465) as s:
-s.login(u, p)
-s.sendmail(u, [to_email, ADMIN_EMAIL], msg.as_string())
-except Exception as e:
-print(f’[SMTP] {e}’)
-
-@app.route(’/api/verify-otp’, methods=[‘POST’])
-def verify_otp():
-data  = request.json
-email = data.get(‘email’, ‘’).strip().lower()
-otp   = data.get(‘otp’, ‘’).strip()
-rec   = otp_store.get(email)
-if not rec:
-return jsonify({‘success’: False, ‘message’: ‘No OTP found. Request a new one.’}), 400
-if time.time() > rec[‘expires’]:
-del otp_store[email]
-return jsonify({‘success’: False, ‘message’: ‘OTP expired.’}), 400
-if rec[‘otp’] != otp:
-return jsonify({‘success’: False, ‘message’: ‘Wrong OTP.’}), 400
-tok = secrets.token_urlsafe(32)
-session_set(tok, email)
-del otp_store[email]
-return jsonify({‘success’: True, ‘token’: tok, ‘email’: email})
-
-@app.route(’/api/generate’, methods=[‘POST’])
-def generate_paper():
-tok = request.headers.get(‘Authorization’, ‘’).replace(’Bearer ’, ‘’)
-sess = session_get(tok)
-if not sess:
-return jsonify({‘success’: False, ‘message’: ‘Unauthorized’}), 401
-
-```
-# Check API key before starting job
-if not _detect_provider():
-    return jsonify({'success': False,
-                    'message': 'No AI API key found. Set GROQ_API_KEY (free at https://console.groq.com/keys) or GEMINI_API_KEY (free at https://aistudio.google.com/app/apikey).'}), 500
-
-data   = request.json
-topic  = data.get('topic', '').strip()
-nfigs  = max(3, min(15, int(data.get('num_figures', 6))))
-author = data.get('author_name', 'Anonymous').strip()
-inst   = data.get('institution', '').strip()
-email  = sess['email']
-
-# Questionnaire fields (AI-enabled, not AI-driven)
-q_problem    = data.get('q_problem', '').strip()
-q_lit        = data.get('q_lit', '').strip()
-q_gap        = data.get('q_gap', '').strip()
-q_objectives = data.get('q_objectives', '').strip()
-q_statement  = data.get('q_statement', '').strip()
-
-if not topic:
-    return jsonify({'success': False, 'message': 'Topic required'}), 400
-
-jid     = str(uuid.uuid4())
-user_id = sess.get('user_id', email)
-jobs[jid] = {'status': 'queued', 'progress': 0,
-             'message': 'Queued...', 'file_path': None, 'topic': topic, 'user_id': user_id}
-with get_db() as db:
-    # Ensure user exists (guards against FK constraint failure)
-    db.execute(
-        'INSERT OR IGNORE INTO users (id, email, name, picture) VALUES (?, ?, ?, ?)',
-        (user_id, email, sess.get('name', ''), sess.get('picture', ''))
-    )
-    db.execute('INSERT INTO papers (id,user_id,topic) VALUES (?,?,?)', (jid, user_id, topic))
-
-questionnaire = {
-    'problem':    q_problem,
-    'lit':        q_lit,
-    'gap':        q_gap,
-    'objectives': q_objectives,
-    'statement':  q_statement,
-}
-
-def _run():
+    u = os.environ.get('SMTP_USER')
+    p = os.environ.get('SMTP_PASS')
+    if not (u and p):
+        return
     try:
-        g    = PaperGenerator(jid, jobs)
-        path = g.generate(topic, nfigs, author, inst, email, questionnaire)
-        jobs[jid].update({'status': 'done', 'progress': 100,
-                          'message': 'Research paper ready!', 'file_path': path})
-        with get_db() as db:
-            db.execute('UPDATE papers SET file_path=? WHERE id=?', (path, jid))
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = 'Your rdxper Login Code'
+        msg['From'] = u; msg['To'] = to_email
+        msg.attach(MIMEText(
+            f'<h2 style="color:#00ff88">Your rdxper OTP</h2>'
+            f'<p style="font-size:32px;letter-spacing:8px;font-family:monospace"><b>{otp}</b></p>'
+            f'<p>Valid for 10 minutes.</p>', 'html'))
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
+            s.login(u, p)
+            s.sendmail(u, [to_email, ADMIN_EMAIL], msg.as_string())
     except Exception as e:
-        import traceback; traceback.print_exc()
-        jobs[jid].update({'status': 'error', 'message': str(e)})
+        print(f'[SMTP] {e}')
 
-threading.Thread(target=_run, daemon=True).start()
-return jsonify({'success': True, 'job_id': jid})
-```
+@app.route('/api/verify-otp', methods=['POST'])
+def verify_otp():
+    data  = request.json
+    email = data.get('email', '').strip().lower()
+    otp   = data.get('otp', '').strip()
+    rec   = otp_store.get(email)
+    if not rec:
+        return jsonify({'success': False, 'message': 'No OTP found. Request a new one.'}), 400
+    if time.time() > rec['expires']:
+        del otp_store[email]
+        return jsonify({'success': False, 'message': 'OTP expired.'}), 400
+    if rec['otp'] != otp:
+        return jsonify({'success': False, 'message': 'Wrong OTP.'}), 400
+    tok = secrets.token_urlsafe(32)
+    session_set(tok, email)
+    del otp_store[email]
+    return jsonify({'success': True, 'token': tok, 'email': email})
 
-@app.route(’/api/status/<jid>’)
-def job_status(jid):
-tok = request.headers.get(‘Authorization’, ‘’).replace(’Bearer ’, ‘’)
-if not session_get(tok):
-return jsonify({‘success’: False, ‘message’: ‘Unauthorized’}), 401
-job = jobs.get(jid)
-if not job:
-# Fall back to DB — server may have restarted mid-generation
-with get_db() as db:
-paper = db.execute(‘SELECT file_path, topic FROM papers WHERE id=?’, (jid,)).fetchone()
-if not paper:
-return jsonify({‘success’: False, ‘message’: ‘Job not found’}), 404
-if paper[‘file_path’]:
-return jsonify({‘success’: True, ‘status’: ‘done’, ‘progress’: 100, ‘message’: ‘Research paper ready!’})
-return jsonify({‘success’: True, ‘status’: ‘error’, ‘progress’: 0, ‘message’: ‘Job lost after server restart — please generate again.’})
-return jsonify({‘success’: True, ‘status’: job[‘status’],
-‘progress’: job[‘progress’], ‘message’: job[‘message’]})
+@app.route('/api/generate', methods=['POST'])
+def generate_paper():
+    tok = request.headers.get('Authorization', '').replace('Bearer ', '')
+    sess = session_get(tok)
+    if not sess:
+        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
 
-@app.route(’/api/download/<jid>’)
-def download_paper(jid):
-tok = request.headers.get(‘Authorization’, ‘’).replace(’Bearer ’, ‘’)
-if not session_get(tok):
-return jsonify({‘success’: False, ‘message’: ‘Unauthorized’}), 401
+    # Check API key before starting job
+    if not _detect_provider():
+        return jsonify({'success': False,
+                        'message': 'No AI API key found. Set GROQ_API_KEY (free at https://console.groq.com/keys) or GEMINI_API_KEY (free at https://aistudio.google.com/app/apikey).'}), 500
 
-```
-# First check in-memory jobs dict
-job = jobs.get(jid)
-fp = None
+    data   = request.json
+    topic  = data.get('topic', '').strip()
+    nfigs  = max(3, min(15, int(data.get('num_figures', 6))))
+    author = data.get('author_name', 'Anonymous').strip()
+    inst   = data.get('institution', '').strip()
+    email  = sess['email']
 
-if job:
-    if job['status'] != 'done':
-        return jsonify({'success': False, 'message': 'File not ready'}), 400
-    fp = job.get('file_path')
-else:
-    # Server may have restarted — look up file path from DB
+    # Questionnaire fields (AI-enabled, not AI-driven)
+    q_problem    = data.get('q_problem', '').strip()
+    q_lit        = data.get('q_lit', '').strip()
+    q_gap        = data.get('q_gap', '').strip()
+    q_objectives = data.get('q_objectives', '').strip()
+    q_statement  = data.get('q_statement', '').strip()
+
+    if not topic:
+        return jsonify({'success': False, 'message': 'Topic required'}), 400
+
+    jid     = str(uuid.uuid4())
+    user_id = sess.get('user_id', email)
+    jobs[jid] = {'status': 'queued', 'progress': 0,
+                 'message': 'Queued...', 'file_path': None, 'topic': topic, 'user_id': user_id}
     with get_db() as db:
-        paper = db.execute('SELECT file_path, topic FROM papers WHERE id=?', (jid,)).fetchone()
-    if not paper:
-        return jsonify({'success': False, 'message': 'Job not found'}), 404
-    fp = paper['file_path']
-    topic_slug = paper['topic'] if paper['topic'] else jid
-    if not fp:
-        return jsonify({'success': False, 'message': 'File not ready — please generate again'}), 400
-    # Restore minimal job info for slug below
-    jobs[jid] = {'status': 'done', 'file_path': fp, 'topic': paper['topic'] or ''}
+        # Ensure user exists (guards against FK constraint failure)
+        db.execute(
+            'INSERT OR IGNORE INTO users (id, email, name, picture) VALUES (?, ?, ?, ?)',
+            (user_id, email, sess.get('name', ''), sess.get('picture', ''))
+        )
+        db.execute('INSERT INTO papers (id,user_id,topic) VALUES (?,?,?)', (jid, user_id, topic))
 
-if not fp or not os.path.exists(fp):
-    return jsonify({'success': False, 'message': 'File not found on server'}), 404
+    questionnaire = {
+        'problem':    q_problem,
+        'lit':        q_lit,
+        'gap':        q_gap,
+        'objectives': q_objectives,
+        'statement':  q_statement,
+    }
 
-topic_for_slug = jobs[jid].get('topic', '') if jid in jobs else ''
-slug = re.sub(r'[^\w\-]', '_', topic_for_slug[:40]) if topic_for_slug else jid[:8]
-return send_file(fp, as_attachment=True,
-                 download_name=f'rdxper_{slug}.docx',
-                 mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
-```
+    def _run():
+        try:
+            g    = PaperGenerator(jid, jobs)
+            path = g.generate(topic, nfigs, author, inst, email, questionnaire)
+            jobs[jid].update({'status': 'done', 'progress': 100,
+                              'message': 'Research paper ready!', 'file_path': path})
+            with get_db() as db:
+                db.execute('UPDATE papers SET file_path=? WHERE id=?', (path, jid))
+        except Exception as e:
+            import traceback; traceback.print_exc()
+            jobs[jid].update({'status': 'error', 'message': str(e)})
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({'success': True, 'job_id': jid})
+
+@app.route('/api/status/<jid>')
+def job_status(jid):
+    tok = request.headers.get('Authorization', '').replace('Bearer ', '')
+    if not session_get(tok):
+        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+    job = jobs.get(jid)
+    if not job:
+        # Fall back to DB — server may have restarted mid-generation
+        with get_db() as db:
+            paper = db.execute('SELECT file_path, topic FROM papers WHERE id=?', (jid,)).fetchone()
+        if not paper:
+            return jsonify({'success': False, 'message': 'Job not found'}), 404
+        if paper['file_path']:
+            return jsonify({'success': True, 'status': 'done', 'progress': 100, 'message': 'Research paper ready!'})
+        return jsonify({'success': True, 'status': 'error', 'progress': 0, 'message': 'Job lost after server restart — please generate again.'})
+    return jsonify({'success': True, 'status': job['status'],
+                    'progress': job['progress'], 'message': job['message']})
+
+@app.route('/api/download/<jid>')
+def download_paper(jid):
+    tok = request.headers.get('Authorization', '').replace('Bearer ', '')
+    if not session_get(tok):
+        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+
+    # First check in-memory jobs dict
+    job = jobs.get(jid)
+    fp = None
+
+    if job:
+        if job['status'] != 'done':
+            return jsonify({'success': False, 'message': 'File not ready'}), 400
+        fp = job.get('file_path')
+    else:
+        # Server may have restarted — look up file path from DB
+        with get_db() as db:
+            paper = db.execute('SELECT file_path, topic FROM papers WHERE id=?', (jid,)).fetchone()
+        if not paper:
+            return jsonify({'success': False, 'message': 'Job not found'}), 404
+        fp = paper['file_path']
+        topic_slug = paper['topic'] if paper['topic'] else jid
+        if not fp:
+            return jsonify({'success': False, 'message': 'File not ready — please generate again'}), 400
+        # Restore minimal job info for slug below
+        jobs[jid] = {'status': 'done', 'file_path': fp, 'topic': paper['topic'] or ''}
+
+    if not fp or not os.path.exists(fp):
+        return jsonify({'success': False, 'message': 'File not found on server'}), 404
+
+    topic_for_slug = jobs[jid].get('topic', '') if jid in jobs else ''
+    slug = re.sub(r'[^\w\-]', '_', topic_for_slug[:40]) if topic_for_slug else jid[:8]
+    return send_file(fp, as_attachment=True,
+                     download_name=f'rdxper_{slug}.docx',
+                     mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+
+
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
-
-# ENTRY POINT
-
+#  ENTRY POINT
 # ═══════════════════════════════════════════════════════════════════════════════
 
-if **name** == ‘**main**’:
-os.makedirs(‘generated’, exist_ok=True)
+if __name__ == '__main__':
+    os.makedirs('generated', exist_ok=True)
 
-```
-provider = _detect_provider()
-pname_str = f"✓ {('Groq (Llama 3.1 70B)' if provider == 'groq' else 'Gemini')} — ready!" if provider else "✗ NOT SET — see below"
-print('\n' + '='*60)
-print('  rdxper v4.0  —  Free AI Research Paper Generator')
-print('  Supports Groq (free) and Gemini (free tier)')
-print('  Open browser:  http://127.0.0.1:8080')
-print(f'  AI Provider: {pname_str}')
-print('='*60 + '\n')
-if not provider:
-    print('  ┌─ GET A FREE API KEY ─────────────────────────────────────┐')
-    print('  │                                                          │')
-    print('  │  OPTION 1 — Groq (completely free, recommended):        │')
-    print('  │    1. Visit https://console.groq.com/keys               │')
-    print('  │    2. Sign up → Create API Key (no credit card needed)  │')
-    print('  │    3. Windows:  set GROQ_API_KEY=your_key_here          │')
-    print('  │       Mac/Linux: export GROQ_API_KEY=your_key_here      │')
-    print('  │    4. Run python rdxper.py again                        │')
-    print('  │                                                          │')
-    print('  │  OPTION 2 — Google Gemini (free tier):                  │')
-    print('  │    1. Visit https://aistudio.google.com/app/apikey      │')
-    print('  │    2. Sign in with Google → Get API Key                 │')
-    print('  │    3. Windows:  set GEMINI_API_KEY=your_key_here        │')
-    print('  │       Mac/Linux: export GEMINI_API_KEY=your_key_here    │')
-    print('  │    4. Run python rdxper.py again                        │')
-    print('  │                                                          │')
-    print('  └──────────────────────────────────────────────────────────┘')
-    print()
+    provider = _detect_provider()
+    pname_str = f"✓ {('Groq (Llama 3.1 70B)' if provider == 'groq' else 'Gemini')} — ready!" if provider else "✗ NOT SET — see below"
+    print('\n' + '='*60)
+    print('  rdxper v4.0  —  Free AI Research Paper Generator')
+    print('  Supports Groq (free) and Gemini (free tier)')
+    print('  Open browser:  http://127.0.0.1:8080')
+    print(f'  AI Provider: {pname_str}')
+    print('='*60 + '\n')
+    if not provider:
+        print('  ┌─ GET A FREE API KEY ─────────────────────────────────────┐')
+        print('  │                                                          │')
+        print('  │  OPTION 1 — Groq (completely free, recommended):        │')
+        print('  │    1. Visit https://console.groq.com/keys               │')
+        print('  │    2. Sign up → Create API Key (no credit card needed)  │')
+        print('  │    3. Windows:  set GROQ_API_KEY=your_key_here          │')
+        print('  │       Mac/Linux: export GROQ_API_KEY=your_key_here      │')
+        print('  │    4. Run python rdxper.py again                        │')
+        print('  │                                                          │')
+        print('  │  OPTION 2 — Google Gemini (free tier):                  │')
+        print('  │    1. Visit https://aistudio.google.com/app/apikey      │')
+        print('  │    2. Sign in with Google → Get API Key                 │')
+        print('  │    3. Windows:  set GEMINI_API_KEY=your_key_here        │')
+        print('  │       Mac/Linux: export GEMINI_API_KEY=your_key_here    │')
+        print('  │    4. Run python rdxper.py again                        │')
+        print('  │                                                          │')
+        print('  └──────────────────────────────────────────────────────────┘')
+        print()
 
-port = int(os.environ.get("PORT", 8080))
-host = "0.0.0.0" if os.environ.get("FLY_APP_NAME") or os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RENDER") or os.environ.get("SPACE_ID") else "127.0.0.1"
-app.run(host=host, port=port, debug=False, threaded=True)
-```
+    port = int(os.environ.get("PORT", 8080))
+    host = "0.0.0.0"
+    app.run(host=host, port=port, debug=False, threaded=True)
