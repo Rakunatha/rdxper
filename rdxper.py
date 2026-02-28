@@ -1876,7 +1876,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   </div>
 </div>
 
-<footer>rdxper v4.0 · An Interactive Lawyer Tool</footer>
+<footer>An Interactive Lawyers Tool</footer>
 </div>
 
 <script>
