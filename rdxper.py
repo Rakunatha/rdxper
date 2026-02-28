@@ -546,212 +546,171 @@ class GeminiWriter:
                     f"Aware={self.aware_pct}% | Familiar={self.fam_pct}% | "
                     f"Support={self.support_pct}% | Top paper: {top_cite}{q_block}\n\n")
 
-        # ── CALL 1: front half ────────────────────────────────────────────────
+        # ── CALL 1: abstract + intro + objectives ────────────────────────────
         p1 = (hdr +
-              "Write the first half of an academic research paper using XML tags. "
-              "Flowing scholarly prose only — no markdown, no bullet points, no numbering inside prose.\n\n"
-              "<keywords>8 comma-separated keywords relevant to the topic</keywords>\n"
-              f"<abstract>Write a detailed academic abstract of exactly 300-340 words as a single flowing paragraph. "
-              f"Follow this exact structure within the paragraph: "
-              f"(1) Opening sentence: 'This study [explores/examines/investigates] [topic]...' stating the core subject and its significance. "
-              f"(2) Context sentence: describe the main problem or challenge the research addresses, naming specific legal, social, or policy dimensions. "
-              f"(3) Legal/theoretical instruments: name at least 3 specific real legal instruments, frameworks, treaties, constitutional provisions, or scholarly works that are analysed — cite them by their full official name (e.g. Article 21, UDHR, ICCPR, specific case names). "
-              f"(4) Objective sentence: 'The objective is to critically assess...' — state the precise analytical aim. "
-              f"(5) Methodology sentence: 'The methodology involves a qualitative/mixed-methods [type] analysis supported by [sources]...' — name the exact method and data sources including any survey respondents ({nr}), secondary data, judicial decisions, reports. "
-              f"(6) Findings sentence: 'The findings of the study reveal...' — state 2-3 concrete findings including patterns, percentages where available, systemic issues. "
-              f"(7) Closing sentence: 'The study concludes by recommending...' — list 3-4 specific actionable recommendations by name. "
-              f"Write as ONE dense, flowing academic paragraph with no subheadings. Cite at least 2 real sources by author/year inline.</abstract>\n"
-              f"<introduction>Write a detailed introduction of exactly 800-900 words structured as thematic subheaded sections. "
-              f"Use bold subheadings for each section (no numbering). Follow this exact structure:\n"
-              f"Opening paragraph (100-120 words, NO subheading): Begin with the broad context of {self.topic} — "
-              f"describe how the subject has historically operated, its traditional form, and what has changed. "
-              f"Name specific stakeholders, geographies, or industries involved. "
-              f"If PROBLEM IDENTIFIED BY RESEARCHER is given, weave it into this paragraph as the central tension. "
-              f"End with a sentence on what this digital/legal/social transformation means for the field.\n"
-              f"Aim of the Study (60-80 words): State the precise aim of the study using 'The aim of this study is to...' — "
-              f"name what is being analysed, how outcomes are being evaluated, and what socio-economic dimensions are explored. "
-              f"If RESEARCH STATEMENT BY RESEARCHER is provided, anchor this section to it.\n"
-              f"Evolution of the Topic (130-150 words): Trace the historical development of {self.topic} — "
-              f"describe the early/pre-digital/pre-reform era, the first wave of change (name specific years, events, or technologies), "
-              f"how features or frameworks evolved over time, what accelerated adoption or change (e.g. a crisis, policy, technology), "
-              f"and where the topic stands today with current innovations or leading examples named specifically.\n"
-              f"Government Initiatives (130-150 words): Describe specific central and state government schemes, programmes, and policies "
-              f"relevant to {self.topic} — name each scheme/act/policy by its full official name, state which government introduced it, "
-              f"its objectives, and its direct impact on the subject. Include both national and regional examples. "
-              f"Mention any regulatory frameworks, institutional bodies, or partnerships involved.\n"
-              f"Factors Affecting the Topic (130-150 words): Identify and explain the key variables that modulate outcomes in {self.topic} — "
-              f"cover infrastructure, cultural, socio-economic, environmental, and policy factors. "
-              f"Name specific barriers and enablers. Explain how each factor shapes adoption, effectiveness, or impact. "
-              f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, incorporate it as one of the structural gaps identified here.\n"
-              f"Current Trends (130-150 words): Describe the present-day landscape of {self.topic} — "
-              f"name specific technologies, platforms, practices, or legal developments currently in use. "
-              f"Reference consumer or societal changes driving demand. Name real platforms, tools, certifications, or cases where relevant. "
-              f"Include emerging innovations and how they are reshaping outcomes.\n"
-              f"Comparison Between Cities/States (100-120 words): Compare adoption, impact, or implementation of {self.topic} across "
-              f"at least 4 different Indian states or cities — name each specifically. Explain why some regions lead and others lag, "
-              f"citing infrastructure, governance, culture, or economic factors. "
-              f"Write as flowing scholarly prose throughout each section. No bullet points, no numbered lists.</introduction>\n"
+              "Write the opening sections of an academic research paper using XML tags. "
+              "Flowing scholarly prose only — no markdown, no bullet points inside prose.\n\n"
+              "<keywords>Provide exactly 6-8 academic keywords separated by commas, relevant to the topic.</keywords>\n"
+              f"<abstract>Write a structured academic abstract of exactly 300 words as ONE flowing paragraph. "
+              f"Follow this internal structure without subheadings: "
+              f"(1) Background — introduce the broad context of {self.topic} and why it matters. "
+              f"(2) Problem statement — state the specific gap or challenge this study addresses. "
+              f"(3) Objective — 'The objective of this study is to...' state 2-3 specific aims. "
+              f"(4) Methodology — 'The study adopted a descriptive and empirical research design. "
+              f"A convenience sampling method was employed with {nr} respondents. "
+              f"Data was collected through a structured questionnaire and analysed using SPSS Version 21.' "
+              f"(5) Key findings — state 3-4 quantified findings with specific percentages relevant to {self.topic}. "
+              f"(6) Conclusion and implications — summarise the study's contribution and practical/policy implications. "
+              f"Write as one dense academic paragraph with no internal headings.</abstract>\n"
+              f"<introduction>Write a formal academic introduction of exactly 1,200-1,500 words. "
+              f"Structure using these bold subheadings in this order, each as a flowing paragraph (no bullet points):\n"
+              f"Background of the Topic (200-220 words): Describe the historical and contextual background of {self.topic}. "
+              f"Explain how the subject traditionally operated, what stakeholders are involved, and what has changed in recent decades. "
+              f"If PROBLEM IDENTIFIED BY RESEARCHER is given above, frame this as the central tension.\n"
+              f"Evolution of the Topic (200-220 words): Trace the historical development of {self.topic} from its early form "
+              f"to the present. Name specific time periods, events, technologies, or policy shifts that drove change. "
+              f"Describe the first wave of transformation, subsequent developments, and the current state with specific examples.\n"
+              f"Government Initiatives (180-200 words): Name specific government schemes, acts, policies, or programmes "
+              f"relevant to {self.topic} using their full official names. State which government body introduced each, "
+              f"its objectives, and measurable impact. Include both central and state-level examples where applicable.\n"
+              f"Factors Affecting the Topic (180-200 words): Identify and explain 5-6 key variables that influence outcomes "
+              f"in {self.topic} — covering infrastructure, socio-economic, cultural, environmental, and policy dimensions. "
+              f"Name specific barriers and enablers. "
+              f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, incorporate it as a structural gap here.\n"
+              f"Current Trends (180-200 words): Describe the present-day landscape of {self.topic}. "
+              f"Name specific technologies, platforms, legal reforms, or practices currently in use. "
+              f"Reference shifting consumer or societal demands. Include emerging innovations reshaping the field.\n"
+              f"Comparison Across Regions/States (150-180 words): Compare adoption, impact, or implementation of {self.topic} "
+              f"across at least 4 named Indian states or international regions. Explain why some lead and others lag.\n"
+              f"Aim of the Study (80-100 words): State clearly: 'The aim of this study is to...' "
+              f"If RESEARCH STATEMENT BY RESEARCHER is provided, anchor this directly to it. "
+              f"Write all sections as flowing scholarly prose. No bullet points anywhere.</introduction>\n"
               "<objectives>"
-              "IMPORTANT: If OBJECTIVES DEFINED BY RESEARCHER are provided above, use them VERBATIM (copy them exactly). "
-              "Format every objective on its own line starting with '● ' followed by 'To ...' (e.g. '● To assess the effect of...'). "
-              "Only if no objectives were provided, write 5 objectives in this same format: one per line, each starting with '● To', no numbers.</objectives>\n"
-              f"<literature_review>Write a comprehensive literature review of exactly 1500-1600 words. "
-              f"CRITICAL FORMATTING RULE: Each source entry must follow this EXACT 4-sentence structure: "
-              f"SENTENCE 1 - Citation opener: Write Lastname and Lastname (Year) or Lastname et al. (Year) "
-              f"followed in the same sentence by a past-tense verb such as investigated, examined, analyzed, explored, assessed, or evaluated, "
-              f"then the subject of study and context. "
-              f"Example: Bagchi and Sharma (2024) investigated the economic impact of mobile applications on fish marketing within coastal communities. "
-              f"SENTENCE 2 - Aim: Start with The aim was to - state the precise research objective in one sentence. "
-              f"SENTENCE 3 - Methodology: Start with The methodology - name the specific method used (e.g. mixed-methods, longitudinal study, participatory research, doctrinal analysis), "
-              f"include a specific participant count (e.g. 380 participants, 450 fishermen), geographic scope, and duration where applicable. "
-              f"SENTENCE 4 - Findings: Start with The findings - report 2-3 specific quantitative results "
-              f"with exact percentages or numbers (e.g. 34 percent average income increase, 28 percent reduction in post-harvest losses). "
-              f"End each entry with one sentence on broader implications or conclusions of the study. Total per entry: 100-120 words. "
-              f"IMPORTANT: If KEY LITERATURE CITED BY RESEARCHER is provided above, those sources appear first rewritten in this Author (Year) format. "
-              f"Then add further real academic sources on {self.topic} to reach 14-16 sources total. "
-              f"Number each entry: the first entry has no number, subsequent entries are numbered 1. 2. 3. and so on. "
-              f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, end with an unnumbered synthesis paragraph using the researcher's exact gap statement. "
-              f"No subheadings, no bullet points.</literature_review>\n"
-              f"<methodology>Write a methodology section of exactly 180-210 words as a single flowing paragraph. "
-              f"Follow this exact sentence-by-sentence structure: "
-              f"SENTENCE 1: State the research type — begin with 'The current study is based on [descriptive/analytical/empirical] research.' "
-              f"SENTENCE 2: Describe the scientific frame — 'It consists of the scientific frame of research.' "
-              f"SENTENCE 3: Explain how the study began — 'It began with the finding of research problems based on the review of literature.' "
-              f"SENTENCE 4: Describe the hypothesis and solution approach — 'It explored the problem tested with hypotheses and provided the solution from the analysis.' "
-              f"SENTENCE 5: State the sampling method — 'A convenience sampling method is used in the research.' "
-              f"SENTENCE 6: State sample size and location — 'The sample size for the study is {nr}, selected from the sampling frame of [specific location relevant to {self.topic}].' "
-              f"SENTENCE 7: Describe data collection — 'Data has been collected through field visits, with a structured questionnaire used as the primary data collection tool.' "
-              f"SENTENCE 8: Mention secondary sources — 'Secondary sources such as articles, journals, reports, and newsletters have also been considered.' "
-              f"SENTENCE 9: State the analysis tool — 'The collected data has been analyzed using SPSS version 21.' "
-              f"SENTENCE 10: State the independent variables — 'The independent variables are age, gender, educational qualifications, location, and occupation.' "
-              f"SENTENCE 11: State the dependent variable — 'The dependent variable of the study is [the primary outcome being measured, directly relevant to {self.topic}], "
-              f"reflecting changes in [livelihood/legal/economic/social] outcomes.' "
-              f"Write as one clean flowing paragraph. No bullet points, no subheadings.</methodology>")
+              "IMPORTANT: If OBJECTIVES DEFINED BY RESEARCHER are provided above, copy them VERBATIM. "
+              "Format: each objective on its own line starting with '● To ...' "
+              "If no objectives provided, write exactly 3 objectives in this format: '● To [verb] ...'</objectives>\n"
+              f"<literature_review>Write a comprehensive literature review of exactly 3,500-4,000 words. "
+              f"Include EXACTLY 25-30 source entries. "
+              f"CRITICAL FORMAT — every entry must follow this EXACT 4-sentence structure (120-150 words each):\n"
+              f"SENTENCE 1 — Citation opener: 'Lastname and Lastname (Year)' followed by a past-tense verb "
+              f"(investigated/examined/analyzed/explored/assessed/evaluated) and the subject and context. "
+              f"Example: 'Bagchi and Sharma (2024) investigated the economic impact of mobile applications on fish marketing within coastal communities.'\n"
+              f"SENTENCE 2 — Aim: Start with 'The aim of the study was to...' — state the precise research objective.\n"
+              f"SENTENCE 3 — Methodology: Start with 'The methodology employed...' — name the specific research design, "
+              f"exact participant count (e.g. 450 respondents), geographic scope, duration, and analytical tools used.\n"
+              f"SENTENCE 4 — Findings: Start with 'The findings revealed...' — report 3-4 specific quantitative results "
+              f"with exact percentages (e.g. 34% income increase, 28% reduction in post-harvest losses). "
+              f"End with a sentence on broader implications.\n"
+              f"IMPORTANT: If KEY LITERATURE CITED BY RESEARCHER is provided above, those sources appear first "
+              f"rewritten in this exact format. Then add further academic sources on {self.topic} to reach 25-30 total. "
+              f"Number each entry: first entry has no number, subsequent entries numbered 1. 2. 3. etc. "
+              f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, end with an unnumbered synthesis paragraph. "
+              f"No subheadings, no bullet points, no brackets for citations.</literature_review>\n"
+              f"<methodology>Write a formal methodology section of exactly 500-600 words as flowing paragraphs. "
+              f"Cover ALL of the following in this order (write as connected prose, not a list):\n"
+              f"Paragraph 1 — Research design and rationale: 'The current study is based on descriptive and empirical research.' "
+              f"Explain what descriptive and empirical means in this context and why this design suits {self.topic}.\n"
+              f"Paragraph 2 — Sampling: 'A convenience sampling method is used in the research.' "
+              f"State the sample size of {nr} respondents, name the specific geographic location relevant to {self.topic}, "
+              f"explain how the sampling frame was constructed and who qualified as respondents.\n"
+              f"Paragraph 3 — Data collection: 'Data has been collected through field visits, with a structured questionnaire "
+              f"used as the primary data collection tool.' Describe the questionnaire design — number of sections, types of questions "
+              f"(Likert scale, multiple choice), how it was validated, and how it was administered.\n"
+              f"Paragraph 4 — Secondary data: 'Secondary sources such as articles, journals, reports, and newsletters have also been considered.' "
+              f"Name the specific types of secondary sources consulted relevant to {self.topic}.\n"
+              f"Paragraph 5 — Analysis: 'The collected data has been analyzed using SPSS version 21.' "
+              f"Name the specific statistical tests used: chi-square test, ANOVA, Pearson correlation, frequency analysis.\n"
+              f"Paragraph 6 — Variables: "
+              f"'The independent variables are age, gender, educational qualifications, location, and occupation.' "
+              f"'The dependent variable of the study is [main outcome directly relevant to {self.topic}].' "
+              f"Explain why these variables were chosen and what relationships are being tested.\n"
+              f"Write in formal academic paragraph style. No bullet points, no numbered lists.</methodology>")
 
-        # ── CALL 2: back half ─────────────────────────────────────────────────
+        # ── CALL 2: results + conclusion + charts ─────────────────────────────
         p2 = (hdr +
-              "Write the second half of an academic research paper using XML tags. "
+              "Write the analytical sections of an academic research paper using XML tags. "
               "Flowing scholarly prose only — no markdown, no bullet points.\n\n"
-              f"<results>Write a comprehensive analysis section of exactly 600-700 words. "
-              f"Structure it as one paragraph per figure, numbered Figure 1 through Figure {self._nfigs}. "
-              f"Each figure paragraph must follow this exact format: "
-              f"Start with 'Figure [N]' in bold (just write it as 'Figure N:' at the start of the paragraph). "
-              f"Then write 3-4 sentences: "
-              f"(1) State what the figure shows — 'The figure shows the relationship between [independent variable] and [dependent variable/outcome].' "
-              f"Use these independent variables across figures: educational qualification, age group (18-30, 31-50, 51 and above), gender (male/female), occupation (small-scale fisher, large-scale fisher, non-fisher trader), place of residence (rural, semi-urban, urban). "
-              f"Use these as dependent/outcome variables relevant to {self.topic}: primary reasons for using the platform, perception of price improvement, awareness of government programs, factors influencing adoption decision, payment timeliness ratings, belief in higher price attainment, biggest difficulties faced. "
-              f"(2) Report specific findings with percentages — name which group showed the highest response and what percentage, e.g. '{self.aware_pct}% of graduate respondents cited price as the primary reason' or '{self.fam_pct}% of male respondents agreed that prices are better.' "
-              f"(3) Contrast with another group — name a second group's response with a different percentage. "
-              f"(4) State the inference — what this pattern reveals about {self.topic}. "
-              f"Vary the independent variable across figures so that educational qualification appears in roughly Figures 1-5, age group in Figures 6, 9-10, 14, 19-20, 23, 26, gender in Figures 11-13, 15-18, occupation in Figures 21, 24-25, 27-29, and place of residence in Figures 22, 30. "
-              f"Write as flowing academic prose. No bullet points.</results>\n"
-              "<discussion>Write a detailed discussion section of exactly 700-750 words. "
-              "Interpret all major findings in relation to the research objectives. "
-              "Discuss implications for each demographic group. "
-              "Connect findings to at least 5 cited sources from the literature review. "
-              "Address policy implications, theoretical contributions, and practical significance. "
-              "Compare with international examples. "
-              "Write as flowing scholarly prose in multiple paragraphs.</discussion>\n"
-              "<suggestions>Write a detailed suggestions section of exactly 180-200 words. "
-              "Provide 5-6 specific, actionable policy recommendations as flowing prose. "
-              "Each recommendation should be concrete and justified with reasoning. "
-              "No bullet points — write as connected paragraphs.</suggestions>\n"
-              "<limitations>Write a limitations section of exactly 200-220 words. "
-              "Discuss: sample size constraints, geographic scope, self-report bias, "
-              "temporal limitations, methodological limitations, and areas for future research. "
-              "Write as 2 connected paragraphs.</limitations>\n"
-              "<conclusion>Write a comprehensive conclusion of exactly 230-250 words. "
-              "Synthesise all major findings, restate the research contribution, "
-              "connect back to the research objectives, cite the most important source, "
-              "and end with a forward-looking statement about future research directions. "
-              "Write as 2 substantial paragraphs.</conclusion>\n"
+              f"<results>Write a comprehensive result section of exactly 2,000-2,500 words. "
+              f"Interpret findings FIGURE BY FIGURE from Figure 1 through Figure {self._nfigs}. "
+              f"For each figure, write a dedicated paragraph of 60-80 words following this exact structure: "
+              f"Start the paragraph with 'Figure [N]' in the text (not as a heading). "
+              f"Then write: "
+              f"(1) What the figure shows — 'Figure [N] illustrates the relationship between [independent variable] and [dependent variable].' "
+              f"(2) Dominant finding — name the highest-scoring group with its exact percentage "
+              f"(use internally consistent percentages that add up correctly across all figures). "
+              f"(3) Contrast — name a second group with a lower percentage and explain the gap. "
+              f"(4) Inference — state what this reveals about {self.topic} in one analytical sentence.\n"
+              f"Use these independent variables across figures (distribute evenly): "
+              f"educational qualification (illiterate/primary school/high school/graduate) for Figures 1-8; "
+              f"age group (18-30/31-50/51 and above) for Figures 6,9,10,14,19,20,23,26; "
+              f"gender (male/female) for Figures 11-18; "
+              f"occupation (small-scale/large-scale/non-fisher trader) for Figures 21,24,25,27,28,29; "
+              f"place of residence (rural/semi-urban/urban) for Figures 22,30.\n"
+              f"Use these as dependent/outcome variables relevant to {self.topic}: "
+              f"primary reasons for use, perception of price improvement, awareness of government programs, "
+              f"factors influencing adoption, payment timeliness, belief in higher prices, biggest difficulties. "
+              f"Include specific percentages throughout. Maintain continuous paragraph structure. "
+              f"No bullet points. Use statistical-style language throughout.</results>\n"
+              f"<discussion>Write a detailed discussion section of exactly 400-500 words. "
+              f"Interpret the overall pattern of findings across all figures in relation to the 3 research objectives. "
+              f"Connect findings to at least 5 sources from the literature review by author and year. "
+              f"Discuss implications for each demographic group. Address policy implications and practical significance. "
+              f"Write as flowing scholarly prose in multiple paragraphs.</discussion>\n"
+              f"<conclusion>Write a comprehensive conclusion of exactly 700-800 words. "
+              f"Structure as flowing paragraphs covering: "
+              f"(1) Summary of key findings across all demographic variables with specific percentages. "
+              f"(2) Whether each of the 3 objectives was achieved and how. "
+              f"(3) Theoretical and practical implications for {self.topic}. "
+              f"(4) Specific policy recommendations (name 4-5 concrete actionable reforms). "
+              f"(5) Limitations of the current study. "
+              f"(6) Future research directions. "
+              f"Write in formal academic tone. No bullet points.</conclusion>\n"
+              f"<suggestions>Write a suggestions section of exactly 200-250 words as connected prose paragraphs. "
+              f"Provide 5-6 specific, actionable recommendations directly relevant to {self.topic}. "
+              f"Each recommendation must be concrete, named specifically, and justified with brief reasoning. "
+              f"No bullet points.</suggestions>\n"
+              f"<limitations>Write a limitations section of exactly 150-200 words as 2 connected paragraphs. "
+              f"Address: sample size constraints, geographic scope, self-report bias, temporal limitations, "
+              f"and areas for future research.</limitations>\n"
               f"<charts>{self._nfigs} lines. Format: TYPE|TITLE|CAT1,CAT2,CAT3 "
               f"(or grouped/stacked: TYPE|TITLE|G1,G2;S1,S2). "
-              f"TYPE=bar/pie/grouped/stacked. Titles very specific to \"{self.topic[:30]}\".</charts>")
+              f"TYPE=bar/pie/grouped/stacked. "
+              f"Distribute chart types: use grouped/stacked for cross-tabulation figures. "
+              f"Titles must be specific to \"{self.topic[:35]}\" and reference the demographic variable shown. "
+              f"Example: 'grouped|Income Perception by Educational Qualification|Illiterate,Primary,High School,Graduate;Agree,Disagree,Neutral'</charts>")
 
-        # Split into 3 calls to handle large content without hitting token limits
-        # Call 1: intro sections (abstract, intro, objectives)
-        # Call 2: literature review + methodology (lit review is 1500+ words)
-        # Call 3: results, discussion, suggestions, limitations, conclusion, charts
-        s1 = ['keywords','abstract','introduction','objectives']
-        s2 = ['literature_review','methodology']
-        s3 = ['results','discussion','suggestions','limitations','conclusion','charts']
-
-        # Extract lit review + methodology prompt from p1
-        import re as _re
-        p1_intro = p1  # already has all sections but we'll parse selectively
-
-        # Build dedicated lit review + methodology prompt
-        p_litmethod = (hdr +
-              "Write two sections of an academic research paper using XML tags. "
-              "Flowing scholarly prose only — no markdown, no bullet points.\n\n"
-              f"<literature_review>Write a comprehensive literature review of exactly 1500-1600 words. "
-              f"CRITICAL FORMATTING RULE: Each source entry must follow this EXACT 4-sentence structure: "
-              f"SENTENCE 1 - Citation opener: Write Lastname and Lastname (Year) or Lastname et al. (Year) "
-              f"followed in the same sentence by a past-tense verb such as investigated, examined, analyzed, explored, assessed, or evaluated, "
-              f"then the subject of study and context. "
-              f"Example: Bagchi and Sharma (2024) investigated the economic impact of mobile applications on fish marketing within coastal communities. "
-              f"SENTENCE 2 - Aim: Start with The aim was to - state the precise research objective in one sentence. "
-              f"SENTENCE 3 - Methodology: Start with The methodology - name the specific method used (e.g. mixed-methods, longitudinal study, participatory research, doctrinal analysis), "
-              f"include a specific participant count (e.g. 380 participants, 450 fishermen), geographic scope, and duration where applicable. "
-              f"SENTENCE 4 - Findings: Start with The findings - report 2-3 specific quantitative results "
-              f"with exact percentages or numbers (e.g. 34 percent average income increase, 28 percent reduction in post-harvest losses). "
-              f"End each entry with one sentence on broader implications or conclusions of the study. Total per entry: 100-120 words. "
-              f"IMPORTANT: If KEY LITERATURE CITED BY RESEARCHER is provided above, those sources appear first rewritten in this Author (Year) format. "
-              f"Then add further real academic sources on {self.topic} to reach 14-16 sources total. "
-              f"Number each entry: the first entry has no number, subsequent entries are numbered 1. 2. 3. and so on. "
-              f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, end with an unnumbered synthesis paragraph using the researcher's exact gap statement. "
-              f"No subheadings, no bullet points.</literature_review>\n"
-              f"<methodology>Write a methodology section of exactly 180-210 words as a single flowing paragraph. "
-              f"Follow this exact sentence-by-sentence structure: "
-              f"SENTENCE 1: State the research type — begin with 'The current study is based on [descriptive/analytical/empirical] research.' "
-              f"SENTENCE 2: Describe the scientific frame — 'It consists of the scientific frame of research.' "
-              f"SENTENCE 3: Explain how the study began — 'It began with the finding of research problems based on the review of literature.' "
-              f"SENTENCE 4: Describe the hypothesis and solution approach — 'It explored the problem tested with hypotheses and provided the solution from the analysis.' "
-              f"SENTENCE 5: State the sampling method — 'A convenience sampling method is used in the research.' "
-              f"SENTENCE 6: State sample size and location — 'The sample size for the study is {nr}, selected from the sampling frame of [specific location relevant to {self.topic}].' "
-              f"SENTENCE 7: Describe data collection — 'Data has been collected through field visits, with a structured questionnaire used as the primary data collection tool.' "
-              f"SENTENCE 8: Mention secondary sources — 'Secondary sources such as articles, journals, reports, and newsletters have also been considered.' "
-              f"SENTENCE 9: State the analysis tool — 'The collected data has been analyzed using SPSS version 21.' "
-              f"SENTENCE 10: State the independent variables — 'The independent variables are age, gender, educational qualifications, location, and occupation.' "
-              f"SENTENCE 11: State the dependent variable — 'The dependent variable of the study is [the primary outcome being measured, directly relevant to {self.topic}], "
-              f"reflecting changes in [livelihood/legal/economic/social] outcomes.' "
-              f"Write as one clean flowing paragraph. No bullet points, no subheadings.</methodology>")
-
+        # Build dedicated lit review + methodology prompt (same as p1 for this split)
+        p_litmethod = p1  # lit review and methodology are in p1 now
         def prog1(pct, msg):
-            if progress_cb: progress_cb(max(30, min(45, 30 + int((pct-30)/45*15))), msg)
+            if progress_cb: progress_cb(max(30, min(55, 30 + int((pct-30)/45*25))), msg)
         def prog2(pct, msg):
-            if progress_cb: progress_cb(max(46, min(60, 46 + int((pct-30)/45*14))), msg)
+            if progress_cb: progress_cb(max(56, min(75, 56 + int((pct-30)/45*19))), msg)
         def prog3(pct, msg):
-            if progress_cb: progress_cb(max(61, min(75, 61 + int((pct-30)/45*14))), msg)
+            if progress_cb: progress_cb(max(56, min(75, 56 + int((pct-30)/45*19))), msg)
+
+        s1 = ['keywords','abstract','introduction','objectives','literature_review','methodology']
+        s2 = []   # unused — all front sections come from p1 now
+        s3 = ['results','discussion','suggestions','limitations','conclusion','charts']
 
         provider = _detect_provider()
         pname = "Groq (Llama 3.3 70B)" if provider == "groq" else "Gemini"
-        if progress_cb: progress_cb(30, f'{pname} writing abstract & introduction...')
+        if progress_cb: progress_cb(30, f'{pname} writing abstract, introduction & literature review...')
         raw1 = ai_generate(p1, system=SYSTEM_PROMPT, temperature=0.7,
                            progress_cb=prog1, tracked_sections=s1)
 
-        if progress_cb: progress_cb(46, f'{pname} writing literature review (1500+ words)...')
-        raw2 = ai_generate(p_litmethod, system=SYSTEM_PROMPT, temperature=0.7,
-                           progress_cb=prog2, tracked_sections=s2)
+        raw2 = raw1  # no separate call needed
 
-        if progress_cb: progress_cb(61, f'{pname} writing results, discussion & conclusion...')
+        if progress_cb: progress_cb(56, f'{pname} writing results, discussion & conclusion...')
         raw3 = ai_generate(p2, system=SYSTEM_PROMPT, temperature=0.7,
-                           progress_cb=prog3, tracked_sections=s3)
+                           progress_cb=prog2, tracked_sections=s3)
 
         sections = {}
         for tag in s1:
             m = re.search(rf'<{tag}>(.*?)</{tag}>', raw1, re.DOTALL)
             sections[tag] = m.group(1).strip() if m else ''
-        for tag in s2:
-            m = re.search(rf'<{tag}>(.*?)</{tag}>', raw2, re.DOTALL)
-            sections[tag] = m.group(1).strip() if m else ''
         for tag in s3:
             m = re.search(rf'<{tag}>(.*?)</{tag}>', raw3, re.DOTALL)
             sections[tag] = m.group(1).strip() if m else ''
-
-        # Remove lit review and methodology from p1 since they now come from p_litmethod
-        # (they'll have empty strings from raw1 which is fine — already set from raw2)''
 
         fallbacks = {
             'keywords':          f'{self.topic}, empirical study, stakeholder analysis, policy framework',
@@ -1128,23 +1087,25 @@ class DocBuilder:
             return p
 
         # ── TITLE PAGE (page 1) ───────────────────────────────────────────────
-        # Title: centered, bold, 12pt
+        # Title: centered, bold, 12pt — ALL CAPS
         p_text(self.topic.upper(), bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
         p_blank()
         p_blank()
 
-        # AUTHOR label + name + roll/year/institution/contact
+        # AUTHOR block — full spec fields
         p_text('AUTHOR', bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
         p_text(self.author, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
         if self.inst:
             p_text(self.inst, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
         if self.email:
-            p_text(f'EMAIL:{self.email}', bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
+            p_text(f'MOBILE NO: (Contact details provided separately)',
+                   bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
+            p_text(f'EMAIL: {self.email}', bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
 
         p_blank()
         p_blank()
 
-        # CO AUTHOR block (guide name shown as assistant professor)
+        # CO AUTHOR block — all required fields
         p_text('CO AUTHOR', bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, sp_b=12, sp_a=12)
 
         p_blank()
@@ -1157,7 +1118,6 @@ class DocBuilder:
                align=WD_ALIGN_PARAGRAPH.RIGHT, sp_b=12, sp_a=12)
 
         # ── ABSTRACT ──────────────────────────────────────────────────────────
-        # "ABSTRACT" bold, left-aligned, no space
         p_text('ABSTRACT', bold=True, align=WD_ALIGN_PARAGRAPH.LEFT, sp_b=0, sp_a=0)
         body(self.sections['abstract'], sp_b=12, sp_a=12,
              align=WD_ALIGN_PARAGRAPH.JUSTIFY)
@@ -1341,31 +1301,44 @@ class DocBuilder:
 
         # ── RESULT ────────────────────────────────────────────────────────────
         sec_head('RESULT', sp_b=0, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
-        # Result = first figure analysis paragraph (as in sample)
-        result_text = fig_analyses.get(1, self.sections.get('results', '').split('\n\n')[0] if self.sections.get('results') else '')
-        body(result_text, sp_b=12, sp_a=12, bold=True,
-             align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        results_full = self.sections.get('results', '')
+        for para in results_full.split('\n\n'):
+            para = para.strip()
+            if para:
+                body(para, sp_b=12, sp_a=12, bold=False,
+                     align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
         # ── DISCUSSION ────────────────────────────────────────────────────────
         sec_head('DISCUSSION', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
-        disc_text = self.sections.get('discussion', '').strip()
-        body(disc_text, sp_b=12, sp_a=12, bold=True,
-             align=WD_ALIGN_PARAGRAPH.JUSTIFY)
-
-        # ── LIMITATION ────────────────────────────────────────────────────────
-        sec_head('LIMITATION', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
-        body(self.sections.get('limitations', '').strip(), sp_b=12, sp_a=12,
-             align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        for para in self.sections.get('discussion', '').split('\n\n'):
+            para = para.strip()
+            if para:
+                body(para, sp_b=12, sp_a=12, bold=False,
+                     align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
         # ── SUGGESTION ────────────────────────────────────────────────────────
         sec_head('SUGGESTION', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
-        body(self.sections.get('suggestions', '').strip(), sp_b=12, sp_a=12,
-             align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        for para in self.sections.get('suggestions', '').split('\n\n'):
+            para = para.strip()
+            if para:
+                body(para, sp_b=12, sp_a=12, bold=False,
+                     align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+
+        # ── LIMITATION ────────────────────────────────────────────────────────
+        sec_head('LIMITATION', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        for para in self.sections.get('limitations', '').split('\n\n'):
+            para = para.strip()
+            if para:
+                body(para, sp_b=12, sp_a=12, bold=False,
+                     align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
         # ── CONCLUSION ────────────────────────────────────────────────────────
         sec_head('CONCLUSION', sp_b=0, sp_a=0, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
-        body(self.sections.get('conclusion', '').strip(), sp_b=12, sp_a=12,
-             align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        for para in self.sections.get('conclusion', '').split('\n\n'):
+            para = para.strip()
+            if para:
+                body(para, sp_b=12, sp_a=12, bold=False,
+                     align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
         # ── REFERENCES ────────────────────────────────────────────────────────
         sec_head('REFERENCES', sp_b=0, sp_a=0, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
