@@ -560,15 +560,40 @@ class GeminiWriter:
               f"(6) Findings sentence: 'The findings of the study reveal...' — state 2-3 concrete findings including patterns, percentages where available, systemic issues. "
               f"(7) Closing sentence: 'The study concludes by recommending...' — list 3-4 specific actionable recommendations by name. "
               f"Write as ONE dense, flowing academic paragraph with no subheadings. Cite at least 2 real sources by author/year inline.</abstract>\n"
-              "<introduction>Write a detailed introduction of exactly 480-520 words, 4 paragraphs, NO subheadings. "
-              "Paragraph 1 (110-140 words): Background and significance — if PROBLEM IDENTIFIED BY RESEARCHER is given above, build this paragraph around that exact problem. "
-              "Paragraph 2 (110-140 words): Existing responses — cite 3 specific sources from SOURCES or researcher's literature. "
-              "Paragraph 3 (110-140 words): Challenges and gaps — if RESEARCH GAP IDENTIFIED BY RESEARCHER is given above, use it here directly. "
-              "Paragraph 4 (110-140 words): Research scope — if RESEARCH STATEMENT BY RESEARCHER is given above, anchor this paragraph to it. "
-              "Flowing prose only, no subheadings, no bullets.</introduction>\n"
+              f"<introduction>Write a detailed introduction of exactly 800-900 words structured as thematic subheaded sections. "
+              f"Use bold subheadings for each section (no numbering). Follow this exact structure:\n"
+              f"Opening paragraph (100-120 words, NO subheading): Begin with the broad context of {self.topic} — "
+              f"describe how the subject has historically operated, its traditional form, and what has changed. "
+              f"Name specific stakeholders, geographies, or industries involved. "
+              f"If PROBLEM IDENTIFIED BY RESEARCHER is given, weave it into this paragraph as the central tension. "
+              f"End with a sentence on what this digital/legal/social transformation means for the field.\n"
+              f"Aim of the Study (60-80 words): State the precise aim of the study using 'The aim of this study is to...' — "
+              f"name what is being analysed, how outcomes are being evaluated, and what socio-economic dimensions are explored. "
+              f"If RESEARCH STATEMENT BY RESEARCHER is provided, anchor this section to it.\n"
+              f"Evolution of the Topic (130-150 words): Trace the historical development of {self.topic} — "
+              f"describe the early/pre-digital/pre-reform era, the first wave of change (name specific years, events, or technologies), "
+              f"how features or frameworks evolved over time, what accelerated adoption or change (e.g. a crisis, policy, technology), "
+              f"and where the topic stands today with current innovations or leading examples named specifically.\n"
+              f"Government Initiatives (130-150 words): Describe specific central and state government schemes, programmes, and policies "
+              f"relevant to {self.topic} — name each scheme/act/policy by its full official name, state which government introduced it, "
+              f"its objectives, and its direct impact on the subject. Include both national and regional examples. "
+              f"Mention any regulatory frameworks, institutional bodies, or partnerships involved.\n"
+              f"Factors Affecting the Topic (130-150 words): Identify and explain the key variables that modulate outcomes in {self.topic} — "
+              f"cover infrastructure, cultural, socio-economic, environmental, and policy factors. "
+              f"Name specific barriers and enablers. Explain how each factor shapes adoption, effectiveness, or impact. "
+              f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, incorporate it as one of the structural gaps identified here.\n"
+              f"Current Trends (130-150 words): Describe the present-day landscape of {self.topic} — "
+              f"name specific technologies, platforms, practices, or legal developments currently in use. "
+              f"Reference consumer or societal changes driving demand. Name real platforms, tools, certifications, or cases where relevant. "
+              f"Include emerging innovations and how they are reshaping outcomes.\n"
+              f"Comparison Between Cities/States (100-120 words): Compare adoption, impact, or implementation of {self.topic} across "
+              f"at least 4 different Indian states or cities — name each specifically. Explain why some regions lead and others lag, "
+              f"citing infrastructure, governance, culture, or economic factors. "
+              f"Write as flowing scholarly prose throughout each section. No bullet points, no numbered lists.</introduction>\n"
               "<objectives>"
-              "IMPORTANT: If OBJECTIVES DEFINED BY RESEARCHER are provided above, use them VERBATIM (copy them exactly, one per line). "
-              "Only if no objectives were provided, write 5 objectives starting with To, one per line, no numbers.</objectives>\n"
+              "IMPORTANT: If OBJECTIVES DEFINED BY RESEARCHER are provided above, use them VERBATIM (copy them exactly). "
+              "Format every objective on its own line starting with '● ' followed by 'To ...' (e.g. '● To assess the effect of...'). "
+              "Only if no objectives were provided, write 5 objectives in this same format: one per line, each starting with '● To', no numbers.</objectives>\n"
               f"<literature_review>Write a comprehensive literature review of exactly 1500-1600 words. "
               f"CRITICAL FORMATTING RULE: Every source must begin with its citation in this exact format: "
               f"(Author Lastname Year) followed immediately by the paper/book Title in plain text — then the analytical paragraph. "
@@ -1180,18 +1205,23 @@ class DocBuilder:
         section_heading('Objectives:')
         lines = [l.strip() for l in self.sections['objectives'].splitlines() if l.strip()]
         for i, line in enumerate(lines):
-            line = re.sub(r'^\d+[\.)\s]+', '', line).strip()
+            line = re.sub(r'^\d+[\.)]\s*', '', line).strip()
+            line = re.sub(r'^[●•\-]\s*', '', line).strip()
             if not line:
                 continue
             p = doc.add_paragraph()
-            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
             pf = p.paragraph_format
-            pf.space_before      = Pt(12) if i == 0 else Pt(0)
-            pf.space_after       = Pt(12) if i == len(lines)-1 else Pt(0)
+            pf.space_before      = Pt(6)
+            pf.space_after       = Pt(6)
+            pf.left_indent       = Inches(0.4)
             pf.first_line_indent = Inches(-0.25)
-            pf.left_indent       = Inches(0.25)
+            bullet_run = p.add_run('\u25cf       ')
+            bullet_run.font.size = Pt(12)
+            bullet_run.font.name = 'Times New Roman'
             r = p.add_run(line)
-            r.font.size = Pt(12); r.font.name = 'Times New Roman'
+            r.font.size = Pt(12)
+            r.font.name = 'Times New Roman'
 
         # ── LITERATURE REVIEW ─────────────────────────────────────────────────
         section_heading('Literature Review')
