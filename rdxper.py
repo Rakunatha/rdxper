@@ -595,40 +595,55 @@ class GeminiWriter:
               "Format every objective on its own line starting with '● ' followed by 'To ...' (e.g. '● To assess the effect of...'). "
               "Only if no objectives were provided, write 5 objectives in this same format: one per line, each starting with '● To', no numbers.</objectives>\n"
               f"<literature_review>Write a comprehensive literature review of exactly 1500-1600 words. "
-              f"CRITICAL FORMATTING RULE: Every source must begin with its citation in this exact format: "
-              f"(Author Lastname Year) followed immediately by the paper/book Title in plain text — then the analytical paragraph. "
-              f"Example format: \'(Prisha Jain 2024) Custodial Violence and Its Impact provides a detailed analysis of...\' "
-              f"Each source paragraph must be 90-120 words and follow this internal structure: "
-              f"(a) what the paper/study provides or examines — its core subject and scope; "
-              f"(b) the specific forms, causes, or dimensions it identifies — name them explicitly; "
-              f"(c) the legal instruments, constitutional provisions, treaties, or frameworks it analyses — cite them by full name; "
-              f"(d) landmark cases or judicial precedents it references — cite by full case name and year; "
-              f"(e) what it concludes or recommends — name specific reforms, laws, or mechanisms proposed. "
-              f"IMPORTANT: If KEY LITERATURE CITED BY RESEARCHER is provided above, those sources must appear first, "
-              f"written in this exact style using the researcher\'s own details. "
+              f"CRITICAL FORMATTING RULE: Each source entry must follow this EXACT 4-sentence structure: "
+              f"SENTENCE 1 - Citation opener: Write Lastname and Lastname (Year) or Lastname et al. (Year) "
+              f"followed in the same sentence by a past-tense verb such as investigated, examined, analyzed, explored, assessed, or evaluated, "
+              f"then the subject of study and context. "
+              f"Example: Bagchi and Sharma (2024) investigated the economic impact of mobile applications on fish marketing within coastal communities. "
+              f"SENTENCE 2 - Aim: Start with The aim was to - state the precise research objective in one sentence. "
+              f"SENTENCE 3 - Methodology: Start with The methodology - name the specific method used (e.g. mixed-methods, longitudinal study, participatory research, doctrinal analysis), "
+              f"include a specific participant count (e.g. 380 participants, 450 fishermen), geographic scope, and duration where applicable. "
+              f"SENTENCE 4 - Findings: Start with The findings - report 2-3 specific quantitative results "
+              f"with exact percentages or numbers (e.g. 34 percent average income increase, 28 percent reduction in post-harvest losses). "
+              f"End each entry with one sentence on broader implications or conclusions of the study. Total per entry: 100-120 words. "
+              f"IMPORTANT: If KEY LITERATURE CITED BY RESEARCHER is provided above, those sources appear first rewritten in this Author (Year) format. "
               f"Then add further real academic sources on {self.topic} to reach 14-16 sources total. "
-              f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, end with a synthesis paragraph (no citation header) "
-              f"that weaves together the collective gaps across all reviewed sources and uses the researcher\'s exact gap statement. "
-              f"Flowing scholarly prose throughout — no headings, no bullets, no numbered lists.</literature_review>\n"
-              f"<methodology>Write a detailed methodology section of exactly 185-200 words as 2 dense paragraphs. "
-              f"Paragraph 1: research design (mixed-methods doctrinal + empirical), sources ({n} academic papers), "
-              f"systematic legal analysis approach, case study selection rationale. "
-              f"Paragraph 2: empirical component ({nr} respondents), survey instrument design, "
-              f"sampling strategy, SPSS statistical analysis (chi-square tests, ANOVA, Pearson correlation), "
-              f"thematic coding approach and validity measures.</methodology>")
+              f"Number each entry: the first entry has no number, subsequent entries are numbered 1. 2. 3. and so on. "
+              f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, end with an unnumbered synthesis paragraph using the researcher's exact gap statement. "
+              f"No subheadings, no bullet points.</literature_review>\n"
+              f"<methodology>Write a methodology section of exactly 180-210 words as a single flowing paragraph. "
+              f"Follow this exact sentence-by-sentence structure: "
+              f"SENTENCE 1: State the research type — begin with 'The current study is based on [descriptive/analytical/empirical] research.' "
+              f"SENTENCE 2: Describe the scientific frame — 'It consists of the scientific frame of research.' "
+              f"SENTENCE 3: Explain how the study began — 'It began with the finding of research problems based on the review of literature.' "
+              f"SENTENCE 4: Describe the hypothesis and solution approach — 'It explored the problem tested with hypotheses and provided the solution from the analysis.' "
+              f"SENTENCE 5: State the sampling method — 'A convenience sampling method is used in the research.' "
+              f"SENTENCE 6: State sample size and location — 'The sample size for the study is {nr}, selected from the sampling frame of [specific location relevant to {self.topic}].' "
+              f"SENTENCE 7: Describe data collection — 'Data has been collected through field visits, with a structured questionnaire used as the primary data collection tool.' "
+              f"SENTENCE 8: Mention secondary sources — 'Secondary sources such as articles, journals, reports, and newsletters have also been considered.' "
+              f"SENTENCE 9: State the analysis tool — 'The collected data has been analyzed using SPSS version 21.' "
+              f"SENTENCE 10: State the independent variables — 'The independent variables are age, gender, educational qualifications, location, and occupation.' "
+              f"SENTENCE 11: State the dependent variable — 'The dependent variable of the study is [the primary outcome being measured, directly relevant to {self.topic}], "
+              f"reflecting changes in [livelihood/legal/economic/social] outcomes.' "
+              f"Write as one clean flowing paragraph. No bullet points, no subheadings.</methodology>")
 
         # ── CALL 2: back half ─────────────────────────────────────────────────
         p2 = (hdr +
               "Write the second half of an academic research paper using XML tags. "
               "Flowing scholarly prose only — no markdown, no bullet points.\n\n"
-              f"<results>Write a comprehensive results section of exactly 350-400 words. "
-              f"Report findings from {nr} respondents across demographic groups (age, gender, education, employment, area). "
-              f"Include specific percentages for each demographic breakdown. "
-              f"Demographics: {self.aware_pct}% aware, {self.fam_pct}% familiar with key concepts, "
-              f"{self.support_pct}% support reform. Gender split: approx 50% female, 40% male, 10% other. "
-              f"Age groups: below 18, 18-30, 31-40, 41-50, above 50. "
-              f"Report chi-square test outcomes and ANOVA findings. Cite {top_cite}. "
-              f"Write as flowing prose covering all figure and table results.</results>\n"
+              f"<results>Write a comprehensive analysis section of exactly 600-700 words. "
+              f"Structure it as one paragraph per figure, numbered Figure 1 through Figure {nfigs}. "
+              f"Each figure paragraph must follow this exact format: "
+              f"Start with 'Figure [N]' in bold (just write it as 'Figure N:' at the start of the paragraph). "
+              f"Then write 3-4 sentences: "
+              f"(1) State what the figure shows — 'The figure shows the relationship between [independent variable] and [dependent variable/outcome].' "
+              f"Use these independent variables across figures: educational qualification, age group (18-30, 31-50, 51 and above), gender (male/female), occupation (small-scale fisher, large-scale fisher, non-fisher trader), place of residence (rural, semi-urban, urban). "
+              f"Use these as dependent/outcome variables relevant to {self.topic}: primary reasons for using the platform, perception of price improvement, awareness of government programs, factors influencing adoption decision, payment timeliness ratings, belief in higher price attainment, biggest difficulties faced. "
+              f"(2) Report specific findings with percentages — name which group showed the highest response and what percentage, e.g. '{self.aware_pct}% of graduate respondents cited price as the primary reason' or '{self.fam_pct}% of male respondents agreed that prices are better.' "
+              f"(3) Contrast with another group — name a second group's response with a different percentage. "
+              f"(4) State the inference — what this pattern reveals about {self.topic}. "
+              f"Vary the independent variable across figures so that educational qualification appears in roughly Figures 1-5, age group in Figures 6, 9-10, 14, 19-20, 23, 26, gender in Figures 11-13, 15-18, occupation in Figures 21, 24-25, 27-29, and place of residence in Figures 22, 30. "
+              f"Write as flowing academic prose. No bullet points.</results>\n"
               "<discussion>Write a detailed discussion section of exactly 700-750 words. "
               "Interpret all major findings in relation to the research objectives. "
               "Discuss implications for each demographic group. "
@@ -670,27 +685,37 @@ class GeminiWriter:
               "Write two sections of an academic research paper using XML tags. "
               "Flowing scholarly prose only — no markdown, no bullet points.\n\n"
               f"<literature_review>Write a comprehensive literature review of exactly 1500-1600 words. "
-              f"CRITICAL FORMATTING RULE: Every source must begin with its citation in this exact format: "
-              f"(Author Lastname Year) followed immediately by the paper/book Title in plain text — then the analytical paragraph. "
-              f"Example format: \'(Prisha Jain 2024) Custodial Violence and Its Impact provides a detailed analysis of...\' "
-              f"Each source paragraph must be 90-120 words and follow this internal structure: "
-              f"(a) what the paper/study provides or examines — its core subject and scope; "
-              f"(b) the specific forms, causes, or dimensions it identifies — name them explicitly; "
-              f"(c) the legal instruments, constitutional provisions, treaties, or frameworks it analyses — cite them by full name; "
-              f"(d) landmark cases or judicial precedents it references — cite by full case name and year; "
-              f"(e) what it concludes or recommends — name specific reforms, laws, or mechanisms proposed. "
-              f"IMPORTANT: If KEY LITERATURE CITED BY RESEARCHER is provided above, those sources must appear first, "
-              f"written in this exact style using the researcher\'s own details. "
+              f"CRITICAL FORMATTING RULE: Each source entry must follow this EXACT 4-sentence structure: "
+              f"SENTENCE 1 - Citation opener: Write Lastname and Lastname (Year) or Lastname et al. (Year) "
+              f"followed in the same sentence by a past-tense verb such as investigated, examined, analyzed, explored, assessed, or evaluated, "
+              f"then the subject of study and context. "
+              f"Example: Bagchi and Sharma (2024) investigated the economic impact of mobile applications on fish marketing within coastal communities. "
+              f"SENTENCE 2 - Aim: Start with The aim was to - state the precise research objective in one sentence. "
+              f"SENTENCE 3 - Methodology: Start with The methodology - name the specific method used (e.g. mixed-methods, longitudinal study, participatory research, doctrinal analysis), "
+              f"include a specific participant count (e.g. 380 participants, 450 fishermen), geographic scope, and duration where applicable. "
+              f"SENTENCE 4 - Findings: Start with The findings - report 2-3 specific quantitative results "
+              f"with exact percentages or numbers (e.g. 34 percent average income increase, 28 percent reduction in post-harvest losses). "
+              f"End each entry with one sentence on broader implications or conclusions of the study. Total per entry: 100-120 words. "
+              f"IMPORTANT: If KEY LITERATURE CITED BY RESEARCHER is provided above, those sources appear first rewritten in this Author (Year) format. "
               f"Then add further real academic sources on {self.topic} to reach 14-16 sources total. "
-              f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, end with a synthesis paragraph (no citation header) "
-              f"that weaves together the collective gaps across all reviewed sources and uses the researcher\'s exact gap statement. "
-              f"Flowing scholarly prose throughout — no headings, no bullets, no numbered lists.</literature_review>\n"
-              f"<methodology>Write a detailed methodology section of exactly 185-200 words as 2 dense paragraphs. "
-              f"Paragraph 1: research design (mixed-methods doctrinal + empirical), sources ({n} academic papers), "
-              f"systematic legal analysis approach, case study selection rationale. "
-              f"Paragraph 2: empirical component ({nr} respondents), survey instrument design, "
-              f"sampling strategy, SPSS statistical analysis (chi-square tests, ANOVA, Pearson correlation), "
-              f"thematic coding approach and validity measures.</methodology>")
+              f"Number each entry: the first entry has no number, subsequent entries are numbered 1. 2. 3. and so on. "
+              f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, end with an unnumbered synthesis paragraph using the researcher's exact gap statement. "
+              f"No subheadings, no bullet points.</literature_review>\n"
+              f"<methodology>Write a methodology section of exactly 180-210 words as a single flowing paragraph. "
+              f"Follow this exact sentence-by-sentence structure: "
+              f"SENTENCE 1: State the research type — begin with 'The current study is based on [descriptive/analytical/empirical] research.' "
+              f"SENTENCE 2: Describe the scientific frame — 'It consists of the scientific frame of research.' "
+              f"SENTENCE 3: Explain how the study began — 'It began with the finding of research problems based on the review of literature.' "
+              f"SENTENCE 4: Describe the hypothesis and solution approach — 'It explored the problem tested with hypotheses and provided the solution from the analysis.' "
+              f"SENTENCE 5: State the sampling method — 'A convenience sampling method is used in the research.' "
+              f"SENTENCE 6: State sample size and location — 'The sample size for the study is {nr}, selected from the sampling frame of [specific location relevant to {self.topic}].' "
+              f"SENTENCE 7: Describe data collection — 'Data has been collected through field visits, with a structured questionnaire used as the primary data collection tool.' "
+              f"SENTENCE 8: Mention secondary sources — 'Secondary sources such as articles, journals, reports, and newsletters have also been considered.' "
+              f"SENTENCE 9: State the analysis tool — 'The collected data has been analyzed using SPSS version 21.' "
+              f"SENTENCE 10: State the independent variables — 'The independent variables are age, gender, educational qualifications, location, and occupation.' "
+              f"SENTENCE 11: State the dependent variable — 'The dependent variable of the study is [the primary outcome being measured, directly relevant to {self.topic}], "
+              f"reflecting changes in [livelihood/legal/economic/social] outcomes.' "
+              f"Write as one clean flowing paragraph. No bullet points, no subheadings.</methodology>")
 
         def prog1(pct, msg):
             if progress_cb: progress_cb(max(30, min(45, 30 + int((pct-30)/45*15))), msg)
@@ -778,9 +803,10 @@ class GeminiWriter:
                         continue
                     vals = rv(cats)
                     if chart_type == 'bar':
+                        legend_text = f'A figure shows the relationship between {title.split(" by ")[-1] if " by " in title else "demographic group"} and {title.split(" by ")[0] if " by " in title else title} ({", ".join(cats)}).'
                         specs.append({'type':'bar','title':title,'cats':cats,'vals':vals,
                                       'color':C[len(specs)%len(C)],
-                                      'legend':f'{title}.',
+                                      'legend': legend_text,
                                       'interp':f'Distribution across {len(cats)} response categories.'})
                     else:
                         specs.append({'type':'pie','title':title,'labels':cats,'vals':vals,
@@ -1265,42 +1291,68 @@ class DocBuilder:
         r_an = an_hd.add_run('Analysis - 1')
         r_an.bold = True; r_an.font.size = Pt(12); r_an.font.name = 'Times New Roman'
 
+        # Parse results section into per-figure analysis paragraphs
+        results_text = self.sections.get('results', '')
+        import re as _re
+        fig_analyses = {}
+        # Split on "Figure N:" or "Figure N " patterns
+        fig_blocks = _re.split(r'(?i)(?:^|\n)\s*Figure\s+(\d+)\s*[:\-]?\s*', results_text)
+        if len(fig_blocks) > 1:
+            for idx in range(1, len(fig_blocks), 2):
+                fig_num = int(fig_blocks[idx])
+                fig_text = fig_blocks[idx + 1].strip() if idx + 1 < len(fig_blocks) else ''
+                if fig_text:
+                    fig_analyses[fig_num] = fig_text
+
         for i, (spec, buf) in enumerate(zip(self.specs, self.charts), 1):
             buf.seek(0)
             # Chart image centered
             img_p = doc.add_paragraph()
             img_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             img_p.paragraph_format.space_before = Pt(12)
-            img_p.paragraph_format.space_after  = Pt(12)
+            img_p.paragraph_format.space_after  = Pt(6)
             img_p.add_run().add_picture(buf, width=Inches(5.5))
 
             # FIGURE N label
             fig_p = doc.add_paragraph()
             fig_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
             pf_fig = fig_p.paragraph_format
-            pf_fig.space_before = Pt(12); pf_fig.space_after = Pt(12)
-            r_fig = fig_p.add_run(f'FIGURE {i}')
+            pf_fig.space_before = Pt(6); pf_fig.space_after = Pt(4)
+            r_fig = fig_p.add_run(f'Figure {i}')
             r_fig.bold = True; r_fig.font.size = Pt(12); r_fig.font.name = 'Times New Roman'
 
             # LEGEND line
             leg_p = doc.add_paragraph()
             leg_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
             pf_leg = leg_p.paragraph_format
-            pf_leg.space_before = Pt(12); pf_leg.space_after = Pt(12)
-            r_leg = leg_p.add_run(f'LEGEND : {spec["legend"]}')
-            r_leg.bold = True; r_leg.font.size = Pt(12); r_leg.font.name = 'Times New Roman'
+            pf_leg.space_before = Pt(4); pf_leg.space_after = Pt(6)
+            r_leg_lbl = leg_p.add_run('Legend: ')
+            r_leg_lbl.bold = True; r_leg_lbl.font.size = Pt(12); r_leg_lbl.font.name = 'Times New Roman'
+            r_leg_txt = leg_p.add_run(spec["legend"])
+            r_leg_txt.bold = False; r_leg_txt.font.size = Pt(12); r_leg_txt.font.name = 'Times New Roman'
+
+            # Analysis paragraph for this figure
+            analysis_text = fig_analyses.get(i, spec.get('interp', ''))
+            if analysis_text:
+                ana_p = doc.add_paragraph()
+                ana_p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+                pf_ana = ana_p.paragraph_format
+                pf_ana.space_before = Pt(6); pf_ana.space_after = Pt(12)
+                pf_ana.first_line_indent = Inches(0.5)
+                r_ana = ana_p.add_run(analysis_text)
+                r_ana.font.size = Pt(12); r_ana.font.name = 'Times New Roman'
 
         # ── CHI-SQUARE / STATS TABLES ─────────────────────────────────────────
         rng = random.Random(self.writer.seed)
         n   = self.writer.n_respondents
 
-        # Build chi-square table rows (sample has TABLE 1...TABLE N pattern)
+        # Build chi-square table rows
         chi_vars = [
-            ('age',                'victims found under armed conflict'),
-            ('gender',             'armed conflict and other organised phenomena'),
-            ('education',          'armed conflict and other organised phenomena'),
-            ('employment status',  'armed conflict and other organised phenomena'),
-            ('area',               'during the Russian federation attack'),
+            ('age',                f'adoption of digital platforms for {self.writer.topic[:40]}'),
+            ('gender',             f'perception of income improvement through {self.writer.topic[:40]}'),
+            ('education',          f'awareness of government support programs for {self.writer.topic[:40]}'),
+            ('employment status',  f'challenges faced in using e-commerce for {self.writer.topic[:40]}'),
+            ('area',               f'overall satisfaction with {self.writer.topic[:40]}'),
         ]
 
         for ti, (var1, var2) in enumerate(chi_vars, 1):
