@@ -1607,6 +1607,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
     <div class="cs">Use your Google account — no password needed</div>
     <div id="n-login" class="notif"></div>
     <div id="g-btn-wrap" style="display:flex;justify-content:center;min-height:44px;align-items:center"></div>
+    <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);text-align:center;font-size:12px;color:var(--dim);letter-spacing:0.5px">An Interactive Lawyers Tool</div>
   </div>
 </div>
 
