@@ -1652,6 +1652,10 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 <div class="screen" id="s-gen">
 <div style="padding-top:28px;max-width:700px;margin:0 auto">
 
+<div style="margin-bottom:16px">
+  <button class="btn btn-s" style="width:auto;padding:8px 16px;font-size:12px" onclick="loadDashboard();show('s-dashboard')">← Dashboard</button>
+</div>
+
 <!-- Step indicator -->
 <div class="q-steps" id="q-steps">
   <div class="q-step active" id="qs-0" onclick="goStep(0)"><span class="q-num">1</span><span class="q-lbl">Problem</span></div>
@@ -1846,7 +1850,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
       <table><thead><tr><th>Topic</th><th>Date</th><th>Status</th></tr></thead>
       <tbody id="prof-papers-list"><tr><td colspan="3" class="empty">Loading...</td></tr></tbody></table>
     </div>
-    <button class="btn btn-s" onclick="show('s-gen')" style="max-width:180px">← Back</button>
+    <button class="btn btn-s" onclick="loadDashboard();show('s-dashboard')" style="max-width:180px">← Back</button>
   </div>
 </div>
 
@@ -1878,11 +1882,11 @@ textarea::placeholder{color:var(--dim);font-size:12px}
       <div class="table-wrap"><table><thead><tr><th>User</th><th>Amount</th><th>Payment ID</th><th>Date</th><th>Status</th></tr></thead>
       <tbody id="adm-payments-list"></tbody></table></div>
     </div>
-    <button class="btn btn-s" onclick="show('s-gen')" style="max-width:180px;margin-top:12px">← Back</button>
+    <button class="btn btn-s" onclick="loadDashboard();show('s-dashboard')" style="max-width:180px;margin-top:12px">← Back</button>
   </div>
 </div>
 
-<footer>rdxper v4.0 ·</footer>
+<footer>A Interactive Lawyers Tool</footer>
 </div>
 
 <script>
