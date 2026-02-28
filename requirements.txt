@@ -3,3 +3,4 @@ python-docx
 matplotlib
 numpy
 requests
+gunicorn
