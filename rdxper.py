@@ -86,33 +86,44 @@ init_db()
 def session_set(token: str, email: str):
     """Persist a session token to the DB and keep in-memory cache."""
     sessions[token] = {'email': email}
-    with get_db() as db:
-        db.execute('INSERT OR REPLACE INTO sessions (token, email) VALUES (?, ?)', (token, email))
+    try:
+        with get_db() as db:
+            db.execute('INSERT OR REPLACE INTO sessions (token, email) VALUES (?, ?)', (token, email))
+    except Exception as e:
+        print(f'[session_set] DB error: {e}')
 
 
 def session_get(token: str) -> dict | None:
     """Return session dict from memory, falling back to DB (handles restarts)."""
+    if not token:
+        return None
     if token in sessions:
         return sessions[token]
-    with get_db() as db:
-        row = db.execute('SELECT email FROM sessions WHERE token=?', (token,)).fetchone()
-        if row:
-            email = row['email']
-            user = db.execute('SELECT id, name, picture FROM users WHERE email=?', (email,)).fetchone()
-            sessions[token] = {
-                'email': email,
-                'user_id': user['id'] if user else email,
-                'name': user['name'] if user else '',
-                'picture': user['picture'] if user else '',
-            }
-            return sessions[token]
+    try:
+        with get_db() as db:
+            row = db.execute('SELECT email FROM sessions WHERE token=?', (token,)).fetchone()
+            if row:
+                email = row['email']
+                user = db.execute('SELECT id, name, picture FROM users WHERE email=?', (email,)).fetchone()
+                sessions[token] = {
+                    'email': email,
+                    'user_id': user['id'] if user else email,
+                    'name': user['name'] if user else '',
+                    'picture': user['picture'] if user else '',
+                }
+                return sessions[token]
+    except Exception as e:
+        print(f'[session_get] DB error: {e}')
     return None
 
 
 def session_delete(token: str):
     sessions.pop(token, None)
-    with get_db() as db:
-        db.execute('DELETE FROM sessions WHERE token=?', (token,))
+    try:
+        with get_db() as db:
+            db.execute('DELETE FROM sessions WHERE token=?', (token,))
+    except Exception as e:
+        print(f'[session_delete] DB error: {e}')
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1886,11 +1897,20 @@ const ADMIN_EM='__ADMIN_EMAIL__';
 const G_CLIENT='__GOOGLE_CLIENT_ID__';
 
 // Restore session
-(function(){
+(async function(){
   try{
     const t=localStorage.getItem('rx_tok'),e=localStorage.getItem('rx_em'),
           n=localStorage.getItem('rx_nm'),p=localStorage.getItem('rx_pic');
-    if(t&&e){token=t;userEmail=e;userName=n||'';userPicture=p||'';onLoggedIn();}
+    if(t&&e){
+      // Validate token is still alive on the server before showing dashboard
+      const r=await fetch('/api/profile',{headers:{'Authorization':'Bearer '+t}});
+      if(r.ok){
+        token=t;userEmail=e;userName=n||'';userPicture=p||'';onLoggedIn();
+      } else {
+        // Token expired or server restarted — clear stale data
+        ['rx_tok','rx_em','rx_nm','rx_pic'].forEach(k=>localStorage.removeItem(k));
+      }
+    }
   }catch(e){}
 })();
 
@@ -1973,6 +1993,7 @@ async function loadDashboard(){
   if(nameEl) nameEl.innerHTML=(userName||userEmail.split('@')[0]).split(' ')[0]+'<span>.</span>';
   try{
     const r=await fetch('/api/profile',{headers:{'Authorization':'Bearer '+token}});
+    if(r.status===401){forceLogout();return;}
     const d=await r.json();
     if(!d.success) return;
     const papers=d.papers||[];
@@ -1994,6 +2015,15 @@ async function loadDashboard(){
         </div>`).join('')+'</div>';
     }
   }catch(e){console.error('Dashboard load error',e);}
+}
+
+function forceLogout(){
+  token='';userEmail='';userName='';userPicture='';
+  try{['rx_tok','rx_em','rx_nm','rx_pic'].forEach(k=>localStorage.removeItem(k));}catch(e){}
+  document.getElementById('nav-auth').style.display='none';
+  document.getElementById('admin-link').style.display='none';
+  try{google.accounts.id.disableAutoSelect();}catch(e){}
+  show('s-home');
 }
 
 function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
@@ -2108,6 +2138,7 @@ async function generate(){
         q_objectives:qObjectives, q_statement:qStatement
       })});
     const d=await r.json();
+    if(r.status===401){btn.disabled=false;btn.innerHTML='Generate Research Paper';forceLogout();return;}
     if(!d.success){notify('n-gen',d.message||'Failed.','error');btn.disabled=false;btn.innerHTML='Generate Research Paper';return;}
     jobId=d.job_id;curTopic=topic;curFigs=nfigs;
     document.getElementById('prog-topic').textContent=topic;
