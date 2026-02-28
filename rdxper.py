@@ -1549,6 +1549,32 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 .q-summary-val{color:var(--text);line-height:1.5;max-height:60px;overflow:hidden;text-overflow:ellipsis}
 @media(max-width:600px){.q-lbl{display:none}.q-steps{gap:0}.q-step{min-width:36px}}
 @media(max-width:600px){.sections-grid{grid-template-columns:repeat(3,1fr)}.stat-grid{grid-template-columns:repeat(2,1fr)}.nav-links{gap:4px}}
+/* ── Dashboard ── */
+.dash-header{padding:36px 0 8px}
+.dash-greeting{font-size:13px;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;font-family:Consolas,monospace;margin-bottom:6px}
+.dash-title{font-size:30px;font-weight:900;letter-spacing:-1px}
+.dash-title span{color:var(--accent)}
+.dash-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 20px;text-align:center;border:2px dashed var(--border);border-radius:16px;margin:28px 0}
+.dash-empty-icon{font-size:48px;margin-bottom:16px;opacity:.4}
+.dash-empty-txt{font-size:16px;font-weight:600;color:var(--muted);margin-bottom:6px}
+.dash-empty-sub{font-size:13px;color:var(--dim)}
+.papers-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin:24px 0}
+.paper-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;cursor:default;transition:border-color .2s,transform .15s;position:relative;overflow:hidden}
+.paper-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--accent),#00ccff);opacity:0;transition:opacity .2s}
+.paper-card:hover{border-color:rgba(0,255,136,.25);transform:translateY(-2px)}
+.paper-card:hover::before{opacity:1}
+.paper-card-topic{font-size:14px;font-weight:700;color:var(--text);line-height:1.4;margin-bottom:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.paper-card-meta{display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--dim)}
+.paper-card-date{font-family:Consolas,monospace}
+.paper-card-badge{padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:.3px}
+.badge-done{background:rgba(0,255,136,.1);color:var(--accent);border:1px solid rgba(0,255,136,.25)}
+.badge-pending{background:rgba(255,193,7,.1);color:#ffc107;border:1px solid rgba(255,193,7,.25)}
+.fab{position:fixed;bottom:32px;right:32px;width:58px;height:58px;border-radius:50%;background:linear-gradient(135deg,var(--accent),#00ccaa);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(0,255,136,.35);transition:transform .2s,box-shadow .2s;z-index:100}
+.fab:hover{transform:scale(1.1) translateY(-2px);box-shadow:0 14px 36px rgba(0,255,136,.45)}
+.fab svg{width:24px;height:24px;stroke:#000;stroke-width:2.5;stroke-linecap:round}
+.fab-tooltip{position:fixed;bottom:44px;right:100px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:7px 12px;font-size:12px;color:var(--text);white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .2s;z-index:99}
+.fab:hover ~ .fab-tooltip{opacity:1}
+@media(max-width:600px){.fab{bottom:24px;right:20px}.papers-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -1584,6 +1610,44 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   </div>
 </div>
 
+<!-- DASHBOARD -->
+<div class="screen" id="s-dashboard">
+  <div class="dash-header">
+    <div class="dash-greeting">Welcome back</div>
+    <div class="dash-title" id="dash-name-title">Researcher</div>
+  </div>
+
+  <div class="stat-grid" style="margin-top:24px">
+    <div class="stat-card">
+      <div class="stat-val" id="dash-total">0</div>
+      <div class="stat-lbl">Papers Generated</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-val" id="dash-downloaded">0</div>
+      <div class="stat-lbl">Downloaded</div>
+    </div>
+  </div>
+
+  <div style="display:flex;align-items:center;justify-content:space-between;margin:28px 0 8px">
+    <div style="font-size:16px;font-weight:700">Your Research Papers</div>
+    <button class="nav-btn" onclick="loadDashboard()" style="font-size:11px">↻ Refresh</button>
+  </div>
+
+  <div id="dash-papers-wrap">
+    <div class="dash-empty">
+      <div class="dash-empty-icon">📄</div>
+      <div class="dash-empty-txt">No papers yet</div>
+      <div class="dash-empty-sub">Press <strong style="color:var(--accent)">+</strong> below to generate your first research paper</div>
+    </div>
+  </div>
+
+  <!-- Floating Action Button -->
+  <button class="fab" onclick="startNewPaper()" title="New Research Paper">
+    <svg viewBox="0 0 24 24" fill="none"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+  </button>
+  <div class="fab-tooltip">New Research Paper</div>
+</div>
+
 <!-- GENERATE — 5-Step Questionnaire -->
 <div class="screen" id="s-gen">
 <div style="padding-top:28px;max-width:700px;margin:0 auto">
@@ -1608,7 +1672,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   <div class="q-badge">Step 1 of 6</div>
   <div class="ct" style="margin-bottom:6px">Identification of the Problem</div>
   <div class="cs" style="margin-bottom:20px">What specific problem prompted this research? Describe it in your own words, AI will use this as the foundation. <strong style="color:var(--accent)">Optional — skip if you prefer AI to write this.</strong></div>
-  <div class="q-hint">Think about: What is wrong or missing? Who is affected? What is the scale of the problem? What are the consequences of not addressing it?</div>
+  <div class="q-hint">💡 Think about: What is wrong or missing? Who is affected? What is the scale of the problem? What are the consequences of not addressing it?</div>
   <div class="fg">
     <label>Research Topic / Title *</label>
     <input type="text" id="topic-in" placeholder="e.g. Legal Frameworks for Environmental Restoration in Post-War Reconstruction">
@@ -1630,7 +1694,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   <div class="q-badge">Step 2 of 6</div>
   <div class="ct" style="margin-bottom:6px">Literature Review</div>
   <div class="cs" style="margin-bottom:20px">What sources have you reviewed? List them and AI will expand into a full literature review. <strong style="color:var(--accent)">Optional — AI will find real papers automatically if you skip.</strong></div>
-  <div class="q-hint">Include: Author names and years, key arguments, relevant reports, laws, treaties, court cases, or books. Even brief notes are fine — AI will elaborate.</div>
+  <div class="q-hint">💡 Include: Author names and years, key arguments, relevant reports, laws, treaties, court cases, or books. Even brief notes are fine — AI will elaborate.</div>
   <div class="fg">
     <label>Key Sources & Their Main Arguments *</label>
     <textarea id="q-lit" rows="8" placeholder="List the sources you have reviewed and what they say. Examples:&#10;&#10;- Geneva Conventions (1949) & Additional Protocol I (1977) — establish basic environmental protections during armed conflict but lack post-war restoration obligations&#10;- UNEP (2009) From Conflict to Peacebuilding — documents how environmental damage sustains conflict cycles&#10;- Bothe, Bruch & Jensen (2010) — argue existing IHL is inadequate for modern environmental warfare&#10;- Rome Statute Art. 8 — criminalises widespread environmental damage but enforcement is rare&#10;- UN Compensation Commission (Kuwait, 1991) — first successful precedent for war environmental claims..."></textarea>
@@ -1647,7 +1711,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   <div class="q-badge">Step 3 of 6</div>
   <div class="ct" style="margin-bottom:6px">Research Gap</div>
   <div class="cs" style="margin-bottom:20px">What is missing from existing research? AI will use your answer as the gap statement. <strong style="color:var(--accent)">Optional — AI will identify a gap automatically if you skip.</strong></div>
-  <div class="q-hint">Ask yourself: What do existing studies not cover? What contradictions exist in the literature? What context or population has been ignored? What methodology hasn't been applied?</div>
+  <div class="q-hint">💡 Ask yourself: What do existing studies not cover? What contradictions exist in the literature? What context or population has been ignored? What methodology hasn't been applied?</div>
   <div class="fg">
     <label>The Research Gap <span style="color:var(--dim);font-weight:400">(optional)</span></label>
     <textarea id="q-gap" rows="5" placeholder="Describe what is missing from current research and why your study is needed.&#10;&#10;Example: While significant scholarship exists on environmental protection during armed conflict, there is a critical gap in research on post-war environmental restoration obligations. Existing studies either focus on pre-conflict prevention or general humanitarian law without addressing the specific legal mechanisms required for ecological recovery. Furthermore, no comparative study has examined how different post-conflict nations (Iraq, Kosovo, Lebanon, Ukraine) have implemented or failed to implement environmental restoration under international law..."></textarea>
@@ -1664,7 +1728,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   <div class="q-badge">Step 4 of 6</div>
   <div class="ct" style="margin-bottom:6px">Objectives of the Research</div>
   <div class="cs" style="margin-bottom:20px">List your research objectives — they will appear verbatim in your paper. <strong style="color:var(--accent)">Optional — AI will generate objectives aligned to your topic if you skip.</strong></div>
-  <div class="q-hint">Good objectives: Start with "To examine / To analyse / To evaluate / To compare / To propose". Be specific. You need 4–6 objectives. One per line.</div>
+  <div class="q-hint">💡 Good objectives: Start with "To examine / To analyse / To evaluate / To compare / To propose". Be specific. You need 4–6 objectives. One per line.</div>
   <div class="fg">
     <label>Research Objectives <span style="color:var(--dim);font-weight:400">(optional — one per line)</span></label>
     <textarea id="q-objectives" rows="7" placeholder="To examine the existing international legal frameworks governing environmental restoration in post-war reconstruction&#10;To analyse compensation mechanisms including liability determination, reparations, and restoration funding&#10;To evaluate practical challenges such as political instability, limited resources, and technical capacity gaps&#10;To compare legal approaches from different post-conflict contexts including Iraq, Kosovo, Lebanon, and Ukraine&#10;To propose recommendations for strengthening enforcement mechanisms and legal accountability for wartime environmental harm"></textarea>
@@ -1681,7 +1745,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   <div class="q-badge">Step 5 of 6</div>
   <div class="ct" style="margin-bottom:6px">Research Statement</div>
   <div class="cs" style="margin-bottom:20px">Your thesis in 2–4 sentences — what this research does, how, and why. <strong style="color:var(--accent)">Optional — AI will formulate a research statement if you skip.</strong></div>
-  <div class="q-hint">A good research statement: Names the topic, identifies the method (doctrinal/empirical/comparative), and states the significance. Typically 2–4 sentences.</div>
+  <div class="q-hint">💡 A good research statement: Names the topic, identifies the method (doctrinal/empirical/comparative), and states the significance. Typically 2–4 sentences.</div>
   <div class="fg">
     <label>Research Statement <span style="color:var(--dim);font-weight:400">(optional)</span></label>
     <textarea id="q-statement" rows="5" placeholder="This study investigates the legal frameworks governing environmental restoration in post-war reconstruction, focusing on obligations, compensation mechanisms, and practical implementation challenges. Through a comparative doctrinal analysis of international instruments and empirical case studies from four post-conflict regions, this research identifies critical gaps in existing law and proposes actionable reforms to strengthen ecological restoration as an integral component of sustainable peace-building."></textarea>
@@ -1755,6 +1819,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
       </div>
       <button class="btn btn-dl" id="btn-dl" onclick="download()">⬇ Download Research Paper (.docx)</button>
       <button class="btn btn-s" onclick="again()" style="margin-top:8px">Generate another paper</button>
+      <button class="btn btn-s" onclick="loadDashboard();show('s-dashboard')" style="margin-top:6px;opacity:.7">← Back to Dashboard</button>
     </div>
   </div>
 </div>
@@ -1817,7 +1882,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   </div>
 </div>
 
-<footer>A Interative Lawyers Tool.</footer>
+<footer>rdxper v4.0 ·</footer>
 </div>
 
 <script>
@@ -1905,6 +1970,50 @@ function onLoggedIn(){
   if(userEmail===ADMIN_EM) document.getElementById('admin-link').style.display='block';
   const aIn=document.getElementById('author-in');
   if(aIn&&!aIn.value) aIn.value=userName||'';
+  loadDashboard();
+  show('s-dashboard');
+}
+
+async function loadDashboard(){
+  const nameEl=document.getElementById('dash-name-title');
+  if(nameEl) nameEl.innerHTML=(userName||userEmail.split('@')[0]).split(' ')[0]+'<span>.</span>';
+  try{
+    const r=await fetch('/api/profile',{headers:{'Authorization':'Bearer '+token}});
+    const d=await r.json();
+    if(!d.success) return;
+    const papers=d.papers||[];
+    document.getElementById('dash-total').textContent=papers.length;
+    document.getElementById('dash-downloaded').textContent=papers.filter(p=>p.paid).length;
+    const wrap=document.getElementById('dash-papers-wrap');
+    if(papers.length===0){
+      wrap.innerHTML=`<div class="dash-empty">
+        <div class="dash-empty-icon">📄</div>
+        <div class="dash-empty-txt">No papers yet</div>
+        <div class="dash-empty-sub">Press <strong style="color:var(--accent)">+</strong> below to generate your first research paper</div>
+      </div>`;
+    } else {
+      wrap.innerHTML='<div class="papers-grid">'+papers.map(p=>`
+        <div class="paper-card">
+          <div class="paper-card-topic">${escHtml(p.topic||'Untitled')}</div>
+          <div class="paper-card-meta">
+            <span class="paper-card-date">${(p.created_at||'').slice(0,10)}</span>
+            <span class="paper-card-badge ${p.file_path?'badge-done':'badge-pending'}">${p.file_path?'✓ Done':'Pending'}</span>
+          </div>
+        </div>`).join('')+'</div>';
+    }
+  }catch(e){console.error('Dashboard load error',e);}
+}
+
+function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+function startNewPaper(){
+  // Reset questionnaire state then navigate
+  ['topic-in','inst-in','q-problem','q-lit','q-gap','q-objectives','q-statement'].forEach(id=>{
+    const el=document.getElementById(id);if(el) el.value='';
+  });
+  const aIn=document.getElementById('author-in');
+  if(aIn) aIn.value=userName||'';
+  goStep(0);
   show('s-gen');
 }
 
@@ -2071,7 +2180,8 @@ function again(){
   if(btn){btn.disabled=false;btn.innerHTML='✦ Generate Research Paper';}
   document.getElementById('n-gen').classList.remove('show');
   currentStep=0;renderStep();
-  show('s-gen');
+  loadDashboard();
+  show('s-dashboard');
 }
 
 async function showProfile(){
@@ -2479,4 +2589,3 @@ if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     host = "0.0.0.0" if os.environ.get("FLY_APP_NAME") or os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RENDER") or os.environ.get("SPACE_ID") else "127.0.0.1"
     app.run(host=host, port=port, debug=False, threaded=True)
-
