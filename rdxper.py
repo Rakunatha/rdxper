@@ -1062,8 +1062,7 @@ class DocBuilder:
     def build(self) -> Document:
         doc = Document()
 
-        # ── PAGE SETUP: A4, 1" all margins ───────────────────────────────────
-        from docx.shared import Cm
+        # ── PAGE SETUP: A4, 1" margins ────────────────────────────────────────
         for sec in doc.sections:
             sec.page_width    = Inches(8.27)
             sec.page_height   = Inches(11.69)
@@ -1073,163 +1072,122 @@ class DocBuilder:
             sec.right_margin  = Inches(1)
 
         # ── HELPERS ───────────────────────────────────────────────────────────
-        def add_para(text='', align=WD_ALIGN_PARAGRAPH.LEFT,
-                     bold=False, italic=False, sz=12,
-                     space_before=None, space_after=None,
-                     first_indent=None, left_indent=None,
-                     font_name='Times New Roman', color=None):
-            p = doc.add_paragraph()
-            p.alignment = align
-            pf = p.paragraph_format
-            pf.space_before = Pt(space_before) if space_before is not None else None
-            pf.space_after  = Pt(space_after)  if space_after  is not None else None
-            if first_indent is not None:
-                pf.first_line_indent = Inches(first_indent)
-            if left_indent is not None:
-                pf.left_indent = Inches(left_indent)
-            if text:
-                r = p.add_run(text)
-                r.bold       = bold
-                r.italic     = italic
-                r.font.size  = Pt(sz)
-                r.font.name  = font_name
-                if color:
-                    r.font.color.rgb = RGBColor(
-                        int(color[0:2],16), int(color[2:4],16), int(color[4:6],16))
-            return p
+        TNR = 'Times New Roman'
 
-        def section_heading(text):
-            """Bold, justified, 12pt Times New Roman, space 12pt before/after"""
-            p = doc.add_paragraph()
-            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            pf = p.paragraph_format
-            pf.space_before = Pt(12)
-            pf.space_after  = Pt(12)
-            r = p.add_run(text)
-            r.bold      = True
-            r.font.size = Pt(12)
-            r.font.name = 'Times New Roman'
-            return p
-
-        def body_para(text, space_before=12, space_after=12,
-                      align=WD_ALIGN_PARAGRAPH.JUSTIFY,
-                      first_indent=None):
-            p = doc.add_paragraph()
-            p.alignment = align
-            pf = p.paragraph_format
-            pf.space_before = Pt(space_before)
-            pf.space_after  = Pt(space_after)
-            if first_indent is not None:
-                pf.first_line_indent = Inches(first_indent)
-            r = p.add_run(text)
-            r.font.size = Pt(12)
-            r.font.name = 'Times New Roman'
-            return p
-
-        def ref_para(text, space_before=0, space_after=0):
-            p = doc.add_paragraph()
-            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            pf = p.paragraph_format
-            pf.space_before      = Pt(space_before)
-            pf.space_after       = Pt(space_after)
-            pf.first_line_indent = Inches(-0.25)
-            pf.left_indent       = Inches(0.25)
-            r = p.add_run(text)
-            r.font.size = Pt(12)
-            r.font.name = 'Times New Roman'
-            return p
-
-        def blank():
+        def p_blank():
             p = doc.add_paragraph()
             p.paragraph_format.space_before = Pt(0)
             p.paragraph_format.space_after  = Pt(0)
             return p
 
-        def figure_label(num, legend_text):
-            """FIGURE N label bold centered, then LEGEND bold centered"""
+        def p_text(text, bold=False, sz=12, align=WD_ALIGN_PARAGRAPH.CENTER,
+                   sp_b=0, sp_a=0, indent=None, left=None):
             p = doc.add_paragraph()
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p.alignment = align
             pf = p.paragraph_format
-            pf.space_before = Pt(12)
-            pf.space_after  = Pt(12)
-            r = p.add_run(f'FIGURE {num}')
-            r.bold = True; r.font.size = Pt(12); r.font.name = 'Times New Roman'
+            pf.space_before = Pt(sp_b)
+            pf.space_after  = Pt(sp_a)
+            if indent is not None:
+                pf.first_line_indent = Inches(indent)
+            if left is not None:
+                pf.left_indent = Inches(left)
+            r = p.add_run(text)
+            r.bold = bold
+            r.font.size = Pt(sz)
+            r.font.name = TNR
+            return p
 
-            leg = doc.add_paragraph()
-            leg.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            pf2 = leg.paragraph_format
-            pf2.space_before = Pt(12); pf2.space_after = Pt(12)
-            rl = leg.add_run(f'LEGEND : {legend_text}')
-            rl.bold = True; rl.font.size = Pt(12); rl.font.name = 'Times New Roman'
+        def sec_head(text, sz=12, sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY):
+            """All-caps bold section heading matching sample exactly"""
+            p = doc.add_paragraph()
+            p.alignment = align
+            pf = p.paragraph_format
+            pf.space_before = Pt(sp_b)
+            pf.space_after  = Pt(sp_a)
+            r = p.add_run(text)
+            r.bold = True
+            r.font.size = Pt(sz)
+            r.font.name = TNR
+            return p
 
-        # ── TITLE PAGE ────────────────────────────────────────────────────────
-        # Title - centered, bold, 12pt TNR
-        t = add_para(self.topic.upper(),
-                     align=WD_ALIGN_PARAGRAPH.CENTER,
-                     bold=True, sz=12, font_name='Times New Roman')
+        def body(text, sp_b=0, sp_a=0, align=WD_ALIGN_PARAGRAPH.JUSTIFY,
+                 bold=False, indent=None, left=None):
+            p = doc.add_paragraph()
+            p.alignment = align
+            pf = p.paragraph_format
+            pf.space_before = Pt(sp_b)
+            pf.space_after  = Pt(sp_a)
+            if indent is not None:
+                pf.first_line_indent = Inches(indent)
+            if left is not None:
+                pf.left_indent = Inches(left)
+            r = p.add_run(text)
+            r.bold = bold
+            r.font.size = Pt(12)
+            r.font.name = TNR
+            return p
 
-        blank()
-        blank()
+        # ── TITLE PAGE (page 1) ───────────────────────────────────────────────
+        # Title: centered, bold, 12pt
+        p_text(self.topic.upper(), bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
+        p_blank()
+        p_blank()
 
-        # AUTHOR block
-        add_para('AUTHOR',
-                 align=WD_ALIGN_PARAGRAPH.CENTER,
-                 bold=True, sz=12, font_name='Times New Roman')
-        add_para(self.author,
-                 align=WD_ALIGN_PARAGRAPH.CENTER,
-                 sz=12, font_name='Times New Roman')
+        # AUTHOR label + name + roll/year/institution/contact
+        p_text('AUTHOR', bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
+        p_text(self.author, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
         if self.inst:
-            add_para(self.inst,
-                     align=WD_ALIGN_PARAGRAPH.CENTER,
-                     sz=12, font_name='Times New Roman')
+            p_text(self.inst, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
         if self.email:
-            add_para(f'E-mail: {self.email}',
-                     align=WD_ALIGN_PARAGRAPH.CENTER,
-                     sz=12, font_name='Times New Roman')
+            p_text(f'EMAIL:{self.email}', bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
 
-        blank()
-        blank()
+        p_blank()
+        p_blank()
 
-        # Repeat title before abstract (as in sample)
-        add_para(self.topic.upper(),
-                 align=WD_ALIGN_PARAGRAPH.CENTER,
-                 bold=True, sz=12, font_name='Times New Roman')
-        blank()
+        # CO AUTHOR block (guide name shown as assistant professor)
+        p_text('CO AUTHOR', bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, sp_b=12, sp_a=12)
 
-        # Authors right-aligned (as in sample page 2)
-        add_para(self.author,
-                 align=WD_ALIGN_PARAGRAPH.RIGHT,
-                 bold=True, sz=12, font_name='Times New Roman',
-                 space_before=12, space_after=12)
+        p_blank()
+        p_blank()
+
+        # ── PAGE 2: Title repeat + Authors right-aligned ───────────────────────
+        p_text(self.topic.upper(), bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
+        p_blank()
+        p_text(f'AUTHOR: {self.author}', bold=True,
+               align=WD_ALIGN_PARAGRAPH.RIGHT, sp_b=12, sp_a=12)
 
         # ── ABSTRACT ──────────────────────────────────────────────────────────
-        # "Abstract" bold, not justified, no special align (LEFT/NONE like sample)
-        p_abs_hd = doc.add_paragraph()
-        p_abs_hd.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        r_abs = p_abs_hd.add_run('Abstract')
-        r_abs.bold = True; r_abs.font.size = Pt(12); r_abs.font.name = 'Times New Roman'
+        # "ABSTRACT" bold, left-aligned, no space
+        p_text('ABSTRACT', bold=True, align=WD_ALIGN_PARAGRAPH.LEFT, sp_b=0, sp_a=0)
+        body(self.sections['abstract'], sp_b=12, sp_a=12,
+             align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
-        body_para(self.sections['abstract'])
-
-        # Keywords line: bold "Keywords –" then normal text
+        # Keywords: bold label + normal text, justified
         kw_p = doc.add_paragraph()
-        kw_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        kw_p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
         kw_p.paragraph_format.space_before = Pt(12)
         kw_p.paragraph_format.space_after  = Pt(12)
-        kr1 = kw_p.add_run('Keywords – ')
-        kr1.bold = True; kr1.font.size = Pt(12); kr1.font.name = 'Times New Roman'
+        kr1 = kw_p.add_run('Keywords:')
+        kr1.bold = True; kr1.font.size = Pt(12); kr1.font.name = TNR
         kr2 = kw_p.add_run(self.sections['keywords'])
-        kr2.font.size = Pt(12); kr2.font.name = 'Times New Roman'
+        kr2.font.size = Pt(12); kr2.font.name = TNR
 
         # ── INTRODUCTION ──────────────────────────────────────────────────────
-        section_heading('Introduction')
+        sec_head('INTRODUCTION')
         for para in self.sections['introduction'].split('\n\n'):
             para = para.strip()
-            if para:
-                body_para(para)
+            if not para:
+                continue
+            # Handle bold subheadings within introduction (like sample)
+            if para.isupper() or (len(para) < 60 and para.endswith(':')):
+                body(para, sp_b=12, sp_a=12, bold=True,
+                     align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+            else:
+                body(para, sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
-        # ── OBJECTIVES ────────────────────────────────────────────────────────
-        section_heading('Objectives:')
+        # ── OBJECTIVE OF THE STUDY ────────────────────────────────────────────
+        sec_head('OBJECTIVE OF THE STUDY', sp_b=0, sp_a=0,
+                 align=WD_ALIGN_PARAGRAPH.LEFT)
         lines = [l.strip() for l in self.sections['objectives'].splitlines() if l.strip()]
         for i, line in enumerate(lines):
             line = re.sub(r'^\d+[\.)]\s*', '', line).strip()
@@ -1237,66 +1195,58 @@ class DocBuilder:
             if not line:
                 continue
             p = doc.add_paragraph()
-            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
             pf = p.paragraph_format
-            pf.space_before      = Pt(6)
-            pf.space_after       = Pt(6)
-            pf.left_indent       = Inches(0.4)
+            pf.space_before      = Pt(12) if i == 0 else Pt(0)
+            pf.space_after       = Pt(0) if i < len(lines)-1 else Pt(12)
             pf.first_line_indent = Inches(-0.25)
+            pf.left_indent       = Inches(0.5)
             bullet_run = p.add_run('\u25cf       ')
-            bullet_run.font.size = Pt(12)
-            bullet_run.font.name = 'Times New Roman'
+            bullet_run.font.size = Pt(12); bullet_run.font.name = TNR
             r = p.add_run(line)
-            r.font.size = Pt(12)
-            r.font.name = 'Times New Roman'
+            r.font.size = Pt(12); r.font.name = TNR
 
-        # ── LITERATURE REVIEW ─────────────────────────────────────────────────
-        section_heading('Literature Review')
-        refs_for_lit = self.sections.get('references', [])
-        lit_paras = self.sections['literature_review'].split('\n\n')
+        # ── REVIEW OF LITERATURE ──────────────────────────────────────────────
+        sec_head('REVIEW OF LITERATURE', sp_b=12, sp_a=12,
+                 align=WD_ALIGN_PARAGRAPH.LEFT)
+        lit_paras = [l.strip() for l in self.sections['literature_review'].split('\n\n') if l.strip()]
         for i, para in enumerate(lit_paras):
-            para = para.strip()
-            if not para:
-                continue
             p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
             pf = p.paragraph_format
             pf.space_before      = Pt(12) if i == 0 else Pt(0)
             pf.space_after       = Pt(12) if i == len(lit_paras)-1 else Pt(0)
             pf.first_line_indent = Inches(-0.25)
-            pf.left_indent       = Inches(0.25)
-            r = p.add_run(para)
-            r.font.size = Pt(12); r.font.name = 'Times New Roman'
+            pf.left_indent       = Inches(0.5)
+            # Bold the author-year citation at start of each lit entry
+            # Pattern: "Lastname and Lastname (Year)" or "1. Lastname..."
+            import re as _re2
+            m = _re2.match(r'(^\d+\.\s*)?((?:[A-Z][a-z]+(?:\s+and\s+[A-Z][a-z]+)?|et al\.?)\s*\(\d{4}\))', para)
+            if m:
+                citation = m.group(0)
+                rest = para[len(citation):]
+                r1 = p.add_run(citation)
+                r1.bold = True; r1.font.size = Pt(12); r1.font.name = TNR
+                r2 = p.add_run(rest)
+                r2.font.size = Pt(12); r2.font.name = TNR
+            else:
+                r = p.add_run(para)
+                r.font.size = Pt(12); r.font.name = TNR
 
         # ── METHODOLOGY ───────────────────────────────────────────────────────
-        # Use Heading 3 style like sample (bold, 12pt TNR, justified)
-        meth_hd = doc.add_paragraph()
-        meth_hd.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-        pf_m = meth_hd.paragraph_format
-        pf_m.space_before = Pt(14); pf_m.space_after = Pt(0)
-        rm = meth_hd.add_run('Methodology')
-        rm.bold = True; rm.font.size = Pt(12); rm.font.name = 'Times New Roman'
-        rm.font.color.rgb = RGBColor(0, 0, 0)
+        sec_head('METHODOLOGY', sp_b=12, sp_a=12,
+                 align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        meth_text = self.sections['methodology'].strip()
+        body(meth_text, sp_b=0, sp_a=0, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
-        for para in self.sections['methodology'].split('\n\n'):
-            para = para.strip()
-            if para:
-                body_para(para, space_before=0, space_after=0)
+        # ── ANALYSIS ──────────────────────────────────────────────────────────
+        sec_head('ANALYSIS', sz=13, sp_b=0, sp_a=0,
+                 align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
-        # ── DATA ANALYSIS (FIGURES) ───────────────────────────────────────────
-        # "Analysis - 1" label (bold, no align/LEFT, 12pt, space 12 before/after)
-        an_hd = doc.add_paragraph()
-        an_hd.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        pf_an = an_hd.paragraph_format
-        pf_an.space_before = Pt(12); pf_an.space_after = Pt(12)
-        r_an = an_hd.add_run('Analysis - 1')
-        r_an.bold = True; r_an.font.size = Pt(12); r_an.font.name = 'Times New Roman'
-
-        # Parse results section into per-figure analysis paragraphs
+        # Parse results into per-figure paragraphs
         results_text = self.sections.get('results', '')
         import re as _re
         fig_analyses = {}
-        # Split on "Figure N:" or "Figure N " patterns
         fig_blocks = _re.split(r'(?i)(?:^|\n)\s*Figure\s+(\d+)\s*[:\-]?\s*', results_text)
         if len(fig_blocks) > 1:
             for idx in range(1, len(fig_blocks), 2):
@@ -1307,79 +1257,64 @@ class DocBuilder:
 
         for i, (spec, buf) in enumerate(zip(self.specs, self.charts), 1):
             buf.seek(0)
-            # Chart image centered
+            # Figure image centered
             img_p = doc.add_paragraph()
             img_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             img_p.paragraph_format.space_before = Pt(12)
-            img_p.paragraph_format.space_after  = Pt(6)
+            img_p.paragraph_format.space_after  = Pt(0)
             img_p.add_run().add_picture(buf, width=Inches(5.5))
 
-            # FIGURE N label
+            # "Figure N" — bold, left-aligned, 12pt
             fig_p = doc.add_paragraph()
-            fig_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-            pf_fig = fig_p.paragraph_format
-            pf_fig.space_before = Pt(6); pf_fig.space_after = Pt(4)
+            fig_p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            fig_p.paragraph_format.space_before = Pt(0)
+            fig_p.paragraph_format.space_after  = Pt(0)
             r_fig = fig_p.add_run(f'Figure {i}')
-            r_fig.bold = True; r_fig.font.size = Pt(12); r_fig.font.name = 'Times New Roman'
+            r_fig.bold = True; r_fig.font.size = Pt(12); r_fig.font.name = TNR
 
-            # LEGEND line
+            # "Legend:A figure shows..." — "Legend:" bold, rest normal
             leg_p = doc.add_paragraph()
-            leg_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-            pf_leg = leg_p.paragraph_format
-            pf_leg.space_before = Pt(4); pf_leg.space_after = Pt(6)
-            r_leg_lbl = leg_p.add_run('Legend: ')
-            r_leg_lbl.bold = True; r_leg_lbl.font.size = Pt(12); r_leg_lbl.font.name = 'Times New Roman'
-            r_leg_txt = leg_p.add_run(spec["legend"])
-            r_leg_txt.bold = False; r_leg_txt.font.size = Pt(12); r_leg_txt.font.name = 'Times New Roman'
+            leg_p.alignment = None   # no explicit alignment = inherit (matches sample)
+            leg_p.paragraph_format.space_before = Pt(0)
+            leg_p.paragraph_format.space_after  = Pt(0)
+            r_lbl = leg_p.add_run('Legend:')
+            r_lbl.bold = False; r_lbl.font.size = Pt(12); r_lbl.font.name = TNR
+            r_ltxt = leg_p.add_run(spec['legend'])
+            r_ltxt.bold = False; r_ltxt.font.size = Pt(12); r_ltxt.font.name = TNR
 
-            # Analysis paragraph for this figure
-            analysis_text = fig_analyses.get(i, spec.get('interp', ''))
-            if analysis_text:
-                ana_p = doc.add_paragraph()
-                ana_p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-                pf_ana = ana_p.paragraph_format
-                pf_ana.space_before = Pt(6); pf_ana.space_after = Pt(12)
-                pf_ana.first_line_indent = Inches(0.5)
-                r_ana = ana_p.add_run(analysis_text)
-                r_ana.font.size = Pt(12); r_ana.font.name = 'Times New Roman'
-
-        # ── CHI-SQUARE / STATS TABLES ─────────────────────────────────────────
+        # ── CHI-SQUARE TABLES ─────────────────────────────────────────────────
         rng = random.Random(self.writer.seed)
         n   = self.writer.n_respondents
-
-        # Build chi-square table rows
         chi_vars = [
-            ('age',                f'adoption of digital platforms for {self.writer.topic[:40]}'),
-            ('gender',             f'perception of income improvement through {self.writer.topic[:40]}'),
-            ('education',          f'awareness of government support programs for {self.writer.topic[:40]}'),
-            ('employment status',  f'challenges faced in using e-commerce for {self.writer.topic[:40]}'),
-            ('area',               f'overall satisfaction with {self.writer.topic[:40]}'),
+            ('age',               f'adoption of digital platforms for {self.writer.topic[:50]}'),
+            ('gender',            f'perception of income improvement through {self.writer.topic[:45]}'),
+            ('education',         f'awareness of government support programs for {self.writer.topic[:40]}'),
+            ('employment status', f'challenges faced in using e-commerce for {self.writer.topic[:45]}'),
+            ('area',              f'overall satisfaction with {self.writer.topic[:55]}'),
         ]
-
         for ti, (var1, var2) in enumerate(chi_vars, 1):
             # TABLE label
             tbl_hd = doc.add_paragraph()
-            tbl_hd.alignment = WD_ALIGN_PARAGRAPH.LEFT
-            pf_t = tbl_hd.paragraph_format
-            pf_t.space_before = Pt(12); pf_t.space_after = Pt(12)
+            tbl_hd.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            tbl_hd.paragraph_format.space_before = Pt(12)
+            tbl_hd.paragraph_format.space_after  = Pt(0)
             r_t = tbl_hd.add_run(f'TABLE {ti}')
-            r_t.bold = True; r_t.font.size = Pt(12); r_t.font.name = 'Times New Roman'
+            r_t.bold = True; r_t.font.size = Pt(12); r_t.font.name = TNR
 
-            # HYPOTHESIS line
+            # HYPOTHESIS
             hyp_p = doc.add_paragraph()
-            hyp_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-            pf_h = hyp_p.paragraph_format
-            pf_h.space_before = Pt(12); pf_h.space_after = Pt(12)
+            hyp_p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            hyp_p.paragraph_format.space_before = Pt(0)
+            hyp_p.paragraph_format.space_after  = Pt(0)
             r_h = hyp_p.add_run('HYPOTHESIS : Null hypothesis is rejected and Alternative hypothesis is accepted')
-            r_h.bold = True; r_h.font.size = Pt(12); r_h.font.name = 'Times New Roman'
+            r_h.bold = True; r_h.font.size = Pt(12); r_h.font.name = TNR
 
-            # Actual table (chi-square values)
-            chi_val  = round(rng.uniform(1.2, 8.5), 3)
-            df_val   = rng.choice([2, 3, 4])
-            sig_val  = round(rng.uniform(0.05, 0.55), 3)
-            lr_val   = round(rng.uniform(1.1, 8.0), 3)
-            lra_val  = round(rng.uniform(0.05, 2.0), 3)
-            lra_sig  = round(rng.uniform(0.1, 0.9), 3)
+            chi_val = round(rng.uniform(1.2, 8.5), 3)
+            df_val  = rng.choice([2, 3, 4])
+            sig_val = round(rng.uniform(0.05, 0.55), 3)
+            lr_val  = round(rng.uniform(1.1, 8.0), 3)
+            lra_val = round(rng.uniform(0.05, 2.0), 3)
+            lra_sig = round(rng.uniform(0.1, 0.9), 3)
             _add_table(doc, '', [
                 ['', 'Value', 'df', 'Asymp. Sig. (2-sided)'],
                 ['Pearson Chi-Square', f'{chi_val}', str(df_val), f'{sig_val}'],
@@ -1387,101 +1322,67 @@ class DocBuilder:
                 ['Linear-by-Linear',   f'{lra_val}', '1',         f'{lra_sig}'],
                 ['N of Valid Cases',   str(n), '', ''],
             ])
-
-            # LEGEND
             leg2_p = doc.add_paragraph()
-            leg2_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-            pf_l2 = leg2_p.paragraph_format
-            pf_l2.space_before = Pt(12); pf_l2.space_after = Pt(12)
-            r_l2 = leg2_p.add_run('LEGEND : The above table shows chi square test')
-            r_l2.bold = True; r_l2.font.size = Pt(12); r_l2.font.name = 'Times New Roman'
+            leg2_p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            leg2_p.paragraph_format.space_before = Pt(0)
+            leg2_p.paragraph_format.space_after  = Pt(0)
+            r_l2 = leg2_p.add_run(f'LEGEND : The above table shows chi square test between {var1} and {var2}')
+            r_l2.bold = True; r_l2.font.size = Pt(12); r_l2.font.name = TNR
 
-            # INFERENCE
             inf_p = doc.add_paragraph()
-            inf_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-            pf_i = inf_p.paragraph_format
-            pf_i.space_before = Pt(12); pf_i.space_after = Pt(12)
+            inf_p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            inf_p.paragraph_format.space_before = Pt(0)
+            inf_p.paragraph_format.space_after  = Pt(12)
             r_i = inf_p.add_run(
                 f'INFERENCE : There is no significant association between {var1} and {var2} '
                 f'at 5% level of significance since the p value {sig_val} > 0.05'
             )
-            r_i.bold = True; r_i.font.size = Pt(12); r_i.font.name = 'Times New Roman'
+            r_i.bold = True; r_i.font.size = Pt(12); r_i.font.name = TNR
 
         # ── RESULT ────────────────────────────────────────────────────────────
-        result_hd = doc.add_paragraph()
-        result_hd.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        pf_r = result_hd.paragraph_format
-        pf_r.space_before = Pt(12); pf_r.space_after = Pt(12)
-        r_rh = result_hd.add_run('RESULT')
-        r_rh.bold = True; r_rh.font.size = Pt(12); r_rh.font.name = 'Times New Roman'
-
-        body_para(self.sections['results'])
+        sec_head('RESULT', sp_b=0, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        # Result = first figure analysis paragraph (as in sample)
+        result_text = fig_analyses.get(1, self.sections.get('results', '').split('\n\n')[0] if self.sections.get('results') else '')
+        body(result_text, sp_b=12, sp_a=12, bold=True,
+             align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
         # ── DISCUSSION ────────────────────────────────────────────────────────
-        disc_hd = doc.add_paragraph()
-        disc_hd.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-        pf_d = disc_hd.paragraph_format
-        pf_d.space_before = Pt(12); pf_d.space_after = Pt(12)
-        r_dh = disc_hd.add_run('DISCUSSION')
-        r_dh.bold = True; r_dh.font.size = Pt(12); r_dh.font.name = 'Times New Roman'
+        sec_head('DISCUSSION', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        disc_text = self.sections.get('discussion', '').strip()
+        body(disc_text, sp_b=12, sp_a=12, bold=True,
+             align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
-        for para in self.sections['discussion'].split('\n\n'):
-            para = para.strip()
-            if para:
-                body_para(para)
+        # ── LIMITATION ────────────────────────────────────────────────────────
+        sec_head('LIMITATION', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        body(self.sections.get('limitations', '').strip(), sp_b=12, sp_a=12,
+             align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
-        # ── SUGGESTIONS ───────────────────────────────────────────────────────
-        sug_hd = doc.add_paragraph()
-        sug_hd.style = doc.styles['Heading 2']
-        sug_hd.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-        sug_hd.paragraph_format.space_after = Pt(4)
-        r_sg = sug_hd.runs[0] if sug_hd.runs else sug_hd.add_run('')
-        sug_hd.clear()
-        r_sg2 = sug_hd.add_run('Suggestions')
-        r_sg2.bold = True; r_sg2.font.size = Pt(12); r_sg2.font.name = 'Times New Roman'
-        r_sg2.font.color.rgb = RGBColor(0,0,0)
-
-        body_para(self.sections['suggestions'])
-
-        # ── LIMITATIONS ───────────────────────────────────────────────────────
-        lim_hd = doc.add_paragraph()
-        lim_hd.style = doc.styles['Heading 2']
-        lim_hd.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-        lim_hd.paragraph_format.space_after = Pt(4)
-        lim_hd.clear()
-        r_lm = lim_hd.add_run('Limitations')
-        r_lm.bold = True; r_lm.font.size = Pt(12); r_lm.font.name = 'Times New Roman'
-        r_lm.font.color.rgb = RGBColor(0,0,0)
-
-        body_para(self.sections['limitations'])
+        # ── SUGGESTION ────────────────────────────────────────────────────────
+        sec_head('SUGGESTION', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        body(self.sections.get('suggestions', '').strip(), sp_b=12, sp_a=12,
+             align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
         # ── CONCLUSION ────────────────────────────────────────────────────────
-        con_hd = doc.add_paragraph()
-        con_hd.style = doc.styles['Heading 2']
-        con_hd.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-        con_hd.paragraph_format.space_after = Pt(4)
-        con_hd.clear()
-        r_cn = con_hd.add_run('Conclusion')
-        r_cn.bold = True; r_cn.font.size = Pt(12); r_cn.font.name = 'Times New Roman'
-        r_cn.font.color.rgb = RGBColor(0,0,0)
-
-        for para in self.sections['conclusion'].split('\n\n'):
-            para = para.strip()
-            if para:
-                body_para(para)
+        sec_head('CONCLUSION', sp_b=0, sp_a=0, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        body(self.sections.get('conclusion', '').strip(), sp_b=12, sp_a=12,
+             align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
         # ── REFERENCES ────────────────────────────────────────────────────────
-        ref_hd = doc.add_paragraph()
-        ref_hd.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-        pf_rf = ref_hd.paragraph_format
-        pf_rf.space_before = Pt(12); pf_rf.space_after = Pt(12)
-        r_rfh = ref_hd.add_run('References')
-        r_rfh.bold = True; r_rfh.font.size = Pt(12); r_rfh.font.name = 'Times New Roman'
+        sec_head('REFERENCES', sp_b=0, sp_a=0, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        refs = self.sections.get('references', [])
+        for i, ref in enumerate(refs):
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            pf = p.paragraph_format
+            pf.space_before      = Pt(0)
+            pf.space_after       = Pt(12) if i == len(refs)-1 else Pt(0)
+            pf.first_line_indent = Inches(-0.25)
+            pf.left_indent       = Inches(0.5)
+            r = p.add_run(ref)
+            r.bold = True; r.font.size = Pt(12); r.font.name = TNR
 
-        for i, ref in enumerate(self.sections['references']):
-            space_b = 12 if i == 0 else 0
-            space_a = 12 if i == len(self.sections["references"])-1 else 0
-            ref_para(ref, space_before=space_b, space_after=space_a)
+        # ── PLAGIARISM NOTE ───────────────────────────────────────────────────
+        sec_head('PLAGIARISM', sp_b=0, sp_a=0, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
         return doc
 
