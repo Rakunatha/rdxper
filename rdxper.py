@@ -1617,17 +1617,6 @@ textarea::placeholder{color:var(--dim);font-size:12px}
     <div class="dash-title" id="dash-name-title">Researcher</div>
   </div>
 
-  <div class="stat-grid" style="margin-top:24px">
-    <div class="stat-card">
-      <div class="stat-val" id="dash-total">0</div>
-      <div class="stat-lbl">Papers Generated</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-val" id="dash-downloaded">0</div>
-      <div class="stat-lbl">Downloaded</div>
-    </div>
-  </div>
-
   <div style="display:flex;align-items:center;justify-content:space-between;margin:28px 0 8px">
     <div style="font-size:16px;font-weight:700">Your Research Papers</div>
     <button class="nav-btn" onclick="loadDashboard()" style="font-size:11px">↻ Refresh</button>
@@ -1886,7 +1875,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   </div>
 </div>
 
-<footer>A Interactive Lawyers Tool</footer>
+<footer>rdxper v4.0 ·</footer>
 </div>
 
 <script>
@@ -1986,8 +1975,6 @@ async function loadDashboard(){
     const d=await r.json();
     if(!d.success) return;
     const papers=d.papers||[];
-    document.getElementById('dash-total').textContent=papers.length;
-    document.getElementById('dash-downloaded').textContent=papers.filter(p=>p.paid).length;
     const wrap=document.getElementById('dash-papers-wrap');
     if(papers.length===0){
       wrap.innerHTML=`<div class="dash-empty">
