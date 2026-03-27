@@ -20,7 +20,10 @@ from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
-import razorpay   # ← NEW FOR PAYMENT GATEWAY
+try:
+    import razorpay
+except ImportError:
+    razorpay = None  # Optional — set RAZORPAY_KEY_ID & RAZORPAY_KEY_SECRET to enable
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
@@ -30,7 +33,7 @@ RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID")
 RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET")
 RAZORPAY_CLIENT = None
 
-if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
+if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET and razorpay:
     RAZORPAY_CLIENT = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
     print(f"✅ Razorpay ready (Key ID: {RAZORPAY_KEY_ID[:8]}...)")
 else:
