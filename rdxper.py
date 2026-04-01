@@ -1,3 +1,87 @@
+
+# ================== FORMAT CONFIG ==================
+FORMAT_TEMPLATE = {
+    "title_upper": True,
+    "include_keywords": True,
+    "sections_order": [
+        "abstract","keywords","introduction","objectives",
+        "literature_review","methodology","data_analysis",
+        "results","discussion","limitations","suggestions",
+        "conclusion","reference"
+    ]
+}
+
+def format_title(title):
+    return title.upper() if FORMAT_TEMPLATE["title_upper"] else title
+
+def format_section(title, content):
+    return f"\n{title.upper()}\n\n{content}\n"
+
+# ================== STRUCTURED GENERATION ==================
+def build_structured_paper(data):
+    doc = ""
+
+    # Title
+    doc += format_title(data.get("title","")) + "\n\n"
+
+    # Authors
+    for author in data.get("authors", []):
+        doc += author + "\n"
+    doc += "\n"
+
+    # Sections
+    for sec in FORMAT_TEMPLATE["sections_order"]:
+        if sec == "keywords" and FORMAT_TEMPLATE["include_keywords"]:
+            doc += "KEYWORDS: " + ", ".join(data.get("keywords", [])) + "\n"
+        elif sec in data:
+            doc += format_section(sec.replace("_"," "), data[sec])
+
+    return doc
+
+
+# ================== PROMPT STRUCTURE (IMPORTANT) ==================
+def get_section_prompt(section, topic):
+    prompts = {
+        "abstract": f"Write a structured abstract for a research paper on {topic} including background, aim, objective, methodology, findings and conclusion in one paragraph.",
+        "introduction": f"Write a detailed academic introduction for a research paper on {topic}.",
+        "objectives": f"List clear research objectives for {topic}.",
+        "literature_review": f"Write a detailed literature review for {topic} with multiple studies.",
+        "methodology": f"Write research methodology including sample size, variables and tools for {topic}.",
+        "data_analysis": f"Provide data analysis explanation for {topic} with figures explanation.",
+        "results": f"Write results section based on analysis for {topic}.",
+        "discussion": f"Write discussion interpreting results for {topic}.",
+        "limitations": f"Write limitations of the study on {topic}.",
+        "suggestions": f"Write suggestions for future research on {topic}.",
+        "conclusion": f"Write a strong academic conclusion for {topic}.",
+        "reference": f"Provide academic references for {topic} in APA style."
+    }
+    return prompts.get(section, f"Write about {section} for {topic}")
+
+
+if __name__ == "__main__":
+    sample_data = {
+        "title": "Sample Research Paper",
+        "authors": ["Author Name", "Co-Author Name"],
+        "keywords": ["AI","Law"],
+        "abstract": "Sample abstract...",
+        "introduction": "Intro...",
+        "objectives": "Objectives...",
+        "literature_review": "Review...",
+        "methodology": "Method...",
+        "data_analysis": "Analysis...",
+        "results": "Results...",
+        "discussion": "Discussion...",
+        "limitations": "Limitations...",
+        "suggestions": "Suggestions...",
+        "conclusion": "Conclusion...",
+        "reference": "References..."
+    }
+
+    print(build_structured_paper(sample_data))
+
+
+# ===== ORIGINAL CODE BELOW (UNCHANGED CORE) =====
+
 """
 rdxper v4.0 — Free AI-Powered Real Research Paper Generator
 ────────────────────────────────────────────────────────────
