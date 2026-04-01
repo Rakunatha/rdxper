@@ -156,11 +156,11 @@ _AI_END   = 75
 
 
 def _detect_provider():
-    """Auto-detect which free AI provider to use."""
-    if os.environ.get("GROQ_API_KEY", "").strip():
-        return "groq"
+    """Auto-detect which free AI provider to use. Gemini is preferred (no TPM cap)."""
     if os.environ.get("GEMINI_API_KEY", "").strip():
         return "gemini"
+    if os.environ.get("GROQ_API_KEY", "").strip():
+        return "groq"
     return None
 
 
@@ -253,73 +253,56 @@ def _groq_generate(prompt: str, system: str, temperature: float,
 
 def _gemini_generate(prompt: str, system: str, temperature: float,
                      progress_cb=None, tracked_sections=None) -> str:
-    """Call Gemini via SSE streaming (free tier)."""
+    """Call Gemini 2.0 Flash via simple non-streaming POST (free tier, no TPM cap)."""
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY not set.")
 
     model = "gemini-2.0-flash"
-    url   = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?key={api_key}&alt=sse"
+    url   = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
 
     payload = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": temperature, "maxOutputTokens": 32768},
+        "generationConfig": {
+            "temperature": temperature,
+            "maxOutputTokens": 8192,
+            "candidateCount": 1,
+        },
     }
     if system:
         payload["systemInstruction"] = {"parts": [{"text": system}]}
 
     body = json.dumps(payload).encode("utf-8")
-    req  = urllib.request.Request(url, data=body,
-                                   headers={"Content-Type": "application/json"},
-                                   method="POST")
-
-    accumulated   = ""
-    sections_done = []
-    watch         = tracked_sections if tracked_sections is not None else SECTION_ORDER
+    req  = urllib.request.Request(
+        url, data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
 
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            for raw_line in resp:
-                line = raw_line.decode("utf-8", errors="replace").strip()
-                if not line.startswith("data:"):
-                    continue
-                data_str = line[5:].strip()
-                if data_str == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data_str)
-                    token = (chunk.get("candidates", [{}])[0]
-                                  .get("content", {})
-                                  .get("parts", [{}])[0]
-                                  .get("text", ""))
-                    accumulated += token
-
-                    for tag in watch:
-                        if tag not in sections_done and f"</{tag}>" in accumulated:
-                            sections_done.append(tag)
-                            pct = _AI_START + int(len(sections_done) / len(watch) * (_AI_END - _AI_START))
-                            next_idx = watch.index(tag) + 1
-                            msg = SECTION_LABELS.get(watch[next_idx], 'Finishing up...') if next_idx < len(watch) else 'Finishing up...'
-                            if progress_cb:
-                                progress_cb(pct, f'✓ {tag.replace("_"," ").title()} done — {msg}')
-                except (json.JSONDecodeError, IndexError, KeyError):
-                    continue
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as e:
         err = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Gemini HTTP {e.code}: {err[:400]}")
+        raise RuntimeError(f"Gemini HTTP {e.code}: {err[:600]}")
     except Exception as e:
-        raise RuntimeError(f"Gemini streaming failed: {e}")
+        raise RuntimeError(f"Gemini request failed: {e}")
 
-    if not accumulated:
-        raise RuntimeError("Gemini returned empty response.")
-    return accumulated.strip()
+    try:
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError, TypeError) as e:
+        raise RuntimeError(f"Gemini unexpected response structure: {e} | raw: {str(data)[:300]}")
+
+    if not text:
+        raise RuntimeError("Gemini returned empty text.")
+    return text.strip()
 
 
 def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
                 progress_cb=None, tracked_sections=None) -> str:
     """
     Generate text using the best available free AI provider.
-    Priority: Groq (free) → Gemini (free tier)
+    Priority: Gemini (free tier, no TPM cap) → Groq (free, 12k TPM limit)
     """
     provider = _detect_provider()
     if provider == "groq":
@@ -328,8 +311,8 @@ def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
         return _gemini_generate(prompt, system, temperature, progress_cb, tracked_sections)
     else:
         raise RuntimeError(
-            "No AI API key found. Set GROQ_API_KEY (free at https://console.groq.com/keys) "
-            "or GEMINI_API_KEY (free at https://aistudio.google.com/app/apikey)"
+            "No AI API key found. Set GEMINI_API_KEY (free at https://aistudio.google.com/app/apikey) "
+            "or GROQ_API_KEY (free at https://console.groq.com/keys)"
         )
 
 
@@ -557,7 +540,7 @@ class GeminiWriter:
         sections = {}
 
         # ── CALL A: keywords + abstract + objectives ──────────────────────────
-        if progress_cb: progress_cb(30, "Writing keywords, abstract & objectives...")
+        if progress_cb: progress_cb(30, "Gemini writing keywords, abstract & objectives...")
         pA = (hdr + q_prob + q_obj + q_stmt +
               "Write using XML tags. Scholarly prose, no markdown bullets.\n\n"
               "<keywords>6-8 comma-separated academic keywords for this topic.</keywords>\n"
@@ -577,7 +560,7 @@ class GeminiWriter:
         for tag in ('keywords', 'abstract', 'objectives'):
             m = re.search(rf'<{tag}>(.*?)</{tag}>', raw_A, re.DOTALL)
             sections[tag] = m.group(1).strip() if m else ''
-        if progress_cb: progress_cb(36, "Abstract done. Writing introduction...")
+        if progress_cb: progress_cb(36, "Abstract done. Gemini writing introduction...")
 
         # ── CALL B: introduction ──────────────────────────────────────────────
         pB = (hdr + q_prob + q_gap + q_stmt +
@@ -596,7 +579,7 @@ class GeminiWriter:
         raw_B = ai_generate(pB, system=SYSTEM_PROMPT, temperature=0.7)
         m = re.search(r'<introduction>(.*?)</introduction>', raw_B, re.DOTALL)
         sections['introduction'] = m.group(1).strip() if m else ''
-        if progress_cb: progress_cb(44, "Introduction done. Writing literature review...")
+        if progress_cb: progress_cb(44, "Introduction done. Gemini writing literature review...")
 
         # ── CALL C: literature review (26 entries) ────────────────────────────
         pC = (f"TOPIC: {self.topic}\n"
@@ -617,7 +600,7 @@ class GeminiWriter:
         raw_C = ai_generate(pC, system=SYSTEM_PROMPT, temperature=0.7)
         m = re.search(r'<literature_review>(.*?)</literature_review>', raw_C, re.DOTALL)
         sections['literature_review'] = m.group(1).strip() if m else ''
-        if progress_cb: progress_cb(56, "Literature review done. Writing methodology & analysis...")
+        if progress_cb: progress_cb(56, "Literature review done. Gemini writing methodology & analysis...")
 
         # ── CALL D: methodology + discussion + conclusion + charts ────────────
         pD = (hdr +
@@ -647,7 +630,7 @@ class GeminiWriter:
         for tag in ('methodology', 'results', 'discussion', 'suggestions', 'limitations', 'conclusion', 'charts'):
             m = re.search(rf'<{tag}>(.*?)</{tag}>', raw_D, re.DOTALL)
             sections[tag] = m.group(1).strip() if m else ''
-        if progress_cb: progress_cb(74, "All sections written. Building document...")
+        if progress_cb: progress_cb(74, "All sections written. Assembling Word document...")
 
         # ── Fallbacks ─────────────────────────────────────────────────────────
         fallbacks = {
@@ -2627,7 +2610,7 @@ if __name__ == '__main__':
     os.makedirs('generated', exist_ok=True)
 
     provider = _detect_provider()
-    pname_str = f"✓ {('Groq (Llama 3.1 70B)' if provider == 'groq' else 'Gemini')} — ready!" if provider else "✗ NOT SET — see below"
+    pname_str = f"✓ {('Gemini 2.0 Flash' if provider == 'gemini' else 'Groq (Llama 3.3 70B)')} — ready!" if provider else "✗ NOT SET — see below"
     print('\n' + '='*60)
     print('  rdxper v4.0  —  Free AI Research Paper Generator')
     print('  Supports Groq (free) and Gemini (free tier)')
