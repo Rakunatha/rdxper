@@ -182,7 +182,7 @@ def _groq_generate(prompt: str, system: str, temperature: float,
         "model": model,
         "messages": messages,
         "temperature": temperature,
-        "max_tokens": 32768,
+        "max_tokens": 8192,
         "stream": True,
     }
     body = json.dumps(payload).encode("utf-8")
@@ -523,190 +523,127 @@ class GeminiWriter:
         return "SOURCES:\n" + "\n".join(lines) + wiki
 
     def generate_all(self, progress_cb=None) -> dict:
-        """Two lean streaming Gemini calls — stays within free-tier token limits."""
+        """Three lean Groq/Gemini calls — each stays well under 12k TPM limit."""
         top      = sorted(self.papers, key=lambda x: x.get("citations", 0), reverse=True)
         top_cite = f"{top[0]['authors']} ({top[0]['year']})" if top else "prior studies"
         n, nr    = len(self.papers), self.n_respondents
         q        = self.questionnaire
-        q_block  = ""
+
+        # Build compact researcher-inputs block (truncated to avoid token bloat)
+        q_block = ""
         if any(q.values()):
-            q_block = "\n\n=== RESEARCHER'S OWN INPUTS (use these EXACTLY as the foundation — do NOT invent replacements) ===\n"
-            if q.get('problem'):
-                q_block += f"PROBLEM IDENTIFIED BY RESEARCHER: {q['problem']}\n"
-            if q.get('lit'):
-                q_block += f"KEY LITERATURE CITED BY RESEARCHER: {q['lit']}\n"
-            if q.get('gap'):
-                q_block += f"RESEARCH GAP IDENTIFIED BY RESEARCHER: {q['gap']}\n"
-            if q.get('objectives'):
-                q_block += f"OBJECTIVES DEFINED BY RESEARCHER: {q['objectives']}\n"
-            if q.get('statement'):
-                q_block += f"RESEARCH STATEMENT BY RESEARCHER: {q['statement']}\n"
-            q_block += "=== END RESEARCHER INPUTS — expand these with evidence and scholarly prose, never override them ===\n"
-        hdr      = (f"{self._paper_digest}\n\nTOPIC: {self.topic} | N={nr} respondents | "
-                    f"Aware={self.aware_pct}% | Familiar={self.fam_pct}% | "
-                    f"Support={self.support_pct}% | Top paper: {top_cite}{q_block}\n\n")
+            q_block = "\nRESEARCHER INPUTS:\n"
+            if q.get('problem'):    q_block += f"PROBLEM: {q['problem'][:400]}\n"
+            if q.get('lit'):        q_block += f"LIT: {q['lit'][:400]}\n"
+            if q.get('gap'):        q_block += f"GAP: {q['gap'][:300]}\n"
+            if q.get('objectives'): q_block += f"OBJECTIVES: {q['objectives'][:300]}\n"
+            if q.get('statement'):  q_block += f"STATEMENT: {q['statement'][:300]}\n"
 
-        # ── CALL 1: abstract + intro + objectives ────────────────────────────
-        p1 = (hdr +
-              "Write the opening sections of an academic research paper using XML tags. "
-              "Flowing scholarly prose only — no markdown, no bullet points inside prose.\n\n"
-              "<keywords>Provide exactly 6-8 academic keywords separated by commas, relevant to the topic.</keywords>\n"
-              f"<abstract>Write a structured academic abstract of exactly 300 words as ONE flowing paragraph. "
-              f"Follow this internal structure without subheadings: "
-              f"(1) Background — introduce the broad context of {self.topic} and why it matters. "
-              f"(2) Problem statement — state the specific gap or challenge this study addresses. "
-              f"(3) Objective — 'The objective of this study is to...' state 2-3 specific aims. "
-              f"(4) Methodology — 'The study adopted a descriptive and empirical research design. "
-              f"A convenience sampling method was employed with {nr} respondents. "
-              f"Data was collected through a structured questionnaire and analysed using SPSS Version 21.' "
-              f"(5) Key findings — state 3-4 quantified findings with specific percentages relevant to {self.topic}. "
-              f"(6) Conclusion and implications — summarise the study's contribution and practical/policy implications. "
-              f"Write as one dense academic paragraph with no internal headings.</abstract>\n"
-              f"<introduction>Write a formal academic introduction of exactly 1,200-1,500 words. "
-              f"Structure using these bold subheadings in this order, each as a flowing paragraph (no bullet points):\n"
-              f"Background of the Topic (200-220 words): Describe the historical and contextual background of {self.topic}. "
-              f"Explain how the subject traditionally operated, what stakeholders are involved, and what has changed in recent decades. "
-              f"If PROBLEM IDENTIFIED BY RESEARCHER is given above, frame this as the central tension.\n"
-              f"Evolution of the Topic (200-220 words): Trace the historical development of {self.topic} from its early form "
-              f"to the present. Name specific time periods, events, technologies, or policy shifts that drove change. "
-              f"Describe the first wave of transformation, subsequent developments, and the current state with specific examples.\n"
-              f"Government Initiatives (180-200 words): Name specific government schemes, acts, policies, or programmes "
-              f"relevant to {self.topic} using their full official names. State which government body introduced each, "
-              f"its objectives, and measurable impact. Include both central and state-level examples where applicable.\n"
-              f"Factors Affecting the Topic (180-200 words): Identify and explain 5-6 key variables that influence outcomes "
-              f"in {self.topic} — covering infrastructure, socio-economic, cultural, environmental, and policy dimensions. "
-              f"Name specific barriers and enablers. "
-              f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, incorporate it as a structural gap here.\n"
-              f"Current Trends (180-200 words): Describe the present-day landscape of {self.topic}. "
-              f"Name specific technologies, platforms, legal reforms, or practices currently in use. "
-              f"Reference shifting consumer or societal demands. Include emerging innovations reshaping the field.\n"
-              f"Comparison Across Regions/States (150-180 words): Compare adoption, impact, or implementation of {self.topic} "
-              f"across at least 4 named Indian states or international regions. Explain why some lead and others lag.\n"
-              f"Aim of the Study (80-100 words): State clearly: 'The aim of this study is to...' "
-              f"If RESEARCH STATEMENT BY RESEARCHER is provided, anchor this directly to it. "
-              f"Write all sections as flowing scholarly prose. No bullet points anywhere.</introduction>\n"
-              "<objectives>"
-              "IMPORTANT: If OBJECTIVES DEFINED BY RESEARCHER are provided above, copy them VERBATIM. "
-              "Format: each objective on its own line starting with '● To ...' "
-              "If no objectives provided, write exactly 3 objectives in this format: '● To [verb] ...'</objectives>\n"
-              f"<literature_review>Write a comprehensive literature review of exactly 3,500-4,000 words. "
-              f"Include EXACTLY 25-30 source entries. "
-              f"CRITICAL FORMAT — every entry must follow this EXACT 4-sentence structure (120-150 words each):\n"
-              f"SENTENCE 1 — Citation opener: 'Lastname and Lastname (Year)' followed by a past-tense verb "
-              f"(investigated/examined/analyzed/explored/assessed/evaluated) and the subject and context. "
-              f"Example: 'Bagchi and Sharma (2024) investigated the economic impact of mobile applications on fish marketing within coastal communities.'\n"
-              f"SENTENCE 2 — Aim: Start with 'The aim of the study was to...' — state the precise research objective.\n"
-              f"SENTENCE 3 — Methodology: Start with 'The methodology employed...' — name the specific research design, "
-              f"exact participant count (e.g. 450 respondents), geographic scope, duration, and analytical tools used.\n"
-              f"SENTENCE 4 — Findings: Start with 'The findings revealed...' — report 3-4 specific quantitative results "
-              f"with exact percentages (e.g. 34% income increase, 28% reduction in post-harvest losses). "
-              f"End with a sentence on broader implications.\n"
-              f"IMPORTANT: If KEY LITERATURE CITED BY RESEARCHER is provided above, those sources appear first "
-              f"rewritten in this exact format. Then add further academic sources on {self.topic} to reach 25-30 total. "
-              f"Number each entry: first entry has no number, subsequent entries numbered 1. 2. 3. etc. "
-              f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, end with an unnumbered synthesis paragraph. "
-              f"No subheadings, no bullet points, no brackets for citations.</literature_review>\n"
-              f"<methodology>Write a formal methodology section of exactly 500-600 words as flowing paragraphs. "
-              f"Cover ALL of the following in this order (write as connected prose, not a list):\n"
-              f"Paragraph 1 — Research design and rationale: 'The current study is based on descriptive and empirical research.' "
-              f"Explain what descriptive and empirical means in this context and why this design suits {self.topic}.\n"
-              f"Paragraph 2 — Sampling: 'A convenience sampling method is used in the research.' "
-              f"State the sample size of {nr} respondents, name the specific geographic location relevant to {self.topic}, "
-              f"explain how the sampling frame was constructed and who qualified as respondents.\n"
-              f"Paragraph 3 — Data collection: 'Data has been collected through field visits, with a structured questionnaire "
-              f"used as the primary data collection tool.' Describe the questionnaire design — number of sections, types of questions "
-              f"(Likert scale, multiple choice), how it was validated, and how it was administered.\n"
-              f"Paragraph 4 — Secondary data: 'Secondary sources such as articles, journals, reports, and newsletters have also been considered.' "
-              f"Name the specific types of secondary sources consulted relevant to {self.topic}.\n"
-              f"Paragraph 5 — Analysis: 'The collected data has been analyzed using SPSS version 21.' "
-              f"Name the specific statistical tests used: chi-square test, ANOVA, Pearson correlation, frequency analysis.\n"
-              f"Paragraph 6 — Variables: "
-              f"'The independent variables are age, gender, educational qualifications, location, and occupation.' "
-              f"'The dependent variable of the study is [main outcome directly relevant to {self.topic}].' "
-              f"Explain why these variables were chosen and what relationships are being tested.\n"
-              f"Write in formal academic paragraph style. No bullet points, no numbered lists.</methodology>")
-
-        # ── CALL 2: results + conclusion + charts ─────────────────────────────
-        p2 = (hdr +
-              "Write the analytical sections of an academic research paper using XML tags. "
-              "Flowing scholarly prose only — no markdown, no bullet points.\n\n"
-              f"<results>Write a comprehensive result section of exactly 2,000-2,500 words. "
-              f"Interpret findings FIGURE BY FIGURE from Figure 1 through Figure {self._nfigs}. "
-              f"For each figure, write a dedicated paragraph of 60-80 words following this exact structure: "
-              f"Start the paragraph with 'Figure [N]' in the text (not as a heading). "
-              f"Then write: "
-              f"(1) What the figure shows — 'Figure [N] illustrates the relationship between [independent variable] and [dependent variable].' "
-              f"(2) Dominant finding — name the highest-scoring group with its exact percentage "
-              f"(use internally consistent percentages that add up correctly across all figures). "
-              f"(3) Contrast — name a second group with a lower percentage and explain the gap. "
-              f"(4) Inference — state what this reveals about {self.topic} in one analytical sentence.\n"
-              f"Use these independent variables across figures (distribute evenly): "
-              f"educational qualification (illiterate/primary school/high school/graduate) for Figures 1-8; "
-              f"age group (18-30/31-50/51 and above) for Figures 6,9,10,14,19,20,23,26; "
-              f"gender (male/female) for Figures 11-18; "
-              f"occupation (small-scale/large-scale/non-fisher trader) for Figures 21,24,25,27,28,29; "
-              f"place of residence (rural/semi-urban/urban) for Figures 22,30.\n"
-              f"Use these as dependent/outcome variables relevant to {self.topic}: "
-              f"primary reasons for use, perception of price improvement, awareness of government programs, "
-              f"factors influencing adoption, payment timeliness, belief in higher prices, biggest difficulties. "
-              f"Include specific percentages throughout. Maintain continuous paragraph structure. "
-              f"No bullet points. Use statistical-style language throughout.</results>\n"
-              f"<discussion>Write a detailed discussion section of exactly 400-500 words. "
-              f"Interpret the overall pattern of findings across all figures in relation to the 3 research objectives. "
-              f"Connect findings to at least 5 sources from the literature review by author and year. "
-              f"Discuss implications for each demographic group. Address policy implications and practical significance. "
-              f"Write as flowing scholarly prose in multiple paragraphs.</discussion>\n"
-              f"<conclusion>Write a comprehensive conclusion of exactly 700-800 words. "
-              f"Structure as flowing paragraphs covering: "
-              f"(1) Summary of key findings across all demographic variables with specific percentages. "
-              f"(2) Whether each of the 3 objectives was achieved and how. "
-              f"(3) Theoretical and practical implications for {self.topic}. "
-              f"(4) Specific policy recommendations (name 4-5 concrete actionable reforms). "
-              f"(5) Limitations of the current study. "
-              f"(6) Future research directions. "
-              f"Write in formal academic tone. No bullet points.</conclusion>\n"
-              f"<suggestions>Write a suggestions section of exactly 200-250 words as connected prose paragraphs. "
-              f"Provide 5-6 specific, actionable recommendations directly relevant to {self.topic}. "
-              f"Each recommendation must be concrete, named specifically, and justified with brief reasoning. "
-              f"No bullet points.</suggestions>\n"
-              f"<limitations>Write a limitations section of exactly 150-200 words as 2 connected paragraphs. "
-              f"Address: sample size constraints, geographic scope, self-report bias, temporal limitations, "
-              f"and areas for future research.</limitations>\n"
-              f"<charts>{self._nfigs} lines. Format: TYPE|TITLE|CAT1,CAT2,CAT3 "
-              f"(or grouped/stacked: TYPE|TITLE|G1,G2;S1,S2). "
-              f"TYPE=bar/pie/grouped/stacked. "
-              f"Distribute chart types: use grouped/stacked for cross-tabulation figures. "
-              f"Titles must be specific to \"{self.topic[:35]}\" and reference the demographic variable shown. "
-              f"Example: 'grouped|Income Perception by Educational Qualification|Illiterate,Primary,High School,Graduate;Agree,Disagree,Neutral'</charts>")
-
-        # Build dedicated lit review + methodology prompt (same as p1 for this split)
-        p_litmethod = p1  # lit review and methodology are in p1 now
-        def prog1(pct, msg):
-            if progress_cb: progress_cb(max(30, min(55, 30 + int((pct-30)/45*25))), msg)
-        def prog2(pct, msg):
-            if progress_cb: progress_cb(max(56, min(75, 56 + int((pct-30)/45*19))), msg)
-        def prog3(pct, msg):
-            if progress_cb: progress_cb(max(56, min(75, 56 + int((pct-30)/45*19))), msg)
-
-        s1 = ['keywords','abstract','introduction','objectives','literature_review','methodology']
-        s2 = []   # unused — all front sections come from p1 now
-        s3 = ['results','discussion','suggestions','limitations','conclusion','charts']
+        # Compact header shared by all calls (~300 tokens)
+        hdr = (f"SOURCES:\n" +
+               "\n".join(
+                   f"{i}. {p['authors']} ({p['year']}). {p['title'][:80]}."
+                   for i, p in enumerate(self.papers[:5], 1)
+               ) +
+               f"\n\nTOPIC: {self.topic} | N={nr} | Aware={self.aware_pct}% | "
+               f"Support={self.support_pct}% | Top: {top_cite}{q_block}\n\n")
 
         provider = _detect_provider()
         pname = "Groq (Llama 3.3 70B)" if provider == "groq" else "Gemini"
-        if progress_cb: progress_cb(30, f'{pname} writing abstract, introduction & literature review...')
+
+        # ── CALL 1: Keywords + Abstract + Introduction ──────────────────────
+        if progress_cb: progress_cb(30, f'{pname} writing abstract & introduction...')
+        p1 = (hdr +
+              "Write these sections using XML tags. Scholarly prose only — no markdown, no bullets.\n\n"
+              "<keywords>6-8 academic keywords, comma-separated.</keywords>\n"
+              f"<abstract>Exactly 200 words. ONE paragraph. Structure: (1) background of {self.topic}, "
+              f"(2) problem gap, (3) objective ('The objective of this study is to...'), "
+              f"(4) methodology (descriptive+empirical, {nr} respondents, SPSS), "
+              f"(5) 2-3 key findings with percentages, (6) implication.</abstract>\n"
+              f"<introduction>800-1000 words. Bold subheadings as flowing prose paragraphs:\n"
+              f"Background of the Topic (150w): Context of {self.topic}, stakeholders, recent changes.\n"
+              f"Evolution of the Topic (150w): Historical development with named events/policies.\n"
+              f"Government Initiatives (120w): Specific named schemes/acts relevant to {self.topic}.\n"
+              f"Factors Affecting the Topic (120w): 4-5 key variables — barriers and enablers.\n"
+              f"Current Trends (100w): Present landscape, technologies, reforms in {self.topic}.\n"
+              f"Aim of the Study (60w): 'The aim of this study is to...' "
+              f"{'Anchor to: ' + q['statement'][:150] if q.get('statement') else ''}"
+              f"</introduction>\n"
+              "<objectives>"
+              f"{'COPY VERBATIM: ' + q['objectives'][:500] if q.get('objectives') else 'Write 4 objectives starting with ● To [verb]...'}"
+              "</objectives>")
+
+        s1 = ['keywords', 'abstract', 'introduction', 'objectives']
+        def prog1(pct, msg):
+            if progress_cb: progress_cb(max(30, min(50, 30 + int((pct-30)/45*20))), msg)
         raw1 = ai_generate(p1, system=SYSTEM_PROMPT, temperature=0.7,
                            progress_cb=prog1, tracked_sections=s1)
 
-        raw2 = raw1  # no separate call needed
+        # ── CALL 2: Literature Review + Methodology ─────────────────────────
+        if progress_cb: progress_cb(51, f'{pname} writing literature review & methodology...')
+        p2 = (hdr +
+              "Write these sections using XML tags. Scholarly prose only — no markdown, no bullets.\n\n"
+              f"<literature_review>Write 15-18 source entries. "
+              f"Each entry MUST follow this 4-sentence structure:\n"
+              f"S1: 'Lastname (Year) [verb] [subject].'\n"
+              f"S2: 'The aim of the study was to...'\n"
+              f"S3: 'The methodology employed...[design, N, tools].'\n"
+              f"S4: 'The findings revealed...[2-3 percentages]. [Implication].'\n"
+              f"{'Start with researcher lit (rewrite in format): ' + q['lit'][:300] if q.get('lit') else ''}"
+              f"Number entries 1. 2. 3. etc. "
+              f"{'End with gap paragraph: ' + q['gap'][:200] if q.get('gap') else ''}"
+              f"No subheadings, no bullets.</literature_review>\n"
+              f"<methodology>350-450 words as 5 flowing paragraphs:\n"
+              f"P1: Descriptive and empirical design — why it suits {self.topic}.\n"
+              f"P2: Convenience sampling — {nr} respondents, geographic scope, eligibility.\n"
+              f"P3: Structured questionnaire — sections, Likert scale, validation, administration.\n"
+              f"P4: Secondary data — articles, journals, reports on {self.topic}.\n"
+              f"P5: SPSS v21 analysis — chi-square, ANOVA, Pearson, frequency. "
+              f"Independent vars: age, gender, education, location, occupation. "
+              f"Dependent var: main outcome of {self.topic}.</methodology>")
 
-        if progress_cb: progress_cb(56, f'{pname} writing results, discussion & conclusion...')
-        raw3 = ai_generate(p2, system=SYSTEM_PROMPT, temperature=0.7,
-                           progress_cb=prog2, tracked_sections=s3)
+        s2 = ['literature_review', 'methodology']
+        def prog2(pct, msg):
+            if progress_cb: progress_cb(max(52, min(68, 52 + int((pct-30)/45*16))), msg)
+        raw2 = ai_generate(p2, system=SYSTEM_PROMPT, temperature=0.7,
+                           progress_cb=prog2, tracked_sections=s2)
 
+        # ── CALL 3: Results + Discussion + Conclusion + Suggestions + Charts ─
+        if progress_cb: progress_cb(69, f'{pname} writing results, discussion & conclusion...')
+        p3 = (hdr +
+              "Write these sections using XML tags. Scholarly prose only — no markdown, no bullets.\n\n"
+              f"<results>Write {self._nfigs} figure-paragraphs (one per figure, 50-60 words each). "
+              f"Each: 'Figure [N] illustrates [independent var] vs [dependent var]. "
+              f"[Highest group] accounted for [X]%. [Second group] recorded [Y]%. "
+              f"This suggests [inference about {self.topic[:40]}].' "
+              f"Use: education (Figs 1-4), age (Figs 5-8), gender (Figs 9-12), occupation (Figs 13+). "
+              f"After figures, write 200-word overall findings summary.</results>\n"
+              f"<discussion>300-400 words. Connect findings to 3-4 sources by author+year. "
+              f"Implications per demographic group. Policy significance.</discussion>\n"
+              f"<conclusion>500-600 words as flowing paragraphs: "
+              f"(1) key findings with percentages, (2) objectives achieved, "
+              f"(3) implications for {self.topic[:50]}, (4) 3-4 policy recommendations, "
+              f"(5) limitations, (6) future research. No bullets.</conclusion>\n"
+              f"<suggestions>150-200 words. 4-5 concrete recommendations for {self.topic[:50]}. "
+              f"Prose, no bullets.</suggestions>\n"
+              f"<limitations>100-150 words. 2 paragraphs on scope, bias, future directions.</limitations>\n"
+              f"<charts>{self._nfigs} lines. FORMAT: TYPE|TITLE|CATS "
+              f"TYPE=bar/pie/grouped/stacked; grouped/stacked: TYPE|TITLE|G1,G2;S1,S2. "
+              f"Titles reference {self.topic[:30]} and demographic shown.</charts>")
+
+        s3 = ['results', 'discussion', 'suggestions', 'limitations', 'conclusion', 'charts']
+        def prog3(pct, msg):
+            if progress_cb: progress_cb(max(70, min(75, 70 + int((pct-30)/45*5))), msg)
+        raw3 = ai_generate(p3, system=SYSTEM_PROMPT, temperature=0.7,
+                           progress_cb=prog3, tracked_sections=s3)
+
+        # ── Parse all sections ────────────────────────────────────────────────
         sections = {}
         for tag in s1:
             m = re.search(rf'<{tag}>(.*?)</{tag}>', raw1, re.DOTALL)
+            sections[tag] = m.group(1).strip() if m else ''
+        for tag in s2:
+            m = re.search(rf'<{tag}>(.*?)</{tag}>', raw2, re.DOTALL)
             sections[tag] = m.group(1).strip() if m else ''
         for tag in s3:
             m = re.search(rf'<{tag}>(.*?)</{tag}>', raw3, re.DOTALL)
@@ -716,11 +653,11 @@ class GeminiWriter:
             'keywords':          f'{self.topic}, empirical study, stakeholder analysis, policy framework',
             'abstract':          f'This study examines {self.topic} through {n} papers and a survey of {nr} respondents.',
             'introduction':      f'This paper investigates {self.topic}. {top_cite} made foundational contributions.',
-            'objectives':        '1. To examine the topic.\n2. To review literature.\n3. To analyse perceptions.\n4. To identify implications.\n5. To recommend improvements.',
+            'objectives':        '● To examine the topic.\n● To review literature.\n● To analyse perceptions.\n● To identify implications.',
             'literature_review': f'A growing body of work addresses {self.topic}. {top_cite} provide a foundational framework.',
             'methodology':       f'A mixed-methods approach combined {n} papers with a survey of {nr} respondents analysed via SPSS.',
-            'results':           f'{nr} respondents: {self.aware_pct}% aware, {self.fam_pct}% familiar with tools, {self.support_pct}% support change.',
-            'discussion':        f'Results align with {top_cite}. Awareness is growing; trust in frameworks remains limited.',
+            'results':           f'{nr} respondents: {self.aware_pct}% aware, {self.fam_pct}% familiar, {self.support_pct}% supportive.',
+            'discussion':        f'Results align with {top_cite}. Awareness is growing; structural barriers persist.',
             'suggestions':       'Policymakers should invest in awareness, transparent governance, and stakeholder engagement.',
             'limitations':       f'Sample size and self-reported data limit generalisability. The {n}-paper review is not exhaustive.',
             'conclusion':        f'This study advances understanding of {self.topic}. Longitudinal research is recommended.',
@@ -1441,61 +1378,61 @@ HTML = """<!DOCTYPE html>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Segoe UI',Arial,sans-serif;background:#060810;color:#e6edf3;min-height:100vh}
-:root{--bg:#060810;--surface:#0d1117;--surface2:#161b22;--surface3:#1c2330;--border:rgba(255,255,255,0.08);--accent:#00ff88;--accent2:#0066ff;--text:#e6edf3;--muted:#7d8590;--dim:#484f58;--error:#ff4757;--r:12px}
+body{font-family:'Segoe UI',Arial,sans-serif;background:#000;color:#fff;min-height:100vh}
+:root{--bg:#000;--surface:#0a0a0a;--surface2:#141414;--surface3:#1a1a1a;--border:rgba(255,255,255,0.12);--accent:#fff;--accent2:#fff;--text:#fff;--muted:#888;--dim:#555;--error:#ff4444;--r:12px}
 .wrap{max-width:960px;margin:0 auto;padding:0 20px}
 header{padding:18px 0;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}
 .logo{display:flex;align-items:center;gap:10px}
-.logo-mark{width:32px;height:32px;background:linear-gradient(135deg,var(--accent),#00ccff);border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:12px;color:#000}
+.logo-mark{width:32px;height:32px;background:#fff;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:12px;color:#000}
 .logo-text{font-size:20px;font-weight:800;letter-spacing:-0.5px}
-.logo-text span{color:var(--accent)}
+.logo-text span{color:#fff}
 .user-chip{display:flex;align-items:center;gap:8px;background:var(--surface2);border:1px solid var(--border);border-radius:40px;padding:5px 12px 5px 5px;cursor:pointer}
 .user-chip img{width:26px;height:26px;border-radius:50%;object-fit:cover}
 .user-chip span{font-size:13px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .nav-links{display:flex;gap:8px;align-items:center}
 .nav-btn{background:none;border:1px solid var(--border);color:var(--muted);padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px;transition:all .2s}
-.nav-btn:hover{border-color:var(--accent);color:var(--accent)}
-.nav-btn.danger{border-color:rgba(255,71,87,.3);color:var(--error)}
+.nav-btn:hover{border-color:#fff;color:#fff}
+.nav-btn.danger{border-color:rgba(255,68,68,.35);color:var(--error)}
 .screen{display:none}.screen.active{display:block}
 .hero{padding:56px 0 32px;text-align:center}
-.htag{font-size:12px;color:var(--accent);letter-spacing:2px;text-transform:uppercase;margin-bottom:16px;font-family:Consolas,monospace}
+.htag{font-size:12px;color:#fff;letter-spacing:2px;text-transform:uppercase;margin-bottom:16px;font-family:Consolas,monospace}
 h1{font-size:clamp(28px,5vw,52px);font-weight:900;line-height:1.1;margin-bottom:16px}
-h1 em{color:var(--accent);font-style:normal}
+h1 em{color:#fff;font-style:normal}
 .sub{font-size:16px;color:var(--muted);max-width:560px;margin:0 auto 32px}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:32px;max-width:440px;margin:0 auto;width:100%}
 .ct{font-size:20px;font-weight:700;margin-bottom:6px}
 .cs{font-size:14px;color:var(--muted);margin-bottom:24px}
 .btn{width:100%;padding:13px 20px;border-radius:8px;border:none;font-size:15px;font-weight:600;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:10px}
 .btn:disabled{opacity:.5;cursor:not-allowed}
-.btn-p{background:linear-gradient(135deg,var(--accent),#00ccaa);color:#000}
-.btn-p:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 6px 20px rgba(0,255,136,.3)}
-.btn-dl{background:linear-gradient(135deg,var(--accent2),#0044cc);color:#fff;box-shadow:0 4px 16px rgba(0,102,255,.3)}
-.btn-dl:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 28px rgba(0,102,255,.4)}
+.btn-p{background:#fff;color:#000;border:none}
+.btn-p:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 6px 20px rgba(255,255,255,.15)}
+.btn-dl{background:#fff;color:#000;box-shadow:0 4px 16px rgba(255,255,255,.12)}
+.btn-dl:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 28px rgba(255,255,255,.2)}
 .btn-s{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
-.btn-s:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.btn-s:hover:not(:disabled){border-color:#fff;color:#fff}
 .fg{margin-bottom:16px}.fg label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
 .fg input,.fg select{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-size:14px;outline:none;transition:border-color .2s}
-.fg input:focus{border-color:var(--accent)}
+.fg input:focus{border-color:#fff}
 .notif{display:none;padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:14px}
 .notif.show{display:block}
-.notif.success{background:rgba(0,255,136,.1);border:1px solid rgba(0,255,136,.3);color:var(--accent)}
-.notif.error{background:rgba(255,71,87,.1);border:1px solid rgba(255,71,87,.3);color:var(--error)}
-.notif.info{background:rgba(0,102,255,.1);border:1px solid rgba(0,102,255,.3);color:#4d9fff}
+.notif.success{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.25);color:#fff}
+.notif.error{background:rgba(255,68,68,.1);border:1px solid rgba(255,68,68,.3);color:var(--error)}
+.notif.info{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.2);color:#ccc}
 .prog-wrap{background:var(--surface3);border-radius:100px;height:6px;overflow:hidden;margin:12px 0}
-.prog-fill{height:100%;background:linear-gradient(90deg,var(--accent),#00ccff);border-radius:100px;transition:width .4s ease}
+.prog-fill{height:100%;background:#fff;border-radius:100px;transition:width .4s ease}
 .prog-row{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:4px}
 .stage-box{background:var(--surface2);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;margin:10px 0;display:flex;align-items:center;gap:8px}
-.stage-msg{font-size:12px;color:var(--accent);font-family:Consolas,monospace;flex:1}
+.stage-msg{font-size:12px;color:#fff;font-family:Consolas,monospace;flex:1}
 .sections-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-bottom:12px}
 .sec-item{font-size:9px;padding:4px;border-radius:5px;background:var(--surface3);border:1px solid var(--border);color:var(--dim);text-align:center;font-family:Consolas,monospace;transition:all .3s}
-.sec-item.writing{background:rgba(0,102,255,.12);border-color:rgba(0,102,255,.4);color:#4d9fff;animation:sp 1s ease-in-out infinite}
-.sec-item.done{background:rgba(0,255,136,.08);border-color:rgba(0,255,136,.3);color:var(--accent)}
+.sec-item.writing{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.4);color:#fff;animation:sp 1s ease-in-out infinite}
+.sec-item.done{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.3);color:#fff}
 @keyframes sp{0%,100%{opacity:1}50%{opacity:.4}}
 .spin{width:14px;height:14px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
 @keyframes spin{to{transform:rotate(360deg)}}
 .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:24px}
 .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:20px}
-.stat-val{font-size:28px;font-weight:900;color:var(--accent)}
+.stat-val{font-size:28px;font-weight:900;color:#fff}
 .stat-lbl{font-size:12px;color:var(--muted);margin-top:4px}
 .table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:24px}
 .table-head{padding:14px 20px;border-bottom:1px solid var(--border);font-size:14px;font-weight:600}
@@ -1504,18 +1441,18 @@ th{text-align:left;padding:10px 16px;font-size:11px;color:var(--muted);text-tran
 td{padding:10px 16px;font-size:13px;border-bottom:1px solid rgba(255,255,255,.04)}
 tr:last-child td{border-bottom:none}
 tr:hover td{background:var(--surface2)}
-.badge-paid{background:rgba(0,255,136,.1);color:var(--accent);border:1px solid rgba(0,255,136,.3);padding:2px 8px;border-radius:20px;font-size:11px}
-.badge-free{background:rgba(255,255,255,.06);color:var(--muted);padding:2px 8px;border-radius:20px;font-size:11px}
-.badge-pending{background:rgba(255,193,7,.1);color:#ffc107;padding:2px 8px;border-radius:20px;font-size:11px}
+.badge-paid{background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.3);padding:2px 8px;border-radius:20px;font-size:11px}
+.badge-free{background:rgba(255,255,255,.04);color:#666;padding:2px 8px;border-radius:20px;font-size:11px}
+.badge-pending{background:rgba(255,255,255,.06);color:#aaa;padding:2px 8px;border-radius:20px;font-size:11px}
 .avatar{width:32px;height:32px;border-radius:50%;object-fit:cover}
 .profile-header{display:flex;align-items:center;gap:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:24px;margin-bottom:20px}
-.profile-avatar{width:64px;height:64px;border-radius:50%;border:2px solid var(--accent)}
+.profile-avatar{width:64px;height:64px;border-radius:50%;border:2px solid #fff}
 .tabs{display:flex;gap:0;margin-bottom:20px;border-bottom:1px solid var(--border)}
 .tab{padding:10px 18px;font-size:13px;cursor:pointer;border-radius:0;color:var(--muted);border:none;background:none;transition:all .2s;border-bottom:2px solid transparent;margin-bottom:-1px}
-.tab.active{color:var(--accent);border-bottom:2px solid var(--accent);font-weight:600}
+.tab.active{color:#fff;border-bottom:2px solid #fff;font-weight:600}
 .empty{text-align:center;padding:40px;color:var(--dim);font-size:14px}
-.pay-box{background:linear-gradient(135deg,#0a2a1a,#0d3d1e);border:1px solid rgba(0,255,136,.2);border-radius:12px;padding:20px;text-align:center;margin:16px 0}
-.pay-amt{font-size:40px;font-weight:900;color:var(--accent)}
+.pay-box{background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:20px;text-align:center;margin:16px 0}
+.pay-amt{font-size:40px;font-weight:900;color:#fff}
 .page-title{font-size:24px;font-weight:800;margin:32px 0 4px}
 .page-sub{font-size:14px;color:var(--muted);margin-bottom:24px}
 footer{text-align:center;padding:32px 0;color:var(--dim);font-size:12px;border-top:1px solid var(--border);margin-top:40px}
@@ -1524,22 +1461,22 @@ footer{text-align:center;padding:32px 0;color:var(--dim);font-size:12px;border-t
 .q-step{display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;min-width:56px}
 .q-num{width:28px;height:28px;border-radius:50%;background:var(--surface2);border:2px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--dim);transition:all .3s}
 .q-lbl{font-size:10px;color:var(--dim);transition:color .3s;white-space:nowrap}
-.q-step.active .q-num{background:var(--accent);border-color:var(--accent);color:#000}
-.q-step.active .q-lbl{color:var(--accent)}
-.q-step.done .q-num{background:rgba(0,255,136,.15);border-color:var(--accent);color:var(--accent)}
-.q-step.done .q-lbl{color:var(--accent)}
+.q-step.active .q-num{background:#fff;border-color:#fff;color:#000}
+.q-step.active .q-lbl{color:#fff}
+.q-step.done .q-num{background:rgba(255,255,255,.1);border-color:#fff;color:#fff}
+.q-step.done .q-lbl{color:#aaa}
 .q-line{flex:1;height:2px;background:var(--border);margin:0 4px;margin-bottom:14px;transition:background .3s}
-.q-line.done{background:var(--accent)}
+.q-line.done{background:#fff}
 .q-panel{display:none}.q-panel.active{display:block}
-.q-badge{font-size:11px;color:var(--accent);font-family:Consolas,monospace;letter-spacing:1px;margin-bottom:8px}
-.q-hint{background:rgba(0,102,255,.07);border:1px solid rgba(0,102,255,.2);border-radius:8px;padding:10px 14px;font-size:12px;color:#6db3ff;margin-bottom:16px;line-height:1.5}
+.q-badge{font-size:11px;color:#aaa;font-family:Consolas,monospace;letter-spacing:1px;margin-bottom:8px}
+.q-hint{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:10px 14px;font-size:12px;color:#aaa;margin-bottom:16px;line-height:1.5}
 textarea{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-size:13px;outline:none;transition:border-color .2s;resize:vertical;font-family:'Segoe UI',Arial,sans-serif;line-height:1.6}
-textarea:focus{border-color:var(--accent)}
+textarea:focus{border-color:#fff}
 textarea::placeholder{color:var(--dim);font-size:12px}
 .q-summary{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:20px;font-size:12px}
 .q-summary-item{margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,.06)}
 .q-summary-item:last-child{margin-bottom:0;padding-bottom:0;border-bottom:none}
-.q-summary-label{color:var(--accent);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.q-summary-label{color:#fff;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
 .q-summary-val{color:var(--text);line-height:1.5;max-height:60px;overflow:hidden;text-overflow:ellipsis}
 @media(max-width:600px){.q-lbl{display:none}.q-steps{gap:0}.q-step{min-width:36px}}
 @media(max-width:600px){.sections-grid{grid-template-columns:repeat(3,1fr)}.stat-grid{grid-template-columns:repeat(2,1fr)}.nav-links{gap:4px}}
@@ -1547,24 +1484,24 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 .dash-header{padding:36px 0 8px}
 .dash-greeting{font-size:13px;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;font-family:Consolas,monospace;margin-bottom:6px}
 .dash-title{font-size:30px;font-weight:900;letter-spacing:-1px}
-.dash-title span{color:var(--accent)}
+.dash-title span{color:#fff}
 .dash-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 20px;text-align:center;border:2px dashed var(--border);border-radius:16px;margin:28px 0}
 .dash-empty-icon{font-size:48px;margin-bottom:16px;opacity:.4}
 .dash-empty-txt{font-size:16px;font-weight:600;color:var(--muted);margin-bottom:6px}
 .dash-empty-sub{font-size:13px;color:var(--dim)}
 .papers-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin:24px 0}
 .paper-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;cursor:default;transition:border-color .2s,transform .15s;position:relative;overflow:hidden}
-.paper-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--accent),#00ccff);opacity:0;transition:opacity .2s}
-.paper-card:hover{border-color:rgba(0,255,136,.25);transform:translateY(-2px)}
+.paper-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:#fff;opacity:0;transition:opacity .2s}
+.paper-card:hover{border-color:rgba(255,255,255,.3);transform:translateY(-2px)}
 .paper-card:hover::before{opacity:1}
 .paper-card-topic{font-size:14px;font-weight:700;color:var(--text);line-height:1.4;margin-bottom:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .paper-card-meta{display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--dim)}
 .paper-card-date{font-family:Consolas,monospace}
 .paper-card-badge{padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:.3px}
-.badge-done{background:rgba(0,255,136,.1);color:var(--accent);border:1px solid rgba(0,255,136,.25)}
-.badge-pending{background:rgba(255,193,7,.1);color:#ffc107;border:1px solid rgba(255,193,7,.25)}
-.fab{position:fixed;bottom:32px;right:32px;width:58px;height:58px;border-radius:50%;background:linear-gradient(135deg,var(--accent),#00ccaa);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(0,255,136,.35);transition:transform .2s,box-shadow .2s;z-index:100}
-.fab:hover{transform:scale(1.1) translateY(-2px);box-shadow:0 14px 36px rgba(0,255,136,.45)}
+.badge-done{background:rgba(255,255,255,.08);color:#fff;border:1px solid rgba(255,255,255,.2)}
+.badge-pending{background:rgba(255,255,255,.04);color:#888;border:1px solid rgba(255,255,255,.12)}
+.fab{position:fixed;bottom:32px;right:32px;width:58px;height:58px;border-radius:50%;background:#fff;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(255,255,255,.15);transition:transform .2s,box-shadow .2s;z-index:100}
+.fab:hover{transform:scale(1.1) translateY(-2px);box-shadow:0 14px 36px rgba(255,255,255,.25)}
 .fab svg{width:24px;height:24px;stroke:#000;stroke-width:2.5;stroke-linecap:round}
 .fab-tooltip{position:fixed;bottom:44px;right:100px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:7px 12px;font-size:12px;color:var(--text);white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .2s;z-index:99}
 .fab:hover ~ .fab-tooltip{opacity:1}
@@ -1633,7 +1570,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   .paper-card:hover::before{opacity:0}
   .btn-p:hover:not(:disabled){transform:none;box-shadow:none}
   .btn-dl:hover:not(:disabled){transform:none}
-  .fab:hover{transform:scale(1);box-shadow:0 8px 24px rgba(0,255,136,.35)}
+  .fab:hover{transform:scale(1);box-shadow:0 8px 24px rgba(255,255,255,.15)}
 }
 </style>
 </head>
@@ -1686,7 +1623,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
     <div class="dash-empty">
       <div class="dash-empty-icon">📄</div>
       <div class="dash-empty-txt">No papers yet</div>
-      <div class="dash-empty-sub">Press <strong style="color:var(--accent)">+</strong> below to generate your first research paper</div>
+      <div class="dash-empty-sub">Press <strong style="color:#fff">+</strong> below to generate your first research paper</div>
     </div>
   </div>
 
@@ -1724,7 +1661,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 <div class="q-panel active" id="qp-0">
   <div class="q-badge">Step 1 of 6</div>
   <div class="ct" style="margin-bottom:6px">Identification of the Problem</div>
-  <div class="cs" style="margin-bottom:20px">What specific problem prompted this research? Describe it in your own words, AI will use this as the foundation. <strong style="color:var(--accent)">Optional — skip if you prefer AI to write this.</strong></div>
+  <div class="cs" style="margin-bottom:20px">What specific problem prompted this research? Describe it in your own words, AI will use this as the foundation. <strong style="color:#aaa">Optional — skip if you prefer AI to write this.</strong></div>
   <div class="q-hint">💡 Think about: What is wrong or missing? Who is affected? What is the scale of the problem? What are the consequences of not addressing it?</div>
   <div class="fg">
     <label>Research Topic / Title *</label>
@@ -1746,7 +1683,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 <div class="q-panel" id="qp-1">
   <div class="q-badge">Step 2 of 6</div>
   <div class="ct" style="margin-bottom:6px">Literature Review</div>
-  <div class="cs" style="margin-bottom:20px">What sources have you reviewed? List them and AI will expand into a full literature review. <strong style="color:var(--accent)">Optional — AI will find real papers automatically if you skip.</strong></div>
+  <div class="cs" style="margin-bottom:20px">What sources have you reviewed? List them and AI will expand into a full literature review. <strong style="color:#aaa">Optional — AI will find real papers automatically if you skip.</strong></div>
   <div class="q-hint">💡 Include: Author names and years, key arguments, relevant reports, laws, treaties, court cases, or books. Even brief notes are fine — AI will elaborate.</div>
   <div class="fg">
     <label>Key Sources & Their Main Arguments *</label>
@@ -1763,7 +1700,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 <div class="q-panel" id="qp-2">
   <div class="q-badge">Step 3 of 6</div>
   <div class="ct" style="margin-bottom:6px">Research Gap</div>
-  <div class="cs" style="margin-bottom:20px">What is missing from existing research? AI will use your answer as the gap statement. <strong style="color:var(--accent)">Optional — AI will identify a gap automatically if you skip.</strong></div>
+  <div class="cs" style="margin-bottom:20px">What is missing from existing research? AI will use your answer as the gap statement. <strong style="color:#aaa">Optional — AI will identify a gap automatically if you skip.</strong></div>
   <div class="q-hint">💡 Ask yourself: What do existing studies not cover? What contradictions exist in the literature? What context or population has been ignored? What methodology hasn't been applied?</div>
   <div class="fg">
     <label>The Research Gap <span style="color:var(--dim);font-weight:400">(optional)</span></label>
@@ -1780,7 +1717,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 <div class="q-panel" id="qp-3">
   <div class="q-badge">Step 4 of 6</div>
   <div class="ct" style="margin-bottom:6px">Objectives of the Research</div>
-  <div class="cs" style="margin-bottom:20px">List your research objectives — they will appear verbatim in your paper. <strong style="color:var(--accent)">Optional — AI will generate objectives aligned to your topic if you skip.</strong></div>
+  <div class="cs" style="margin-bottom:20px">List your research objectives — they will appear verbatim in your paper. <strong style="color:#aaa">Optional — AI will generate objectives aligned to your topic if you skip.</strong></div>
   <div class="q-hint">💡 Good objectives: Start with "To examine / To analyse / To evaluate / To compare / To propose". Be specific. You need 4–6 objectives. One per line.</div>
   <div class="fg">
     <label>Research Objectives <span style="color:var(--dim);font-weight:400">(optional — one per line)</span></label>
@@ -1797,7 +1734,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
 <div class="q-panel" id="qp-4">
   <div class="q-badge">Step 5 of 6</div>
   <div class="ct" style="margin-bottom:6px">Research Statement</div>
-  <div class="cs" style="margin-bottom:20px">Your thesis in 2–4 sentences — what this research does, how, and why. <strong style="color:var(--accent)">Optional — AI will formulate a research statement if you skip.</strong></div>
+  <div class="cs" style="margin-bottom:20px">Your thesis in 2–4 sentences — what this research does, how, and why. <strong style="color:#aaa">Optional — AI will formulate a research statement if you skip.</strong></div>
   <div class="q-hint">💡 A good research statement: Names the topic, identifies the method (doctrinal/empirical/comparative), and states the significance. Typically 2–4 sentences.</div>
   <div class="fg">
     <label>Research Statement <span style="color:var(--dim);font-weight:400">(optional)</span></label>
@@ -1827,7 +1764,7 @@ textarea::placeholder{color:var(--dim);font-size:12px}
   <div class="fg"><label>Number of Figures: <b id="sl-display">6</b></label>
     <input type="range" id="sl" min="3" max="15" value="6"
       oninput="document.getElementById('sl-display').textContent=this.value"
-      style="width:100%;accent-color:var(--accent)">
+      style="width:100%;accent-color:#fff">
   </div>
   <div style="display:flex;gap:10px;justify-content:space-between">
     <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(5)">← Back</button>
@@ -2050,7 +1987,7 @@ async function loadDashboard(){
       wrap.innerHTML=`<div class="dash-empty">
         <div class="dash-empty-icon">📄</div>
         <div class="dash-empty-txt">No papers yet</div>
-        <div class="dash-empty-sub">Press <strong style="color:var(--accent)">+</strong> below to generate your first research paper</div>
+        <div class="dash-empty-sub">Press <strong style="color:#fff">+</strong> below to generate your first research paper</div>
       </div>`;
     } else {
       wrap.innerHTML='<div class="papers-grid">'+papers.map(p=>`
@@ -2309,7 +2246,7 @@ async function showAdmin(){
       ?'<tr><td colspan="5" class="empty">No payments yet.</td></tr>'
       :d.payments.map(p=>`<tr>
         <td>${p.email||'—'}</td>
-        <td style="color:var(--accent);font-weight:700">₹${p.amount||0}</td>
+        <td style="color:#fff;font-weight:700">₹${p.amount||0}</td>
         <td style="font-family:monospace;font-size:11px">${(p.razorpay_payment||'—').slice(0,24)}</td>
         <td>${(p.created_at||'').split('T')[0]||'—'}</td>
         <td><span class="badge-${p.status==='paid'?'paid':'pending'}">${p.status}</span></td>
@@ -2474,7 +2411,7 @@ def _try_smtp(to_email: str, otp: str):
         msg['Subject'] = 'Your rdxper Login Code'
         msg['From'] = u; msg['To'] = to_email
         msg.attach(MIMEText(
-            f'<h2 style="color:#00ff88">Your rdxper OTP</h2>'
+            f'<h2 style="color:#000">Your rdxper OTP</h2>'
             f'<p style="font-size:32px;letter-spacing:8px;font-family:monospace"><b>{otp}</b></p>'
             f'<p>Valid for 10 minutes.</p>', 'html'))
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
