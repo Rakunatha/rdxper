@@ -1,87 +1,3 @@
-
-# ================== FORMAT CONFIG ==================
-FORMAT_TEMPLATE = {
-    "title_upper": True,
-    "include_keywords": True,
-    "sections_order": [
-        "abstract","keywords","introduction","objectives",
-        "literature_review","methodology","data_analysis",
-        "results","discussion","limitations","suggestions",
-        "conclusion","reference"
-    ]
-}
-
-def format_title(title):
-    return title.upper() if FORMAT_TEMPLATE["title_upper"] else title
-
-def format_section(title, content):
-    return f"\n{title.upper()}\n\n{content}\n"
-
-# ================== STRUCTURED GENERATION ==================
-def build_structured_paper(data):
-    doc = ""
-
-    # Title
-    doc += format_title(data.get("title","")) + "\n\n"
-
-    # Authors
-    for author in data.get("authors", []):
-        doc += author + "\n"
-    doc += "\n"
-
-    # Sections
-    for sec in FORMAT_TEMPLATE["sections_order"]:
-        if sec == "keywords" and FORMAT_TEMPLATE["include_keywords"]:
-            doc += "KEYWORDS: " + ", ".join(data.get("keywords", [])) + "\n"
-        elif sec in data:
-            doc += format_section(sec.replace("_"," "), data[sec])
-
-    return doc
-
-
-# ================== PROMPT STRUCTURE (IMPORTANT) ==================
-def get_section_prompt(section, topic):
-    prompts = {
-        "abstract": f"Write a structured abstract for a research paper on {topic} including background, aim, objective, methodology, findings and conclusion in one paragraph.",
-        "introduction": f"Write a detailed academic introduction for a research paper on {topic}.",
-        "objectives": f"List clear research objectives for {topic}.",
-        "literature_review": f"Write a detailed literature review for {topic} with multiple studies.",
-        "methodology": f"Write research methodology including sample size, variables and tools for {topic}.",
-        "data_analysis": f"Provide data analysis explanation for {topic} with figures explanation.",
-        "results": f"Write results section based on analysis for {topic}.",
-        "discussion": f"Write discussion interpreting results for {topic}.",
-        "limitations": f"Write limitations of the study on {topic}.",
-        "suggestions": f"Write suggestions for future research on {topic}.",
-        "conclusion": f"Write a strong academic conclusion for {topic}.",
-        "reference": f"Provide academic references for {topic} in APA style."
-    }
-    return prompts.get(section, f"Write about {section} for {topic}")
-
-
-if __name__ == "__main__":
-    sample_data = {
-        "title": "Sample Research Paper",
-        "authors": ["Author Name", "Co-Author Name"],
-        "keywords": ["AI","Law"],
-        "abstract": "Sample abstract...",
-        "introduction": "Intro...",
-        "objectives": "Objectives...",
-        "literature_review": "Review...",
-        "methodology": "Method...",
-        "data_analysis": "Analysis...",
-        "results": "Results...",
-        "discussion": "Discussion...",
-        "limitations": "Limitations...",
-        "suggestions": "Suggestions...",
-        "conclusion": "Conclusion...",
-        "reference": "References..."
-    }
-
-    print(build_structured_paper(sample_data))
-
-
-# ===== ORIGINAL CODE BELOW (UNCHANGED CORE) =====
-
 """
 rdxper v4.0 — Free AI-Powered Real Research Paper Generator
 ────────────────────────────────────────────────────────────
@@ -1568,7 +1484,7 @@ class PaperGenerator:
         out  = os.path.abspath(f'generated/rdxper_{safe}_{self.jid[:8]}.docx')
         doc.save(out)
         self.prog(99, 'Done!')
-        return out, sections
+        return out
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1588,7 +1504,7 @@ HTML = """<!DOCTYPE html>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-:root{--bg:#000;--s1:#080808;--s2:#0f0f0f;--s3:#171717;--border:rgba(212,175,55,0.15);--border2:rgba(212,175,55,0.35);--text:#fff;--muted:#555;--muted2:#888;--gold:#D4AF37;--gold2:#F5D76E;--gold3:rgba(212,175,55,0.12);--error:#ff4545;--r:8px}
+:root{--bg:#000;--s1:#080808;--s2:#0f0f0f;--s3:#171717;--border:rgba(255,255,255,0.08);--border2:rgba(255,255,255,0.15);--text:#fff;--muted:#555;--muted2:#888;--error:#ff4545;--r:8px}
 body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column;overflow-x:hidden}
 /* ── Noise grain overlay ── */
 body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.025;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");background-size:200px}
@@ -1602,12 +1518,12 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;back
 header{padding:16px 0;border-bottom:1px solid var(--border);position:relative;z-index:10}
 header .wrap{display:flex;align-items:center;justify-content:space-between}
 .logo{display:flex;align-items:center;gap:10px;text-decoration:none}
-.logo-mark{width:30px;height:30px;background:var(--gold);border-radius:6px;display:grid;place-items:center;font-weight:900;font-size:11px;color:#000;letter-spacing:-.5px;transition:transform .2s}
+.logo-mark{width:30px;height:30px;background:#fff;border-radius:6px;display:grid;place-items:center;font-weight:900;font-size:11px;color:#000;letter-spacing:-.5px;transition:transform .2s}
 .logo:hover .logo-mark{transform:rotate(-5deg) scale(1.05)}
 .logo-text{font-size:18px;font-weight:800;letter-spacing:-1px;color:#fff}
 .nav-links{display:flex;gap:6px;align-items:center}
 .nav-btn{background:none;border:1px solid var(--border);color:var(--muted2);padding:5px 11px;border-radius:6px;cursor:pointer;font-size:12px;transition:all .18s;white-space:nowrap}
-.nav-btn:hover{border-color:var(--gold2);color:var(--gold)}
+.nav-btn:hover{border-color:rgba(255,255,255,.4);color:#fff}
 .nav-btn.danger{border-color:rgba(255,69,69,.25);color:var(--error)}
 .nav-btn.danger:hover{border-color:var(--error);background:rgba(255,69,69,.06)}
 .user-chip{display:flex;align-items:center;gap:7px;background:var(--s2);border:1px solid var(--border);border-radius:30px;padding:4px 11px 4px 4px;cursor:pointer;transition:border-color .18s}
@@ -1622,7 +1538,7 @@ footer{border-top:1px solid var(--border);padding:20px 0;position:relative;z-ind
 footer .wrap{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
 .footer-brand{font-size:11px;color:var(--muted);letter-spacing:.5px}
 .footer-tag{font-size:11px;color:var(--muted);font-style:italic;letter-spacing:.3px}
-.footer-lawyers{font-size:11px;font-weight:600;color:var(--gold);letter-spacing:1.5px;text-transform:uppercase;border:1px solid rgba(212,175,55,0.2);padding:3px 10px;border-radius:30px}
+.footer-lawyers{font-size:11px;font-weight:600;color:rgba(255,255,255,.35);letter-spacing:1.5px;text-transform:uppercase;border:1px solid rgba(255,255,255,.08);padding:3px 10px;border-radius:30px}
 /* ── Typography ── */
 h1{font-size:clamp(28px,5vw,50px);font-weight:900;line-height:1.08;letter-spacing:-2px}
 h1 em{font-style:normal;color:rgba(255,255,255,.35)}
@@ -1635,18 +1551,18 @@ h1 em{font-style:normal;color:rgba(255,255,255,.35)}
 .fg{margin-bottom:14px}
 .fg label{display:block;font-size:12px;color:var(--muted2);margin-bottom:6px;letter-spacing:.3px}
 .fg input,.fg select,textarea{width:100%;background:var(--s2);border:1px solid var(--border);border-radius:var(--r);padding:10px 13px;color:var(--text);font-size:13px;outline:none;transition:border-color .18s,background .18s;font-family:inherit;resize:vertical}
-.fg input:focus,.fg select:focus,textarea:focus{border-color:var(--gold);background:var(--s3)}
+.fg input:focus,.fg select:focus,textarea:focus{border-color:rgba(255,255,255,.35);background:var(--s3)}
 textarea{min-height:100px;line-height:1.55}
 /* ── Buttons ── */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:11px 20px;border-radius:var(--r);border:none;font-size:14px;font-weight:600;cursor:pointer;transition:all .18s;width:100%;font-family:inherit}
 .btn:disabled{opacity:.4;cursor:not-allowed}
-.btn-p{background:var(--gold);color:#000}
-.btn-p:hover:not(:disabled){background:var(--gold2);transform:translateY(-1px);box-shadow:0 8px 24px rgba(212,175,55,0.25)}
+.btn-p{background:#fff;color:#000}
+.btn-p:hover:not(:disabled){background:#e8e8e8;transform:translateY(-1px);box-shadow:0 8px 24px rgba(255,255,255,.1)}
 .btn-p:active:not(:disabled){transform:translateY(0)}
 .btn-s{background:transparent;color:var(--muted2);border:1px solid var(--border)}
 .btn-s:hover:not(:disabled){border-color:var(--border2);color:#fff}
-.btn-dl{background:var(--gold);color:#000;box-shadow:0 4px 20px rgba(212,175,55,0.2)}
-.btn-dl:hover:not(:disabled){background:var(--gold2);transform:translateY(-2px);box-shadow:0 10px 32px rgba(212,175,55,0.35)}
+.btn-dl{background:#fff;color:#000;box-shadow:0 4px 20px rgba(255,255,255,.08)}
+.btn-dl:hover:not(:disabled){background:#e8e8e8;transform:translateY(-2px);box-shadow:0 10px 32px rgba(255,255,255,.15)}
 /* ── Notifs ── */
 .notif{display:none;padding:10px 14px;border-radius:var(--r);font-size:13px;margin-bottom:12px;animation:fadeUp .2s ease}
 .notif.show{display:block}
@@ -1657,8 +1573,8 @@ textarea{min-height:100px;line-height:1.55}
 .hero{padding:64px 0 40px;flex:1}
 /* ── Progress bar ── */
 .prog-wrap{background:var(--s3);border-radius:100px;height:3px;overflow:hidden;margin:10px 0}
-.prog-fill{height:100%;background:linear-gradient(90deg,var(--gold),var(--gold2));border-radius:100px;transition:width .5s cubic-bezier(.4,0,.2,1);position:relative}
-.prog-fill::after{content:'';position:absolute;right:0;top:-2px;width:6px;height:7px;background:var(--gold2);border-radius:50%;box-shadow:0 0 8px rgba(212,175,55,0.9),0 0 16px rgba(212,175,55,0.5)}
+.prog-fill{height:100%;background:#fff;border-radius:100px;transition:width .5s cubic-bezier(.4,0,.2,1);position:relative}
+.prog-fill::after{content:'';position:absolute;right:0;top:-2px;width:6px;height:7px;background:#fff;border-radius:50%;box-shadow:0 0 8px rgba(255,255,255,.8),0 0 16px rgba(255,255,255,.4)}
 .prog-row{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:6px;font-family:monospace}
 /* ── Stage box ── */
 .stage-box{background:var(--s2);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;display:flex;align-items:center;gap:10px;margin:10px 0}
@@ -1668,8 +1584,8 @@ textarea{min-height:100px;line-height:1.55}
 /* ── Section grid ── */
 .sections-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-bottom:10px}
 .sec-item{font-size:9px;padding:5px 3px;border-radius:5px;background:var(--s3);border:1px solid var(--border);color:var(--muted);text-align:center;font-family:monospace;transition:all .3s;letter-spacing:.3px}
-.sec-item.writing{background:var(--gold3);border-color:var(--gold);color:var(--gold);animation:pulse 1.2s ease-in-out infinite}
-.sec-item.done{background:rgba(212,175,55,0.05);border-color:rgba(212,175,55,0.2);color:rgba(212,175,55,0.5)}
+.sec-item.writing{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.25);color:#fff;animation:pulse 1.2s ease-in-out infinite}
+.sec-item.done{background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.12);color:rgba(255,255,255,.5)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 /* ── Stats ── */
 .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:20px}
@@ -1692,7 +1608,7 @@ tr:hover td{background:var(--s2)}
 /* ── Tabs ── */
 .tabs{display:flex;gap:0;margin-bottom:18px;border-bottom:1px solid var(--border)}
 .tab{padding:9px 16px;font-size:12px;cursor:pointer;color:var(--muted);border:none;background:none;transition:color .18s;border-bottom:2px solid transparent;margin-bottom:-1px;font-family:inherit}
-.tab.active{color:var(--gold);border-bottom-color:var(--gold);font-weight:600}
+.tab.active{color:#fff;border-bottom-color:#fff;font-weight:600}
 /* ── Profile ── */
 .profile-header{display:flex;align-items:center;gap:16px;background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:22px;margin-bottom:18px}
 .profile-avatar{width:56px;height:56px;border-radius:50%;border:2px solid rgba(255,255,255,.15)}
@@ -1702,12 +1618,12 @@ tr:hover td{background:var(--s2)}
 .q-step{display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;min-width:52px}
 .q-num{width:26px;height:26px;border-radius:50%;background:var(--s2);border:1.5px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--muted);transition:all .25s}
 .q-lbl{font-size:9px;color:var(--muted);transition:color .25s;white-space:nowrap;letter-spacing:.3px}
-.q-step.active .q-num{background:var(--gold);border-color:var(--gold);color:#000}
-.q-step.active .q-lbl{color:var(--gold)}
+.q-step.active .q-num{background:#fff;border-color:#fff;color:#000}
+.q-step.active .q-lbl{color:#fff}
 .q-step.done .q-num{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.2);color:rgba(255,255,255,.5)}
 .q-step.done .q-lbl{color:rgba(255,255,255,.35)}
 .q-line{flex:1;height:1px;background:var(--border);margin:0 4px;margin-bottom:12px;transition:background .25s}
-.q-line.done{background:rgba(212,175,55,0.3)}
+.q-line.done{background:rgba(255,255,255,.2)}
 .q-panel{display:none;animation:fadeUp .25s ease}.q-panel.active{display:block}
 .q-badge{display:inline-block;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--muted2);border:1px solid var(--border);border-radius:20px;padding:3px 10px;margin-bottom:14px;font-family:monospace}
 .q-hint{background:var(--s2);border:1px solid var(--border);border-left:2px solid rgba(255,255,255,.2);border-radius:var(--r);padding:10px 13px;font-size:12px;color:var(--muted2);margin-bottom:14px;line-height:1.5}
@@ -1736,12 +1652,12 @@ tr:hover td{background:var(--s2)}
 .paper-card-meta{display:flex;align-items:center;justify-content:space-between;font-size:10px;color:var(--muted)}
 .paper-card-date{font-family:monospace}
 /* ── Dashboard add button ── */
-.dash-add-btn{display:inline-flex;align-items:center;gap:7px;background:var(--gold);color:#000;border:none;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer;transition:all .2s;white-space:nowrap;font-family:inherit;margin-bottom:6px}
-.dash-add-btn:hover{background:var(--gold2);transform:translateY(-1px);box-shadow:0 6px 20px rgba(212,175,55,0.3)}
+.dash-add-btn{display:inline-flex;align-items:center;gap:7px;background:#fff;color:#000;border:none;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer;transition:all .2s;white-space:nowrap;font-family:inherit;margin-bottom:6px}
+.dash-add-btn:hover{background:#e8e8e8;transform:translateY(-1px);box-shadow:0 6px 20px rgba(255,255,255,.12)}
 .dash-add-btn:active{transform:translateY(0)}
 @media(max-width:380px){.dash-add-btn span{display:none}}
 /* ── Done screen ── */
-.done-mark{width:56px;height:56px;border-radius:50%;background:var(--gold3);border:1px solid var(--gold);display:flex;align-items:center;justify-content:center;font-size:22px;margin:0 auto 20px;animation:popIn .4s cubic-bezier(.34,1.56,.64,1);color:var(--gold)}
+.done-mark{width:56px;height:56px;border-radius:50%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;font-size:22px;margin:0 auto 20px;animation:popIn .4s cubic-bezier(.34,1.56,.64,1)}
 @keyframes popIn{from{transform:scale(0) rotate(-20deg);opacity:0}to{transform:scale(1) rotate(0);opacity:1}}
 /* ── Pay ── */
 .pay-box{background:var(--s2);border:1px solid var(--border);border-radius:var(--r);padding:18px;text-align:center;margin:14px 0}
@@ -1814,19 +1730,6 @@ tr:hover td{background:var(--s2)}
   input,textarea,select{min-height:42px}
   .paper-card{padding:18px}
 }
-/* ── Preview modal ── */
-.preview-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:200;overflow-y:auto;padding:24px 16px;backdrop-filter:blur(4px)}
-.preview-modal.open{display:flex;align-items:flex-start;justify-content:center}
-.preview-inner{background:var(--s1);border:1px solid var(--gold);border-radius:12px;max-width:680px;width:100%;padding:28px 28px 24px;position:relative;margin:auto;box-shadow:0 0 60px rgba(212,175,55,0.12)}
-.preview-close{position:absolute;top:14px;right:14px;background:var(--s3);border:1px solid var(--border);color:var(--muted2);width:30px;height:30px;border-radius:50%;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center;transition:all .18s;line-height:1}
-.preview-close:hover{border-color:var(--gold);color:var(--gold)}
-.preview-section{margin-bottom:10px;padding:12px 14px;background:var(--s2);border-radius:8px;border:1px solid var(--border)}
-.preview-label{font-size:9px;color:var(--gold);text-transform:uppercase;letter-spacing:1.2px;margin-bottom:5px;font-weight:700;font-family:monospace}
-.preview-text{font-size:12px;color:rgba(255,255,255,.72);line-height:1.65}
-.preview-header{display:flex;align-items:center;gap:10px;margin-bottom:18px}
-.preview-icon{width:36px;height:36px;background:var(--gold3);border:1px solid var(--gold);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
-.btn-preview{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:11px 20px;border-radius:var(--r);border:1px solid var(--gold);font-size:14px;font-weight:600;cursor:pointer;transition:all .18s;width:100%;font-family:inherit;background:transparent;color:var(--gold);margin-bottom:10px}
-.btn-preview:hover{background:var(--gold3);transform:translateY(-1px)}
 /* ── Cursor blink for monospace elements ── */
 .mono{font-family:monospace}
 .page-title{font-size:22px;font-weight:800;margin:28px 0 3px;letter-spacing:-.5px}
@@ -2018,7 +1921,7 @@ tr:hover td{background:var(--s2)}
       </div>
       <div class="fg">
         <label>Number of Figures — <span id="sl-display" style="color:#fff">6</span></label>
-        <input type="range" id="sl" min="3" max="15" value="6" style="width:100%;accent-color:var(--gold);background:transparent;border:none;padding:4px 0" oninput="document.getElementById('sl-display').textContent=this.value">
+        <input type="range" id="sl" min="3" max="15" value="6" style="width:100%;accent-color:#fff;background:transparent;border:none;padding:4px 0" oninput="document.getElementById('sl-display').textContent=this.value">
       </div>
       <div id="n-gen" class="notif"></div>
       <button class="btn btn-p" id="btn-gen" onclick="generate()" style="margin-top:4px">
@@ -2066,7 +1969,6 @@ tr:hover td{background:var(--s2)}
         <div class="card-sm" style="grid-column:1/-1"><div style="font-size:10px;color:var(--muted);margin-bottom:2px">Generated at</div><div id="d-time" style="font-size:12px;font-weight:700;font-family:monospace"></div></div>
       </div>
     </div>
-    <button class="btn btn-preview" onclick="showPreview()">👁 Preview Paper Contents</button>
     <button class="btn btn-dl" id="btn-dl" onclick="download()" style="margin-bottom:10px">⬇ Download Research Paper (.docx)</button>
     <button class="btn btn-s" onclick="again()">Generate Another Paper</button>
   </div>
@@ -2423,68 +2325,6 @@ function admTab(name,el){
   ['users','papers','payments'].forEach(t=>{const d=document.getElementById('adm-tab-'+t);if(d)d.style.display=t===name?'block':'none';});
 }
 </script>
-
-<!-- ═══ PREVIEW MODAL ═══ -->
-<div class="preview-modal" id="preview-modal">
-  <div class="preview-inner">
-    <button class="preview-close" onclick="closePreview()">✕</button>
-    <div class="preview-header">
-      <div class="preview-icon">📄</div>
-      <div>
-        <div style="font-size:16px;font-weight:800;color:var(--gold);letter-spacing:-.3px">Paper Preview</div>
-        <div id="preview-modal-topic" style="font-size:11px;color:var(--muted2);margin-top:2px;max-width:480px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
-      </div>
-    </div>
-    <div id="preview-loading" style="text-align:center;padding:32px;color:var(--muted2);font-size:13px">
-      <div class="spin" style="margin:0 auto 12px;width:18px;height:18px;border-width:2px"></div>
-      Loading preview...
-    </div>
-    <div id="preview-content" style="display:none"></div>
-    <div id="preview-actions" style="display:none;margin-top:16px;display:none">
-      <button class="btn btn-dl" onclick="download();closePreview()">⬇ Download Now</button>
-      <button class="btn btn-s" style="margin-top:8px" onclick="closePreview()">Close Preview</button>
-    </div>
-  </div>
-</div>
-
-<script>
-async function showPreview(){
-  document.getElementById('preview-modal').classList.add('open');
-  document.getElementById('preview-loading').style.display='block';
-  document.getElementById('preview-content').style.display='none';
-  document.getElementById('preview-actions').style.display='none';
-  document.getElementById('preview-modal-topic').textContent=curTopic;
-  try{
-    const r=await fetch('/api/preview/'+jobId,{headers:{'Authorization':'Bearer '+token}});
-    const d=await r.json();
-    document.getElementById('preview-loading').style.display='none';
-    if(!d.success){document.getElementById('preview-content').innerHTML='<div style="color:var(--error);font-size:13px">Preview unavailable.</div>';document.getElementById('preview-content').style.display='block';return;}
-    const secs=[
-      ['Abstract',d.abstract],
-      ['Keywords',d.keywords],
-      ['Introduction (excerpt)',d.intro_excerpt],
-      ['Objectives',d.objectives],
-      ['Discussion (excerpt)',d.discussion_excerpt],
-      ['Conclusion (excerpt)',d.conclusion_excerpt],
-      ['References',''+d.ref_count+' verified sources cited'],
-    ];
-    document.getElementById('preview-content').innerHTML=secs.map(([label,val])=>
-      `<div class="preview-section"><div class="preview-label">${label}</div><div class="preview-text">${escHtml(String(val||'—'))}</div></div>`
-    ).join('');
-    document.getElementById('preview-content').style.display='block';
-    document.getElementById('preview-actions').style.display='block';
-  }catch(e){
-    document.getElementById('preview-loading').style.display='none';
-    document.getElementById('preview-content').innerHTML='<div style="color:var(--error);font-size:13px">Could not load preview.</div>';
-    document.getElementById('preview-content').style.display='block';
-  }
-}
-function closePreview(){
-  document.getElementById('preview-modal').classList.remove('open');
-}
-document.getElementById('preview-modal').addEventListener('click',function(e){if(e.target===this)closePreview();});
-document.addEventListener('keydown',function(e){if(e.key==='Escape')closePreview();});
-</script>
 </body>
 </html>"""
 
@@ -2714,10 +2554,9 @@ def generate_paper():
     def _run():
         try:
             g    = PaperGenerator(jid, jobs)
-            path, sections = g.generate(topic, nfigs, author, inst, email, questionnaire)
+            path = g.generate(topic, nfigs, author, inst, email, questionnaire)
             jobs[jid].update({'status': 'done', 'progress': 100,
-                              'message': 'Research paper ready!', 'file_path': path,
-                              'sections': sections})
+                              'message': 'Research paper ready!', 'file_path': path})
             with get_db() as db:
                 db.execute('UPDATE papers SET file_path=? WHERE id=?', (path, jid))
         except Exception as e:
@@ -2782,33 +2621,9 @@ def download_paper(jid):
                      mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
 
 
-@app.route('/api/preview/<jid>')
-def preview_paper(jid):
-    tok = request.headers.get('Authorization', '').replace('Bearer ', '')
-    if not session_get(tok):
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
-    job = jobs.get(jid)
-    if not job or job.get('status') != 'done':
-        return jsonify({'success': False, 'message': 'Not ready'}), 404
-    sections = job.get('sections', {})
-    abstract   = sections.get('abstract', '')
-    keywords   = sections.get('keywords', '')
-    intro_full = sections.get('introduction', '')
-    intro_exc  = (intro_full[:500] + '…') if len(intro_full) > 500 else intro_full
-    objectives = sections.get('objectives', '')[:400]
-    refs       = sections.get('references', [])
-    discussion = sections.get('discussion', '')[:300]
-    conclusion = sections.get('conclusion', '')[:300]
-    return jsonify({
-        'success':    True,
-        'abstract':   abstract,
-        'keywords':   keywords,
-        'intro_excerpt': intro_exc,
-        'objectives': objectives,
-        'discussion_excerpt': (discussion + '…') if len(sections.get('discussion','')) > 300 else discussion,
-        'conclusion_excerpt': (conclusion + '…') if len(sections.get('conclusion','')) > 300 else conclusion,
-        'ref_count':  len(refs),
-    })
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  ENTRY POINT
 # ═══════════════════════════════════════════════════════════════════════════════
 
