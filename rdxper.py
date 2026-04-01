@@ -1652,10 +1652,11 @@ tr:hover td{background:var(--s2)}
 .paper-card-topic{font-size:13px;font-weight:700;line-height:1.35;margin-bottom:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .paper-card-meta{display:flex;align-items:center;justify-content:space-between;font-size:10px;color:var(--muted)}
 .paper-card-date{font-family:monospace}
-/* ── FAB ── */
-.fab{position:fixed;bottom:28px;right:28px;width:52px;height:52px;border-radius:50%;background:#fff;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 28px rgba(255,255,255,.12);transition:all .2s;z-index:100}
-.fab:hover{transform:scale(1.08) translateY(-2px);box-shadow:0 14px 40px rgba(255,255,255,.2)}
-.fab svg{width:22px;height:22px;stroke:#000;stroke-width:2.5;stroke-linecap:round}
+/* ── Dashboard add button ── */
+.dash-add-btn{display:inline-flex;align-items:center;gap:7px;background:#fff;color:#000;border:none;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer;transition:all .2s;white-space:nowrap;font-family:inherit;margin-bottom:6px}
+.dash-add-btn:hover{background:#e8e8e8;transform:translateY(-1px);box-shadow:0 6px 20px rgba(255,255,255,.12)}
+.dash-add-btn:active{transform:translateY(0)}
+@media(max-width:380px){.dash-add-btn span{display:none}}
 /* ── Done screen ── */
 .done-mark{width:56px;height:56px;border-radius:50%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;font-size:22px;margin:0 auto 20px;animation:popIn .4s cubic-bezier(.34,1.56,.64,1)}
 @keyframes popIn{from{transform:scale(0) rotate(-20deg);opacity:0}to{transform:scale(1) rotate(0);opacity:1}}
@@ -1685,7 +1686,6 @@ tr:hover td{background:var(--s2)}
   .nav-links{gap:4px}
   .nav-btn{padding:5px 8px;font-size:11px}
   .papers-grid{grid-template-columns:1fr 1fr}
-  .fab{bottom:20px;right:16px;width:46px;height:46px}
   h1{font-size:28px;letter-spacing:-1.5px}
   .sections-grid{grid-template-columns:repeat(3,1fr)}
   .hero{padding:36px 0 24px}
@@ -1722,7 +1722,7 @@ tr:hover td{background:var(--s2)}
   .stat-grid{grid-template-columns:repeat(4,1fr)}
   .sections-grid{grid-template-columns:repeat(4,1fr)}
 }
-@media(hover:none){.paper-card:hover{transform:none}.fab:hover{transform:scale(1)}}
+@media(hover:none){.paper-card:hover{transform:none}}
 /* Touch-friendly tap targets */
 @media(pointer:coarse){
   .btn{min-height:44px}
@@ -1787,9 +1787,15 @@ tr:hover td{background:var(--s2)}
 <!-- ═══ DASHBOARD ═══ -->
 <div class="screen" id="s-dashboard">
   <div class="wrap flex-grow">
-    <div class="dash-header">
-      <div class="dash-greeting">Welcome back</div>
-      <div class="dash-title" id="dash-name-title">Researcher<span>.</span></div>
+    <div class="dash-header" style="display:flex;align-items:flex-end;justify-content:space-between">
+      <div>
+        <div class="dash-greeting">Welcome back</div>
+        <div class="dash-title" id="dash-name-title">Researcher<span>.</span></div>
+      </div>
+      <button class="dash-add-btn" onclick="startNewPaper()" title="New Research Paper">
+        <svg viewBox="0 0 24 24" fill="none" width="18" height="18"><line x1="12" y1="5" x2="12" y2="19" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+        New Paper
+      </button>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;margin:24px 0 8px">
       <div style="font-size:14px;font-weight:700">Your Research Papers</div>
@@ -1799,12 +1805,9 @@ tr:hover td{background:var(--s2)}
       <div class="dash-empty">
         <div class="dash-empty-icon">📄</div>
         <div class="dash-empty-txt">No papers yet</div>
-        <div class="dash-empty-sub">Press <strong style="color:#fff">+</strong> below to generate your first research paper</div>
+        <div class="dash-empty-sub">Press <strong style="color:#fff">+ New Paper</strong> above to generate your first research paper</div>
       </div>
     </div>
-    <button class="fab" onclick="startNewPaper()" title="New Research Paper">
-      <svg viewBox="0 0 24 24" fill="none"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    </button>
   </div>
   <footer><div class="wrap">
     <span class="footer-lawyers">An Interactive Lawyers Tool</span>
