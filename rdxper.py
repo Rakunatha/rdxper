@@ -414,7 +414,7 @@ SYSTEM_PROMPT = (
 #  WEB SCRAPER  (no API keys required)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _http_get(url: str, timeout: int = 12) -> object:
+def _http_get(url: str, timeout: int = 10) -> object:
     try:
         req = urllib.request.Request(
             url,
@@ -696,7 +696,7 @@ class GeminiWriter:
                 if progress_cb:
                     if pct is None: progress_cb(None, msg)
                     else: progress_cb(max(52, min(68, 52 + int((pct-30)/45*16))), msg)
-            time.sleep(3)   # brief stagger so API sees two distinct requests
+            time.sleep(1)   # minimal stagger so API sees two distinct requests
             if progress_cb: progress_cb(52, f'{pname} writing literature review & methodology...')
             _results['raw2'] = ai_generate(p2, system=SYSTEM_PROMPT, temperature=0.7,
                                            progress_cb=prog2, tracked_sections=s2)
@@ -706,7 +706,7 @@ class GeminiWriter:
                 if progress_cb:
                     if pct is None: progress_cb(None, msg)
                     else: progress_cb(max(55, min(75, 55 + int((pct-30)/45*20))), msg)
-            time.sleep(6)   # stagger so API tokens are spread
+            time.sleep(2)   # minimal stagger so API tokens are spread
             if progress_cb: progress_cb(55, f'{pname} writing results, discussion & conclusion...')
             _results['raw3'] = ai_generate(p3, system=SYSTEM_PROMPT, temperature=0.7,
                                            progress_cb=prog3, tracked_sections=s3)
@@ -1464,9 +1464,11 @@ class PaperGenerator:
         if not specs:
             specs = writer._fallback_specs(nfigs)
 
-        # ── Step 4: Render charts ────────────────────────────────────────────
+        # ── Step 4: Render charts in parallel ────────────────────────────────
         self.prog(82, f'Rendering {len(specs)} SPSS-style charts...')
-        charts = [make_chart(sp) for sp in specs]
+        with ThreadPoolExecutor(max_workers=min(4, len(specs))) as ex:
+            chart_futures = [ex.submit(make_chart, sp) for sp in specs]
+            charts = [f.result() for f in chart_futures]
 
         # ── Step 5: Build DOCX ───────────────────────────────────────────────
         self.prog(90, 'Assembling Word document...')
@@ -1489,7 +1491,11 @@ HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>rdxper — Research Paper Generator</title>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
@@ -1652,20 +1658,74 @@ tr:hover td{background:var(--s2)}
 .pay-box{background:var(--s2);border:1px solid var(--border);border-radius:var(--r);padding:18px;text-align:center;margin:14px 0}
 .pay-amt{font-size:36px;font-weight:900;letter-spacing:-2px}
 /* ── Responsive ── */
+@media(max-width:960px){
+  .wrap{padding:0 20px}
+}
+@media(max-width:768px){
+  .wrap{padding:0 16px}
+  .nav-btn:not(.danger){display:none}
+  .user-chip span{max-width:80px}
+  .stat-grid{grid-template-columns:repeat(2,1fr)}
+  .card{padding:20px}
+  .q-steps{overflow-x:auto;padding-bottom:4px}
+  table{font-size:11px}
+  th,td{padding:7px 10px}
+  .sections-grid{grid-template-columns:repeat(3,1fr)}
+  .papers-grid{grid-template-columns:repeat(2,1fr)}
+}
 @media(max-width:600px){
   .wrap{padding:0 14px}
   header{padding:12px 0}
+  header .wrap{gap:8px}
+  .nav-links{gap:4px}
+  .nav-btn{padding:5px 8px;font-size:11px}
   .papers-grid{grid-template-columns:1fr 1fr}
   .fab{bottom:20px;right:16px;width:46px;height:46px}
-  h1{font-size:28px}
+  h1{font-size:28px;letter-spacing:-1.5px}
   .sections-grid{grid-template-columns:repeat(3,1fr)}
   .hero{padding:36px 0 24px}
   .dash-header{padding:24px 0 4px}
   .dash-title{font-size:26px}
   .q-lbl{display:none}
   .profile-header{flex-direction:column;text-align:center;gap:10px}
+  .card{padding:18px}
+  .stat-grid{grid-template-columns:repeat(2,1fr);gap:8px}
+  .stat-val{font-size:22px}
+  .btn{font-size:13px;padding:10px 16px}
+  .sub{font-size:14px}
+  textarea{min-height:80px}
+  .prog-wrap{margin:8px 0}
+  footer .wrap{justify-content:center}
+}
+@media(max-width:380px){
+  .wrap{padding:0 10px}
+  h1{font-size:24px}
+  .papers-grid{grid-template-columns:1fr}
+  .sections-grid{grid-template-columns:repeat(2,1fr)}
+  .stat-grid{grid-template-columns:1fr 1fr}
+  .card{padding:14px}
+  .nav-btn{display:none}
+}
+@media(max-width:600px) and (orientation:landscape){
+  .hero{padding:20px 0 16px}
+  h1{font-size:24px}
+}
+/* iPad / tablet specific */
+@media(min-width:601px) and (max-width:1024px){
+  .wrap{padding:0 32px}
+  .papers-grid{grid-template-columns:repeat(3,1fr)}
+  .stat-grid{grid-template-columns:repeat(4,1fr)}
+  .sections-grid{grid-template-columns:repeat(4,1fr)}
 }
 @media(hover:none){.paper-card:hover{transform:none}.fab:hover{transform:scale(1)}}
+/* Touch-friendly tap targets */
+@media(pointer:coarse){
+  .btn{min-height:44px}
+  .nav-btn{min-height:36px;padding:6px 12px}
+  .tab{padding:12px 18px}
+  input,textarea,select{min-height:42px}
+  .paper-card{padding:18px}
+}
 /* ── Cursor blink for monospace elements ── */
 .mono{font-family:monospace}
 .page-title{font-size:22px;font-weight:800;margin:28px 0 3px;letter-spacing:-.5px}
@@ -1697,7 +1757,6 @@ tr:hover td{background:var(--s2)}
 <div class="screen active" id="s-home">
   <div class="wrap flex-grow">
     <div class="hero" style="text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center">
-      <div class="eyebrow">Research Paper Generator</div>
       <h1 style="margin-bottom:16px">Generate <em>Genuine</em><br>Research Papers</h1>
       <p class="sub" style="margin-bottom:40px">Real sources. Real citations. AI-written prose. Delivered as a formatted .docx.</p>
       <div class="card" style="max-width:400px;width:100%;text-align:left">
@@ -1716,9 +1775,7 @@ tr:hover td{background:var(--s2)}
     </div>
   </div>
   <footer><div class="wrap">
-    <span class="footer-brand">rdxper v4.0</span>
     <span class="footer-lawyers">An Interactive Lawyers Tool</span>
-    <span class="footer-tag">AI · Research · Law</span>
   </div></footer>
 </div>
 
@@ -1745,9 +1802,7 @@ tr:hover td{background:var(--s2)}
     </button>
   </div>
   <footer><div class="wrap">
-    <span class="footer-brand">rdxper v4.0</span>
     <span class="footer-lawyers">An Interactive Lawyers Tool</span>
-    <span class="footer-tag">AI · Research · Law</span>
   </div></footer>
 </div>
 
@@ -1870,9 +1925,7 @@ tr:hover td{background:var(--s2)}
     </div>
   </div>
   <footer><div class="wrap">
-    <span class="footer-brand">rdxper v4.0</span>
     <span class="footer-lawyers">An Interactive Lawyers Tool</span>
-    <span class="footer-tag">AI · Research · Law</span>
   </div></footer>
 </div>
 
@@ -1891,9 +1944,7 @@ tr:hover td{background:var(--s2)}
     <p style="font-size:11px;color:var(--muted);text-align:center;margin-top:16px;line-height:1.6">This typically takes 2–5 minutes.<br>Fetching real papers from Semantic Scholar, CrossRef & Wikipedia.</p>
   </div>
   <footer><div class="wrap">
-    <span class="footer-brand">rdxper v4.0</span>
     <span class="footer-lawyers">An Interactive Lawyers Tool</span>
-    <span class="footer-tag">AI · Research · Law</span>
   </div></footer>
 </div>
 
@@ -1915,9 +1966,7 @@ tr:hover td{background:var(--s2)}
     <button class="btn btn-s" onclick="again()">Generate Another Paper</button>
   </div>
   <footer><div class="wrap">
-    <span class="footer-brand">rdxper v4.0</span>
     <span class="footer-lawyers">An Interactive Lawyers Tool</span>
-    <span class="footer-tag">AI · Research · Law</span>
   </div></footer>
 </div>
 
@@ -1945,9 +1994,7 @@ tr:hover td{background:var(--s2)}
     <button class="btn btn-s" style="max-width:200px" onclick="logout()">Sign Out</button>
   </div>
   <footer><div class="wrap">
-    <span class="footer-brand">rdxper v4.0</span>
     <span class="footer-lawyers">An Interactive Lawyers Tool</span>
-    <span class="footer-tag">AI · Research · Law</span>
   </div></footer>
 </div>
 
@@ -1982,9 +2029,7 @@ tr:hover td{background:var(--s2)}
     </div>
   </div>
   <footer><div class="wrap">
-    <span class="footer-brand">rdxper v4.0</span>
     <span class="footer-lawyers">An Interactive Lawyers Tool</span>
-    <span class="footer-tag">AI · Research · Law</span>
   </div></footer>
 </div>
 
