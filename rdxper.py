@@ -505,7 +505,7 @@ class GeminiWriter:
         self.seed         = sum(ord(c) for c in topic)
         random.seed(self.seed)
         np.random.seed(self.seed % 2**31)
-        self.n_respondents = random.randint(270, 340)
+        self.n_respondents = random.randint(210, 230)  # matches sample paper (~220)
         self.aware_pct     = random.randint(62, 74)
         self.fam_pct       = random.randint(70, 83)
         self.support_pct   = random.randint(62, 69)
@@ -551,17 +551,15 @@ class GeminiWriter:
               "Write the opening sections of an academic research paper using XML tags. "
               "Flowing scholarly prose only — no markdown, no bullet points inside prose.\n\n"
               "<keywords>Provide exactly 6-8 academic keywords separated by commas, relevant to the topic.</keywords>\n"
-              f"<abstract>Write a structured academic abstract of exactly 300 words as ONE flowing paragraph. "
-              f"Follow this internal structure without subheadings: "
-              f"(1) Background — introduce the broad context of {self.topic} and why it matters. "
-              f"(2) Problem statement — state the specific gap or challenge this study addresses. "
-              f"(3) Objective — 'The objective of this study is to...' state 2-3 specific aims. "
-              f"(4) Methodology — 'The study adopted a descriptive and empirical research design. "
-              f"A convenience sampling method was employed with {nr} respondents. "
-              f"Data was collected through a structured questionnaire and analysed using SPSS Version 21.' "
-              f"(5) Key findings — state 3-4 quantified findings with specific percentages relevant to {self.topic}. "
-              f"(6) Conclusion and implications — summarise the study's contribution and practical/policy implications. "
-              f"Write as one dense academic paragraph with no internal headings.</abstract>\n"
+              f"<abstract>Write a structured academic abstract of exactly 280-320 words. "\
+              f"CRITICAL: Use these EXACT bold inline labels in this order (do not use subheadings — write as flowing sentences): "\
+              f"Begin with 1-2 context sentences about {self.topic}. "\
+              f"Then write: 'The **Aim** of the study is to [state 1-2 specific aims].' "\
+              f"Then write: 'The **Objective** is to [state the main research objective for {self.topic}].' "\
+              f"Then write: 'The **sample size** of the study is {nr}.' "\
+              f"Then write: 'The **Findings** of the study were that [3-4 key findings with percentages relevant to {self.topic}].' "\
+              f"Then write: 'In **Conclusion** [1-2 sentences on implications and recommendations for {self.topic}].' "\
+              f"The bold words Aim, Objective, sample size, Findings, Conclusion must appear verbatim as bold labels.</abstract>\n"
               f"<introduction>Write a formal academic introduction of exactly 1,200-1,500 words. "
               f"Structure using these bold subheadings in this order, each as a flowing paragraph (no bullet points):\n"
               f"Background of the Topic (200-220 words): Describe the historical and contextual background of {self.topic}. "
@@ -589,23 +587,17 @@ class GeminiWriter:
               "IMPORTANT: If OBJECTIVES DEFINED BY RESEARCHER are provided above, copy them VERBATIM. "
               "Format: each objective on its own line starting with '● To ...' "
               "If no objectives provided, write exactly 3 objectives in this format: '● To [verb] ...'</objectives>\n"
-              f"<literature_review>Write a comprehensive literature review of exactly 3,500-4,000 words. "
-              f"Include EXACTLY 25-30 source entries. "
-              f"CRITICAL FORMAT — every entry must follow this EXACT 4-sentence structure (120-150 words each):\n"
-              f"SENTENCE 1 — Citation opener: 'Lastname and Lastname (Year)' followed by a past-tense verb "
-              f"(investigated/examined/analyzed/explored/assessed/evaluated) and the subject and context. "
-              f"Example: 'Bagchi and Sharma (2024) investigated the economic impact of mobile applications on fish marketing within coastal communities.'\n"
-              f"SENTENCE 2 — Aim: Start with 'The aim of the study was to...' — state the precise research objective.\n"
-              f"SENTENCE 3 — Methodology: Start with 'The methodology employed...' — name the specific research design, "
-              f"exact participant count (e.g. 450 respondents), geographic scope, duration, and analytical tools used.\n"
-              f"SENTENCE 4 — Findings: Start with 'The findings revealed...' — report 3-4 specific quantitative results "
-              f"with exact percentages (e.g. 34% income increase, 28% reduction in post-harvest losses). "
-              f"End with a sentence on broader implications.\n"
-              f"IMPORTANT: If KEY LITERATURE CITED BY RESEARCHER is provided above, those sources appear first "
-              f"rewritten in this exact format. Then add further academic sources on {self.topic} to reach 25-30 total. "
-              f"Number each entry: first entry has no number, subsequent entries numbered 1. 2. 3. etc. "
-              f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, end with an unnumbered synthesis paragraph. "
-              f"No subheadings, no bullet points, no brackets for citations.</literature_review>\n"
+              f"<literature_review>Write a comprehensive literature review with EXACTLY 26 numbered entries. "
+              f"CRITICAL: Every single entry MUST follow this EXACT format (copy this structure verbatim, replacing names/content):\n"
+              f"'[Number]. **Author Fullname (Year) aims** to [describe the aim/purpose of the study in one sentence about {self.topic} or a related area]. "
+              f"The **methodology** [describe the specific research method, sample, data source, or analytical approach used]. "
+              f"**Findings** [state 2-3 specific findings or results from the study, including data where possible]. "
+              f"The **conclusion** [state the conclusion or recommendation the study reached].'\n"
+              f"EXAMPLE ENTRY: '1. **Laura L. Jansma (2000) aims** to provide a theoretical and empirical framework integrating legal, organizational, and academic research to combat workplace harassment. The **methodology** involves a review of six key research areas including prevalence, typologies, and responses to harassment. **Findings** indicate that harassment is a multidimensional issue influenced by formal power relations and perpetrator intent. The **conclusion** asserts that strategies must reflect the multidimensional nature of harassment for effective prevention.'\n"
+              f"FORMAT RULES: Each entry is ONE paragraph. Bold the author-year-aims opener, bold 'methodology', bold 'Findings', bold 'conclusion'. "
+              f"Number entries 1 through 26. Include sources from 2000 to 2024 spanning different authors and countries. "
+              f"Entries should relate to {self.topic} and related areas. No subheadings between entries. "
+              f"If KEY LITERATURE CITED BY RESEARCHER is provided above, incorporate those first.</literature_review>\n"
               f"<methodology>Write a formal methodology section of exactly 500-600 words as flowing paragraphs. "
               f"Cover ALL of the following in this order (write as connected prose, not a list):\n"
               f"Paragraph 1 — Research design and rationale: 'The current study is based on descriptive and empirical research.' "
@@ -630,33 +622,22 @@ class GeminiWriter:
         p2 = (hdr +
               "Write the analytical sections of an academic research paper using XML tags. "
               "Flowing scholarly prose only — no markdown, no bullet points.\n\n"
-              f"<results>Write a comprehensive result section of exactly 2,000-2,500 words. "
-              f"Interpret findings FIGURE BY FIGURE from Figure 1 through Figure {self._nfigs}. "
-              f"For each figure, write a dedicated paragraph of 60-80 words following this exact structure: "
-              f"Start the paragraph with 'Figure [N]' in the text (not as a heading). "
-              f"Then write: "
-              f"(1) What the figure shows — 'Figure [N] illustrates the relationship between [independent variable] and [dependent variable].' "
-              f"(2) Dominant finding — name the highest-scoring group with its exact percentage "
-              f"(use internally consistent percentages that add up correctly across all figures). "
-              f"(3) Contrast — name a second group with a lower percentage and explain the gap. "
-              f"(4) Inference — state what this reveals about {self.topic} in one analytical sentence.\n"
-              f"Use these independent variables across figures (distribute evenly): "
-              f"educational qualification (illiterate/primary school/high school/graduate) for Figures 1-8; "
-              f"age group (18-30/31-50/51 and above) for Figures 6,9,10,14,19,20,23,26; "
-              f"gender (male/female) for Figures 11-18; "
-              f"occupation (small-scale/large-scale/non-fisher trader) for Figures 21,24,25,27,28,29; "
-              f"place of residence (rural/semi-urban/urban) for Figures 22,30.\n"
-              f"Use these as dependent/outcome variables relevant to {self.topic}: "
-              f"primary reasons for use, perception of price improvement, awareness of government programs, "
-              f"factors influencing adoption, payment timeliness, belief in higher prices, biggest difficulties. "
-              f"Include specific percentages throughout. Maintain continuous paragraph structure. "
-              f"No bullet points. Use statistical-style language throughout.</results>\n"
-              f"<discussion>Write a detailed discussion section of exactly 400-500 words. "
-              f"Interpret the overall pattern of findings across all figures in relation to the 3 research objectives. "
-              f"Connect findings to at least 5 sources from the literature review by author and year. "
-              f"Discuss implications for each demographic group. Address policy implications and practical significance. "
-              f"Write as flowing scholarly prose in multiple paragraphs.</discussion>\n"
-              f"<conclusion>Write a comprehensive conclusion of exactly 700-800 words. "
+              f"<results>Write the DISCUSSION section of the paper (it will be labelled DISCUSSION in the document). "
+              f"Write exactly {self._nfigs} paragraphs, one for each Figure from FIGURE 1 through FIGURE {self._nfigs}. "
+              f"EACH paragraph MUST start with 'FIGURE [N]' followed by: "
+              f"'In the data analysis [says/reveals/shows] that the majority of the respondents [state the key finding]. "
+              f"[Add 1-2 more sentences with specific % values for 2-3 demographic subgroups]. "
+              f"[Final sentence with relevant policy or social context for {self.topic}.' "
+              f"EXAMPLE: \'FIGURE 1 In the data analysis says that majority of the respondents says factor affects [topic outcome] is education because 31-40 and 41-50 age group gave their responses and some of them says [second factor] 51 and above years. [Context sentence].\'\n"
+              f"Distribute demographics: educational qualification (illiterate/primary/high school/graduate) Figs 1-3; "
+              f"age (18-30/31-50/51+) Figs 4-6; gender (male/female) Figs 7-9; employment (employed/unemployed/self-employed) "
+              f"for remaining figures; area (rural/urban/metropolitan) for last 2 figures. "
+              f"Include specific percentages for each group. Each paragraph 60-100 words. No bullet points.</results>\n"
+              f"<discussion>Write a DISCUSSION section of exactly 400-500 words. "
+              f"Write one paragraph per figure (FIGURE 1, FIGURE 2, etc.) up to {self._nfigs} figures. "
+              f"Each paragraph starts with 'FIGURE [N] In the data analysis the majority of the respondents says...' "
+              f"Then elaborate on the finding, add policy/social context for {self.topic}, and connect to 1-2 literature sources. "
+              f"Write as connected prose. No bullet points. Paragraphs 50-80 words each.</discussion>\n"
               f"Structure as flowing paragraphs covering: "
               f"(1) Summary of key findings across all demographic variables with specific percentages. "
               f"(2) Whether each of the 3 objectives was achieved and how. "
@@ -745,6 +726,7 @@ class GeminiWriter:
         specs = []
         raw   = self.sections.get('charts', '')
 
+        fig_n = 1  # figure counter for legend text matching sample format
         for line in raw.strip().splitlines():
             line = line.strip()
             if not line or '|' not in line:
@@ -762,15 +744,19 @@ class GeminiWriter:
                     if len(cats) < 2:
                         continue
                     vals = rv(cats)
+                    # Legend format matching sample paper: "The Figure N shows [demographic] of the respondents discussed about [topic]"
+                    demographic = title.split(' by ')[-1].strip() if ' by ' in title else 'educational qualification'
+                    subject = title.split(' by ')[0].strip() if ' by ' in title else title
                     if chart_type == 'bar':
-                        legend_text = f'A figure shows the relationship between {title.split(" by ")[-1] if " by " in title else "demographic group"} and {title.split(" by ")[0] if " by " in title else title} ({", ".join(cats)}).'
+                        legend_text = f'The Figure {{fig_n}} shows {demographic} of the respondents discussed about {subject.lower()}'
                         specs.append({'type':'bar','title':title,'cats':cats,'vals':vals,
                                       'color':C[len(specs)%len(C)],
                                       'legend': legend_text,
                                       'interp':f'Distribution across {len(cats)} response categories.'})
                     else:
+                        legend_text = f'The Figure {{fig_n}} shows distribution of respondents by {subject.lower()}'
                         specs.append({'type':'pie','title':title,'labels':cats,'vals':vals,
-                                      'legend':f'{title}.',
+                                      'legend': legend_text,
                                       'interp':f'Proportional breakdown of responses.'})
 
                 elif chart_type in ('grouped', 'stacked'):
@@ -784,14 +770,18 @@ class GeminiWriter:
                     if not groups or not series:
                         continue
                     matrix = [rv(groups) for _ in series]
+                    demographic = groups[0] if groups else 'group'
+                    subject = title.split(' by ')[0].strip() if ' by ' in title else title
+                    legend_text = f'The Figure {{fig_n}} shows {demographic} of the respondents discussed about {subject.lower()}'
                     specs.append({'type':chart_type,'title':title,'groups':groups,'labels':series,
                                   'matrix':matrix,
-                                  'legend':f'{title}.',
+                                  'legend': legend_text,
                                   'interp':f'Cross-tabulation of responses by group.'})
             except Exception as e:
                 print(f"[Chart parse] skipped: {line!r} → {e}")
                 continue
 
+            fig_n += 1
             if len(specs) >= n:
                 break
 
@@ -837,13 +827,14 @@ class GeminiWriter:
             {'type':'stacked','title':'Trust in Frameworks by Occupation','groups':['Students','Practitioners','Academics','Policymakers'],'labels':['High Trust','Moderate','Low Trust'],'matrix':[[rv(['S','P','A','Po'])[i] for i in range(4)] for _ in range(3)]},
         ]
         specs = []
-        for sp in pool[:n]:
+        for idx2, sp in enumerate(pool[:n], 1):
+            fig_legend = f"The Figure {{fig_n}} shows respondents discussed about {sp['title'].lower()}"
             if sp['type'] == 'bar':
-                specs.append({**sp, 'vals': rv(sp['cats']), 'legend': sp['title'], 'interp': f"Survey responses for {sp['title'].lower()}."})
+                specs.append({**sp, 'vals': rv(sp['cats']), 'legend': fig_legend, 'interp': f"Survey responses for {sp['title'].lower()}."})
             elif sp['type'] == 'pie':
-                specs.append({**sp, 'vals': rv(sp['labels']), 'legend': sp['title'], 'interp': f"Proportional breakdown: {sp['title'].lower()}."})
+                specs.append({**sp, 'vals': rv(sp['labels']), 'legend': fig_legend, 'interp': f"Proportional breakdown: {sp['title'].lower()}."})
             else:
-                specs.append({**sp, 'legend': sp['title'], 'interp': f"Cross-tabulation: {sp['title'].lower()}."})
+                specs.append({**sp, 'legend': fig_legend, 'interp': f"Cross-tabulation: {sp['title'].lower()}."})
         return specs[:n]
 
 
@@ -1119,31 +1110,66 @@ class DocBuilder:
 
         # ── ABSTRACT ──────────────────────────────────────────────────────────
         p_text('ABSTRACT', bold=True, align=WD_ALIGN_PARAGRAPH.LEFT, sp_b=0, sp_a=0)
-        body(self.sections['abstract'], sp_b=12, sp_a=12,
-             align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        # Render abstract with inline bold labels (**Aim**, **Objective**, etc.)
+        abs_p = doc.add_paragraph()
+        abs_p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        abs_p.paragraph_format.space_before = Pt(12)
+        abs_p.paragraph_format.space_after  = Pt(12)
+        import re as _re_abs
+        abs_segs = _re_abs.split(r"(\*\*[^*]+\*\*)", self.sections["abstract"])
+        for seg in abs_segs:
+            if seg.startswith("**") and seg.endswith("**"):
+                r = abs_p.add_run(seg[2:-2])
+                r.bold = True
+            else:
+                r = abs_p.add_run(seg)
+                r.bold = False
+            r.font.size = Pt(12); r.font.name = TNR
 
         # Keywords: bold label + normal text, justified
         kw_p = doc.add_paragraph()
         kw_p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
         kw_p.paragraph_format.space_before = Pt(12)
         kw_p.paragraph_format.space_after  = Pt(12)
-        kr1 = kw_p.add_run('Keywords:')
+        kr1 = kw_p.add_run('KEYWORDS: ')
         kr1.bold = True; kr1.font.size = Pt(12); kr1.font.name = TNR
         kr2 = kw_p.add_run(self.sections['keywords'])
         kr2.font.size = Pt(12); kr2.font.name = TNR
 
         # ── INTRODUCTION ──────────────────────────────────────────────────────
         sec_head('INTRODUCTION')
+        import re as _re_intro
         for para in self.sections['introduction'].split('\n\n'):
             para = para.strip()
             if not para:
                 continue
-            # Handle bold subheadings within introduction (like sample)
-            if para.isupper() or (len(para) < 60 and para.endswith(':')):
-                body(para, sp_b=12, sp_a=12, bold=True,
-                     align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+            # Bold subheadings: lines that start a new named section (like sample paper)
+            # Detects: "**Evolution**", "Evolution of the Topic:", short bold-looking lines
+            cleaned = _re_intro.sub(r'\*\*([^*]+)\*\*', r'\1', para)
+            is_subhead = (
+                cleaned.isupper() or
+                (len(cleaned) < 80 and cleaned.endswith(':')) or
+                (para.startswith('**') and para.count('\n') == 0 and len(para) < 100)
+            )
+            if is_subhead:
+                # Render as bold subheading, stripping markdown stars
+                body(cleaned, sp_b=12, sp_a=6, bold=True, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
             else:
-                body(para, sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+                # Render with inline bold segments (handles **bold** within prose)
+                segs = _re_intro.split(r'(\*\*[^*]+\*\*)', para)
+                if len(segs) == 1:
+                    body(para, sp_b=12, sp_a=6, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+                else:
+                    p = doc.add_paragraph()
+                    p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+                    p.paragraph_format.space_before = Pt(12)
+                    p.paragraph_format.space_after  = Pt(6)
+                    for seg in segs:
+                        if seg.startswith('**') and seg.endswith('**'):
+                            r = p.add_run(seg[2:-2]); r.bold = True
+                        else:
+                            r = p.add_run(seg); r.bold = False
+                        r.font.size = Pt(12); r.font.name = TNR
 
         # ── OBJECTIVE OF THE STUDY ────────────────────────────────────────────
         sec_head('OBJECTIVE OF THE STUDY', sp_b=0, sp_a=0,
@@ -1170,27 +1196,25 @@ class DocBuilder:
         sec_head('REVIEW OF LITERATURE', sp_b=12, sp_a=12,
                  align=WD_ALIGN_PARAGRAPH.LEFT)
         lit_paras = [l.strip() for l in self.sections['literature_review'].split('\n\n') if l.strip()]
+        import re as _re2
         for i, para in enumerate(lit_paras):
             p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
             pf = p.paragraph_format
-            pf.space_before      = Pt(12) if i == 0 else Pt(0)
-            pf.space_after       = Pt(12) if i == len(lit_paras)-1 else Pt(0)
+            pf.space_before      = Pt(12) if i == 0 else Pt(6)
+            pf.space_after       = Pt(6)
             pf.first_line_indent = Inches(-0.25)
             pf.left_indent       = Inches(0.5)
-            # Bold the author-year citation at start of each lit entry
-            # Pattern: "Lastname and Lastname (Year)" or "1. Lastname..."
-            import re as _re2
-            m = _re2.match(r'(^\d+\.\s*)?((?:[A-Z][a-z]+(?:\s+and\s+[A-Z][a-z]+)?|et al\.?)\s*\(\d{4}\))', para)
-            if m:
-                citation = m.group(0)
-                rest = para[len(citation):]
-                r1 = p.add_run(citation)
-                r1.bold = True; r1.font.size = Pt(12); r1.font.name = TNR
-                r2 = p.add_run(rest)
-                r2.font.size = Pt(12); r2.font.name = TNR
-            else:
-                r = p.add_run(para)
+            # Parse bold segments: **text** -> bold run, rest -> normal
+            # Handles format: "1. **Author (Year) aims** to... The **methodology**... **Findings**... The **conclusion**..."
+            segments = _re2.split(r'(\*\*[^*]+\*\*)', para)
+            for seg in segments:
+                if seg.startswith('**') and seg.endswith('**'):
+                    r = p.add_run(seg[2:-2])
+                    r.bold = True
+                else:
+                    r = p.add_run(seg)
+                    r.bold = False
                 r.font.size = Pt(12); r.font.name = TNR
 
         # ── METHODOLOGY ───────────────────────────────────────────────────────
@@ -1200,7 +1224,7 @@ class DocBuilder:
         body(meth_text, sp_b=0, sp_a=0, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
         # ── ANALYSIS ──────────────────────────────────────────────────────────
-        sec_head('ANALYSIS', sz=13, sp_b=0, sp_a=0,
+        sec_head('DATA ANALYSIS AND INTERPRETATION', sz=12, sp_b=12, sp_a=12,
                  align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
         # Parse results into per-figure paragraphs
@@ -1217,30 +1241,30 @@ class DocBuilder:
 
         for i, (spec, buf) in enumerate(zip(self.specs, self.charts), 1):
             buf.seek(0)
-            # Figure image centered
+            # Figure image — centered, matching sample paper width
             img_p = doc.add_paragraph()
             img_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             img_p.paragraph_format.space_before = Pt(12)
             img_p.paragraph_format.space_after  = Pt(0)
-            img_p.add_run().add_picture(buf, width=Inches(5.5))
+            img_p.add_run().add_picture(buf, width=Inches(4.76))  # matches sample 4.76in
 
-            # "Figure N" — bold, left-aligned, 12pt
+            # "Figure N" — bold, justified, matching sample exactly
             fig_p = doc.add_paragraph()
             fig_p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            fig_p.paragraph_format.space_before = Pt(0)
+            fig_p.paragraph_format.space_before = Pt(6)
             fig_p.paragraph_format.space_after  = Pt(0)
             r_fig = fig_p.add_run(f'Figure {i}')
             r_fig.bold = True; r_fig.font.size = Pt(12); r_fig.font.name = TNR
 
-            # "Legend:A figure shows..." — "Legend:" bold, rest normal
+            # "LEGEND : The Figure N shows..." — all bold, matching sample exactly
+            # Legend text already has Figure number baked in from parse_chart_specs
             leg_p = doc.add_paragraph()
-            leg_p.alignment = None   # no explicit alignment = inherit (matches sample)
+            leg_p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
             leg_p.paragraph_format.space_before = Pt(0)
-            leg_p.paragraph_format.space_after  = Pt(0)
-            r_lbl = leg_p.add_run('Legend:')
-            r_lbl.bold = False; r_lbl.font.size = Pt(12); r_lbl.font.name = TNR
-            r_ltxt = leg_p.add_run(spec['legend'])
-            r_ltxt.bold = False; r_ltxt.font.size = Pt(12); r_ltxt.font.name = TNR
+            leg_p.paragraph_format.space_after  = Pt(12)
+            legend_text = spec['legend'].replace('{fig_n}', str(i))
+            r_ltxt = leg_p.add_run(f'LEGEND : {legend_text}')
+            r_ltxt.bold = True; r_ltxt.font.size = Pt(12); r_ltxt.font.name = TNR
 
         # ── CHI-SQUARE TABLES ─────────────────────────────────────────────────
         rng = random.Random(self.writer.seed)
@@ -1300,21 +1324,33 @@ class DocBuilder:
             r_i.bold = True; r_i.font.size = Pt(12); r_i.font.name = TNR
 
         # ── RESULT ────────────────────────────────────────────────────────────
-        sec_head('RESULT', sp_b=0, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
-        results_full = self.sections.get('results', '')
-        for para in results_full.split('\n\n'):
-            para = para.strip()
-            if para:
-                body(para, sp_b=12, sp_a=12, bold=False,
-                     align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        # Sample paper has no separate RESULT heading — results are embedded in DISCUSSION
+        # Skip standalone RESULT section; content flows into DISCUSSION below
 
         # ── DISCUSSION ────────────────────────────────────────────────────────
         sec_head('DISCUSSION', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
-        for para in self.sections.get('discussion', '').split('\n\n'):
+        import re as _re_disc
+        # Merge both results and discussion sections for the DISCUSSION block
+        disc_full = (self.sections.get('results', '') + '\n\n' + self.sections.get('discussion', '')).strip()
+        for para in disc_full.split('\n\n'):
             para = para.strip()
-            if para:
-                body(para, sp_b=12, sp_a=12, bold=False,
-                     align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+            if not para:
+                continue
+            # Bold "FIGURE N" label at start of each paragraph (matching sample exactly)
+            m_fig = _re_disc.match(r'^(FIGURE\s+\d+)(.*)', para, _re_disc.IGNORECASE | _re_disc.DOTALL)
+            if m_fig:
+                fig_label = m_fig.group(1).upper()
+                rest_text = m_fig.group(2)
+                p = doc.add_paragraph()
+                p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+                p.paragraph_format.space_before = Pt(12)
+                p.paragraph_format.space_after  = Pt(0)
+                r1 = p.add_run(fig_label)
+                r1.bold = True; r1.font.size = Pt(12); r1.font.name = TNR
+                r2 = p.add_run(rest_text)
+                r2.bold = False; r2.font.size = Pt(12); r2.font.name = TNR
+            else:
+                body(para, sp_b=12, sp_a=0, bold=False, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
         # ── SUGGESTION ────────────────────────────────────────────────────────
         sec_head('SUGGESTION', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
@@ -1341,18 +1377,20 @@ class DocBuilder:
                      align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
         # ── REFERENCES ────────────────────────────────────────────────────────
-        sec_head('REFERENCES', sp_b=0, sp_a=0, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        sec_head('REFERENCE', sp_b=0, sp_a=0, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
         refs = self.sections.get('references', [])
         for i, ref in enumerate(refs):
             p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
             pf = p.paragraph_format
-            pf.space_before      = Pt(0)
-            pf.space_after       = Pt(12) if i == len(refs)-1 else Pt(0)
+            pf.space_before      = Pt(6)
+            pf.space_after       = Pt(0)
             pf.first_line_indent = Inches(-0.25)
             pf.left_indent       = Inches(0.5)
-            r = p.add_run(ref)
-            r.bold = True; r.font.size = Pt(12); r.font.name = TNR
+            # Format: "1. Author (Year). Title. Journal."
+            ref_text = f"{i+1}. {ref}" if not ref.strip().startswith(str(i+1)+'.') else ref
+            r = p.add_run(ref_text)
+            r.bold = False; r.font.size = Pt(12); r.font.name = TNR
 
         # ── PLAGIARISM NOTE ───────────────────────────────────────────────────
         sec_head('PLAGIARISM', sp_b=0, sp_a=0, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
