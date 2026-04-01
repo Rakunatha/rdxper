@@ -523,195 +523,154 @@ class GeminiWriter:
         return "SOURCES:\n" + "\n".join(lines) + wiki
 
     def generate_all(self, progress_cb=None) -> dict:
-        """Two lean streaming Gemini calls — stays within free-tier token limits."""
+        """
+        4 lean Groq calls — each well under 4 000 input tokens.
+        Call A : keywords + abstract + objectives          (~800 tok prompt)
+        Call B : introduction (6 subheadings)             (~900 tok prompt)
+        Call C : literature review (26 entries)           (~800 tok prompt)
+        Call D : methodology + results + discussion +
+                 suggestions + limitations + conclusion +
+                 charts                                    (~900 tok prompt)
+        """
         top      = sorted(self.papers, key=lambda x: x.get("citations", 0), reverse=True)
         top_cite = f"{top[0]['authors']} ({top[0]['year']})" if top else "prior studies"
         n, nr    = len(self.papers), self.n_respondents
         q        = self.questionnaire
-        q_block  = ""
-        if any(q.values()):
-            q_block = "\n\n=== RESEARCHER'S OWN INPUTS (use these EXACTLY as the foundation — do NOT invent replacements) ===\n"
-            if q.get('problem'):
-                q_block += f"PROBLEM IDENTIFIED BY RESEARCHER: {q['problem']}\n"
-            if q.get('lit'):
-                q_block += f"KEY LITERATURE CITED BY RESEARCHER: {q['lit']}\n"
-            if q.get('gap'):
-                q_block += f"RESEARCH GAP IDENTIFIED BY RESEARCHER: {q['gap']}\n"
-            if q.get('objectives'):
-                q_block += f"OBJECTIVES DEFINED BY RESEARCHER: {q['objectives']}\n"
-            if q.get('statement'):
-                q_block += f"RESEARCH STATEMENT BY RESEARCHER: {q['statement']}\n"
-            q_block += "=== END RESEARCHER INPUTS — expand these with evidence and scholarly prose, never override them ===\n"
-        hdr      = (f"{self._paper_digest}\n\nTOPIC: {self.topic} | N={nr} respondents | "
-                    f"Aware={self.aware_pct}% | Familiar={self.fam_pct}% | "
-                    f"Support={self.support_pct}% | Top paper: {top_cite}{q_block}\n\n")
 
-        # ── CALL 1: abstract + intro + objectives ────────────────────────────
-        p1 = (hdr +
-              "Write the opening sections of an academic research paper using XML tags. "
-              "Flowing scholarly prose only — no markdown, no bullet points inside prose.\n\n"
-              "<keywords>Provide exactly 6-8 academic keywords separated by commas, relevant to the topic.</keywords>\n"
-              f"<abstract>Write a structured academic abstract of exactly 280-320 words. "\
-              f"CRITICAL: Use these EXACT bold inline labels in this order (do not use subheadings — write as flowing sentences): "\
-              f"Begin with 1-2 context sentences about {self.topic}. "\
-              f"Then write: 'The **Aim** of the study is to [state 1-2 specific aims].' "\
-              f"Then write: 'The **Objective** is to [state the main research objective for {self.topic}].' "\
-              f"Then write: 'The **sample size** of the study is {nr}.' "\
-              f"Then write: 'The **Findings** of the study were that [3-4 key findings with percentages relevant to {self.topic}].' "\
-              f"Then write: 'In **Conclusion** [1-2 sentences on implications and recommendations for {self.topic}].' "\
-              f"The bold words Aim, Objective, sample size, Findings, Conclusion must appear verbatim as bold labels.</abstract>\n"
-              f"<introduction>Write a formal academic introduction of exactly 1,200-1,500 words. "
-              f"Structure using these bold subheadings in this order, each as a flowing paragraph (no bullet points):\n"
-              f"Background of the Topic (200-220 words): Describe the historical and contextual background of {self.topic}. "
-              f"Explain how the subject traditionally operated, what stakeholders are involved, and what has changed in recent decades. "
-              f"If PROBLEM IDENTIFIED BY RESEARCHER is given above, frame this as the central tension.\n"
-              f"Evolution of the Topic (200-220 words): Trace the historical development of {self.topic} from its early form "
-              f"to the present. Name specific time periods, events, technologies, or policy shifts that drove change. "
-              f"Describe the first wave of transformation, subsequent developments, and the current state with specific examples.\n"
-              f"Government Initiatives (180-200 words): Name specific government schemes, acts, policies, or programmes "
-              f"relevant to {self.topic} using their full official names. State which government body introduced each, "
-              f"its objectives, and measurable impact. Include both central and state-level examples where applicable.\n"
-              f"Factors Affecting the Topic (180-200 words): Identify and explain 5-6 key variables that influence outcomes "
-              f"in {self.topic} — covering infrastructure, socio-economic, cultural, environmental, and policy dimensions. "
-              f"Name specific barriers and enablers. "
-              f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, incorporate it as a structural gap here.\n"
-              f"Current Trends (180-200 words): Describe the present-day landscape of {self.topic}. "
-              f"Name specific technologies, platforms, legal reforms, or practices currently in use. "
-              f"Reference shifting consumer or societal demands. Include emerging innovations reshaping the field.\n"
-              f"Comparison Across Regions/States (150-180 words): Compare adoption, impact, or implementation of {self.topic} "
-              f"across at least 4 named Indian states or international regions. Explain why some lead and others lag.\n"
-              f"Aim of the Study (80-100 words): State clearly: 'The aim of this study is to...' "
-              f"If RESEARCH STATEMENT BY RESEARCHER is provided, anchor this directly to it. "
-              f"Write all sections as flowing scholarly prose. No bullet points anywhere.</introduction>\n"
-              "<objectives>"
-              "IMPORTANT: If OBJECTIVES DEFINED BY RESEARCHER are provided above, copy them VERBATIM. "
-              "Format: each objective on its own line starting with '● To ...' "
-              "If no objectives provided, write exactly 3 objectives in this format: '● To [verb] ...'</objectives>\n"
-              f"<literature_review>Write a comprehensive literature review with EXACTLY 26 numbered entries. "
-              f"CRITICAL: Every single entry MUST follow this EXACT format (copy this structure verbatim, replacing names/content):\n"
-              f"'[Number]. **Author Fullname (Year) aims** to [describe the aim/purpose of the study in one sentence about {self.topic} or a related area]. "
-              f"The **methodology** [describe the specific research method, sample, data source, or analytical approach used]. "
-              f"**Findings** [state 2-3 specific findings or results from the study, including data where possible]. "
-              f"The **conclusion** [state the conclusion or recommendation the study reached].'\n"
-              f"EXAMPLE ENTRY: '1. **Laura L. Jansma (2000) aims** to provide a theoretical and empirical framework integrating legal, organizational, and academic research to combat workplace harassment. The **methodology** involves a review of six key research areas including prevalence, typologies, and responses to harassment. **Findings** indicate that harassment is a multidimensional issue influenced by formal power relations and perpetrator intent. The **conclusion** asserts that strategies must reflect the multidimensional nature of harassment for effective prevention.'\n"
-              f"FORMAT RULES: Each entry is ONE paragraph. Bold the author-year-aims opener, bold 'methodology', bold 'Findings', bold 'conclusion'. "
-              f"Number entries 1 through 26. Include sources from 2000 to 2024 spanning different authors and countries. "
-              f"Entries should relate to {self.topic} and related areas. No subheadings between entries. "
-              f"If KEY LITERATURE CITED BY RESEARCHER is provided above, incorporate those first.</literature_review>\n"
-              f"<methodology>Write a formal methodology section of exactly 500-600 words as flowing paragraphs. "
-              f"Cover ALL of the following in this order (write as connected prose, not a list):\n"
-              f"Paragraph 1 — Research design and rationale: 'The current study is based on descriptive and empirical research.' "
-              f"Explain what descriptive and empirical means in this context and why this design suits {self.topic}.\n"
-              f"Paragraph 2 — Sampling: 'A convenience sampling method is used in the research.' "
-              f"State the sample size of {nr} respondents, name the specific geographic location relevant to {self.topic}, "
-              f"explain how the sampling frame was constructed and who qualified as respondents.\n"
-              f"Paragraph 3 — Data collection: 'Data has been collected through field visits, with a structured questionnaire "
-              f"used as the primary data collection tool.' Describe the questionnaire design — number of sections, types of questions "
-              f"(Likert scale, multiple choice), how it was validated, and how it was administered.\n"
-              f"Paragraph 4 — Secondary data: 'Secondary sources such as articles, journals, reports, and newsletters have also been considered.' "
-              f"Name the specific types of secondary sources consulted relevant to {self.topic}.\n"
-              f"Paragraph 5 — Analysis: 'The collected data has been analyzed using SPSS version 21.' "
-              f"Name the specific statistical tests used: chi-square test, ANOVA, Pearson correlation, frequency analysis.\n"
-              f"Paragraph 6 — Variables: "
-              f"'The independent variables are age, gender, educational qualifications, location, and occupation.' "
-              f"'The dependent variable of the study is [main outcome directly relevant to {self.topic}].' "
-              f"Explain why these variables were chosen and what relationships are being tested.\n"
-              f"Write in formal academic paragraph style. No bullet points, no numbered lists.</methodology>")
+        # ── Tiny shared header (topic + top 4 papers only) ───────────────────
+        digest_lines = []
+        for i, p in enumerate(self.papers[:4], 1):
+            digest_lines.append(f"{i}. {p['authors']} ({p['year']}). \"{p['title']}\".")
+        wiki_snip = self.wiki.get("summary", "")[:80] if self.wiki.get("summary") else ""
+        hdr = f"TOPIC: {self.topic} | N={nr} respondents | Top paper: {top_cite}"
+        if wiki_snip:
+            hdr += f" | Context: {wiki_snip}"
+        hdr += "\n" + "\n".join(digest_lines) + "\n\n"
 
-        # ── CALL 2: results + conclusion + charts ─────────────────────────────
-        p2 = (hdr +
-              "Write the analytical sections of an academic research paper using XML tags. "
-              "Flowing scholarly prose only — no markdown, no bullet points.\n\n"
-              f"<results>Write the DISCUSSION section of the paper (it will be labelled DISCUSSION in the document). "
-              f"Write exactly {self._nfigs} paragraphs, one for each Figure from FIGURE 1 through FIGURE {self._nfigs}. "
-              f"EACH paragraph MUST start with 'FIGURE [N]' followed by: "
-              f"'In the data analysis [says/reveals/shows] that the majority of the respondents [state the key finding]. "
-              f"[Add 1-2 more sentences with specific % values for 2-3 demographic subgroups]. "
-              f"[Final sentence with relevant policy or social context for {self.topic}.' "
-              f"EXAMPLE: \'FIGURE 1 In the data analysis says that majority of the respondents says factor affects [topic outcome] is education because 31-40 and 41-50 age group gave their responses and some of them says [second factor] 51 and above years. [Context sentence].\'\n"
-              f"Distribute demographics: educational qualification (illiterate/primary/high school/graduate) Figs 1-3; "
-              f"age (18-30/31-50/51+) Figs 4-6; gender (male/female) Figs 7-9; employment (employed/unemployed/self-employed) "
-              f"for remaining figures; area (rural/urban/metropolitan) for last 2 figures. "
-              f"Include specific percentages for each group. Each paragraph 60-100 words. No bullet points.</results>\n"
-              f"<discussion>Write a DISCUSSION section of exactly 400-500 words. "
-              f"Write one paragraph per figure (FIGURE 1, FIGURE 2, etc.) up to {self._nfigs} figures. "
-              f"Each paragraph starts with 'FIGURE [N] In the data analysis the majority of the respondents says...' "
-              f"Then elaborate on the finding, add policy/social context for {self.topic}, and connect to 1-2 literature sources. "
-              f"Write as connected prose. No bullet points. Paragraphs 50-80 words each.</discussion>\n"
-              f"Structure as flowing paragraphs covering: "
-              f"(1) Summary of key findings across all demographic variables with specific percentages. "
-              f"(2) Whether each of the 3 objectives was achieved and how. "
-              f"(3) Theoretical and practical implications for {self.topic}. "
-              f"(4) Specific policy recommendations (name 4-5 concrete actionable reforms). "
-              f"(5) Limitations of the current study. "
-              f"(6) Future research directions. "
-              f"Write in formal academic tone. No bullet points.</conclusion>\n"
-              f"<suggestions>Write a suggestions section of exactly 200-250 words as connected prose paragraphs. "
-              f"Provide 5-6 specific, actionable recommendations directly relevant to {self.topic}. "
-              f"Each recommendation must be concrete, named specifically, and justified with brief reasoning. "
-              f"No bullet points.</suggestions>\n"
-              f"<limitations>Write a limitations section of exactly 150-200 words as 2 connected paragraphs. "
-              f"Address: sample size constraints, geographic scope, self-report bias, temporal limitations, "
-              f"and areas for future research.</limitations>\n"
-              f"<charts>{self._nfigs} lines. Format: TYPE|TITLE|CAT1,CAT2,CAT3 "
-              f"(or grouped/stacked: TYPE|TITLE|G1,G2;S1,S2). "
-              f"TYPE=bar/pie/grouped/stacked. "
-              f"Distribute chart types: use grouped/stacked for cross-tabulation figures. "
-              f"Titles must be specific to \"{self.topic[:35]}\" and reference the demographic variable shown. "
-              f"Example: 'grouped|Income Perception by Educational Qualification|Illiterate,Primary,High School,Graduate;Agree,Disagree,Neutral'</charts>")
-
-        # Build dedicated lit review + methodology prompt (same as p1 for this split)
-        p_litmethod = p1  # lit review and methodology are in p1 now
-        def prog1(pct, msg):
-            if progress_cb: progress_cb(max(30, min(55, 30 + int((pct-30)/45*25))), msg)
-        def prog2(pct, msg):
-            if progress_cb: progress_cb(max(56, min(75, 56 + int((pct-30)/45*19))), msg)
-        def prog3(pct, msg):
-            if progress_cb: progress_cb(max(56, min(75, 56 + int((pct-30)/45*19))), msg)
-
-        s1 = ['keywords','abstract','introduction','objectives','literature_review','methodology']
-        s2 = []   # unused — all front sections come from p1 now
-        s3 = ['results','discussion','suggestions','limitations','conclusion','charts']
-
-        provider = _detect_provider()
-        pname = "Groq (Llama 3.3 70B)" if provider == "groq" else "Gemini"
-        if progress_cb: progress_cb(30, f'{pname} writing abstract, introduction & literature review...')
-        raw1 = ai_generate(p1, system=SYSTEM_PROMPT, temperature=0.7,
-                           progress_cb=prog1, tracked_sections=s1)
-
-        raw2 = raw1  # no separate call needed
-
-        if progress_cb: progress_cb(56, f'{pname} writing results, discussion & conclusion...')
-        raw3 = ai_generate(p2, system=SYSTEM_PROMPT, temperature=0.7,
-                           progress_cb=prog2, tracked_sections=s3)
+        # Researcher inputs (only non-empty fields)
+        q_prob = f"Problem: {q['problem']}\n" if q.get('problem') else ""
+        q_obj  = f"Objectives (copy verbatim):\n{q['objectives']}\n" if q.get('objectives') else ""
+        q_stmt = f"Research statement: {q['statement']}\n" if q.get('statement') else ""
+        q_gap  = f"Research gap: {q['gap']}\n" if q.get('gap') else ""
+        q_lit  = f"Key literature noted by researcher: {q['lit'][:300]}\n" if q.get('lit') else ""
 
         sections = {}
-        for tag in s1:
-            m = re.search(rf'<{tag}>(.*?)</{tag}>', raw1, re.DOTALL)
-            sections[tag] = m.group(1).strip() if m else ''
-        for tag in s3:
-            m = re.search(rf'<{tag}>(.*?)</{tag}>', raw3, re.DOTALL)
-            sections[tag] = m.group(1).strip() if m else ''
 
+        # ── CALL A: keywords + abstract + objectives ──────────────────────────
+        if progress_cb: progress_cb(30, "Writing keywords, abstract & objectives...")
+        pA = (hdr + q_prob + q_obj + q_stmt +
+              "Write using XML tags. Scholarly prose, no markdown bullets.\n\n"
+              "<keywords>6-8 comma-separated academic keywords for this topic.</keywords>\n"
+              f"<abstract>280-320 words. Use these EXACT bold inline labels in order:\n"
+              f"[2 context sentences about {self.topic}]\n"
+              f"The **Aim** of the study is to [1-2 specific aims].\n"
+              f"The **Objective** is to [main research objective].\n"
+              f"The **sample size** of the study is {nr}.\n"
+              f"The **Findings** of the study were that [3-4 findings with %].\n"
+              f"In **Conclusion** [1-2 sentences on implications].\n"
+              "Write as one flowing paragraph — no subheadings.</abstract>\n"
+              "<objectives>"
+              + ("Copy these VERBATIM, one per line starting '● To ...':\n" + q['objectives'] if q.get('objectives') else
+                 "Write exactly 3 objectives, each starting '● To [verb] ...'")
+              + "</objectives>")
+        raw_A = ai_generate(pA, system=SYSTEM_PROMPT, temperature=0.7)
+        for tag in ('keywords', 'abstract', 'objectives'):
+            m = re.search(rf'<{tag}>(.*?)</{tag}>', raw_A, re.DOTALL)
+            sections[tag] = m.group(1).strip() if m else ''
+        if progress_cb: progress_cb(36, "Abstract done. Writing introduction...")
+
+        # ── CALL B: introduction ──────────────────────────────────────────────
+        pB = (hdr + q_prob + q_gap + q_stmt +
+              "Write a formal academic INTRODUCTION using XML tags. Flowing prose only.\n\n"
+              f"<introduction>Exactly 1200-1500 words with these bold subheadings:\n"
+              f"**Background of the Topic** (200w): Historical context of {self.topic}, stakeholders, recent changes.\n"
+              f"**Evolution of the Topic** (200w): Development from early form to present — name specific events, policies, years.\n"
+              f"**Government Initiatives** (180w): Name specific acts, schemes, government bodies relevant to {self.topic} with measurable impacts.\n"
+              f"**Factors Affecting the Topic** (180w): 5-6 key variables (infrastructure, socio-economic, cultural, policy). " +
+              (f"Include this gap: {q['gap'][:150]}" if q.get('gap') else "") + "\n"
+              f"**Current Trends** (180w): Technologies, platforms, legal reforms, emerging innovations in {self.topic}.\n"
+              f"**Comparison Across States** (150w): Compare 4 named Indian states or regions.\n"
+              f"**Aim of the Study** (80w): 'The aim of this study is to...' " +
+              (f"Based on: {q['statement'][:100]}" if q.get('statement') else "") +
+              "\nNo bullet points anywhere.</introduction>")
+        raw_B = ai_generate(pB, system=SYSTEM_PROMPT, temperature=0.7)
+        m = re.search(r'<introduction>(.*?)</introduction>', raw_B, re.DOTALL)
+        sections['introduction'] = m.group(1).strip() if m else ''
+        if progress_cb: progress_cb(44, "Introduction done. Writing literature review...")
+
+        # ── CALL C: literature review (26 entries) ────────────────────────────
+        pC = (f"TOPIC: {self.topic}\n"
+              + (f"Researcher's key sources: {q['lit'][:400]}\n" if q.get('lit') else "")
+              + "Write a LITERATURE REVIEW using XML tags.\n\n"
+              f"<literature_review>Write EXACTLY 26 numbered entries (1-26). "
+              f"Every entry MUST follow this EXACT format:\n"
+              f"[N]. **Author Fullname (Year) aims** to [aim of study]. "
+              f"The **methodology** [research method and sample]. "
+              f"**Findings** [2-3 results with data/percentages]. "
+              f"The **conclusion** [recommendation or conclusion].\n\n"
+              f"EXAMPLE: '1. **Laura L. Jansma (2000) aims** to provide a theoretical framework on workplace harassment. "
+              f"The **methodology** involves a review of six key research areas. "
+              f"**Findings** indicate harassment is multidimensional and influenced by power relations. "
+              f"The **conclusion** asserts strategies must reflect this complexity for effective prevention.'\n\n"
+              f"Rules: entries cover {self.topic} and related fields, years 2000-2024, diverse authors/countries. "
+              f"No subheadings between entries. Number all 26.</literature_review>")
+        raw_C = ai_generate(pC, system=SYSTEM_PROMPT, temperature=0.7)
+        m = re.search(r'<literature_review>(.*?)</literature_review>', raw_C, re.DOTALL)
+        sections['literature_review'] = m.group(1).strip() if m else ''
+        if progress_cb: progress_cb(56, "Literature review done. Writing methodology & analysis...")
+
+        # ── CALL D: methodology + discussion + conclusion + charts ────────────
+        pD = (hdr +
+              "Write the remaining sections using XML tags. Scholarly prose only.\n\n"
+              f"<methodology>500-600 words, 6 flowing paragraphs (no bullets):\n"
+              f"1. 'The current study is based on descriptive and empirical research.' — explain why this suits {self.topic}.\n"
+              f"2. 'A convenience sampling method is used.' — state {nr} respondents, location, who qualified.\n"
+              f"3. 'Data collected through field visits with a structured questionnaire.' — describe design, Likert scale, validation.\n"
+              f"4. 'Secondary sources such as journals, reports also considered.' — name source types for {self.topic}.\n"
+              f"5. 'Data analysed using SPSS version 21.' — name tests: chi-square, ANOVA, Pearson correlation.\n"
+              f"6. Independent variables: age, gender, education, location, occupation. Dependent variable: [outcome for {self.topic}].</methodology>\n"
+              f"<results>Write {self._nfigs} paragraphs — one per Figure. "
+              f"Each MUST start 'FIGURE [N] In the data analysis [says/shows/reveals] that the majority of the respondents says [key finding about {self.topic}]. "
+              f"[1-2 sentences with % values for demographic subgroups: educational qualification/age/gender/area]. "
+              f"[1 sentence of policy/social context].' Each paragraph 60-80 words.</results>\n"
+              f"<discussion>400-500 words. One paragraph per figure referencing FIGURE N. "
+              f"Each: 'FIGURE [N] In the data analysis the majority of the respondents says...' then elaborate, "
+              f"add context for {self.topic}, cite 1 literature source. Prose only.</discussion>\n"
+              f"<suggestions>200-250 words. 5-6 actionable recommendations for {self.topic}. Prose, no bullets.</suggestions>\n"
+              f"<limitations>150-200 words. 2 paragraphs on sample, scope, self-report bias, future research.</limitations>\n"
+              f"<conclusion>600-700 words. Paragraphs: key findings summary with %, objectives achieved, "
+              f"implications for {self.topic}, 4-5 policy reforms, limitations, future directions. No bullets.</conclusion>\n"
+              f"<charts>{self._nfigs} lines. Format: TYPE|TITLE|CATS (bar/pie) or TYPE|TITLE|GROUPS;SERIES (grouped/stacked). "
+              f"TYPE=bar/pie/grouped/stacked. Titles reference {self.topic[:30]} and a demographic. "
+              f"Example: grouped|Awareness by Age Group|18-30,31-50,51+;Aware,Unaware,Neutral</charts>")
+        raw_D = ai_generate(pD, system=SYSTEM_PROMPT, temperature=0.7)
+        for tag in ('methodology', 'results', 'discussion', 'suggestions', 'limitations', 'conclusion', 'charts'):
+            m = re.search(rf'<{tag}>(.*?)</{tag}>', raw_D, re.DOTALL)
+            sections[tag] = m.group(1).strip() if m else ''
+        if progress_cb: progress_cb(74, "All sections written. Building document...")
+
+        # ── Fallbacks ─────────────────────────────────────────────────────────
         fallbacks = {
-            'keywords':          f'{self.topic}, empirical study, stakeholder analysis, policy framework',
-            'abstract':          f'This study examines {self.topic} through {n} papers and a survey of {nr} respondents.',
-            'introduction':      f'This paper investigates {self.topic}. {top_cite} made foundational contributions.',
-            'objectives':        '1. To examine the topic.\n2. To review literature.\n3. To analyse perceptions.\n4. To identify implications.\n5. To recommend improvements.',
-            'literature_review': f'A growing body of work addresses {self.topic}. {top_cite} provide a foundational framework.',
-            'methodology':       f'A mixed-methods approach combined {n} papers with a survey of {nr} respondents analysed via SPSS.',
-            'results':           f'{nr} respondents: {self.aware_pct}% aware, {self.fam_pct}% familiar with tools, {self.support_pct}% support change.',
-            'discussion':        f'Results align with {top_cite}. Awareness is growing; trust in frameworks remains limited.',
-            'suggestions':       'Policymakers should invest in awareness, transparent governance, and stakeholder engagement.',
-            'limitations':       f'Sample size and self-reported data limit generalisability. The {n}-paper review is not exhaustive.',
-            'conclusion':        f'This study advances understanding of {self.topic}. Longitudinal research is recommended.',
+            'keywords':          f'{self.topic}, empirical study, policy, digital media, awareness',
+            'abstract':          f'This study examines {self.topic} with {nr} respondents. The **Aim** is to assess awareness. The **sample size** of the study is {nr}. The **Findings** indicate growing awareness. In **Conclusion** stronger frameworks are needed.',
+            'introduction':      f'**Background of the Topic**\n{self.topic} is a critical area of study requiring attention.\n\n**Evolution of the Topic**\nThe field has evolved significantly over recent decades.\n\n**Aim of the Study**\nThe aim of this study is to examine {self.topic}.',
+            'objectives':        '● To evaluate the role of technology in addressing the issue.\n● To identify key vulnerabilities and challenges.\n● To assess the impact of awareness campaigns.',
+            'literature_review': '\n'.join([f'{i}. **Author {i} ({2000+i}) aims** to examine aspects of {self.topic}. The **methodology** involved a survey of 200 participants. **Findings** reveal significant patterns. The **conclusion** calls for improved frameworks.' for i in range(1, 27)]),
+            'methodology':       f'The current study is based on descriptive and empirical research. A convenience sampling method was used with {nr} respondents. Data was collected through structured questionnaires and analysed using SPSS version 21.',
+            'results':           '\n\n'.join([f'FIGURE {i} In the data analysis says that the majority of respondents agree on this aspect of {self.topic}. Educational qualification groups showed 34%, 28%, 22%, 16% respectively.' for i in range(1, self._nfigs+1)]),
+            'discussion':        '\n\n'.join([f'FIGURE {i} In the data analysis the majority of respondents indicated awareness of {self.topic}.' for i in range(1, self._nfigs+1)]),
+            'suggestions':       f'Policymakers should strengthen frameworks for {self.topic}. Investment in technology-based solutions is recommended. Community awareness must be prioritised.',
+            'limitations':       'The study is limited by its sample size and geographic scope. Future research should employ longitudinal designs across multiple regions.',
+            'conclusion':        f'This study has examined {self.topic} through empirical research with {nr} respondents. The findings indicate significant patterns across demographic groups. Stronger policy frameworks and technology integration are recommended.',
             'charts':            '',
         }
         for k, fb in fallbacks.items():
-            if not sections.get(k): sections[k] = fb
+            if not sections.get(k):
+                sections[k] = fb
 
         self.sections = sections
         return sections
+
 
     def parse_chart_specs(self, n: int) -> list:
         """Parse the <charts> block from Gemini into renderable spec dicts."""
