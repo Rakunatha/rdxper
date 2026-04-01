@@ -156,11 +156,15 @@ _AI_END   = 75
 
 
 def _detect_provider():
-    """Auto-detect which free AI provider to use."""
-    if os.environ.get("GROQ_API_KEY", "").strip():
-        return "groq"
-    if os.environ.get("GEMINI_API_KEY", "").strip():
+    """Priority: if BOTH keys set, prefer Gemini (1M TPM free vs 12k for Groq)."""
+    groq_key   = os.environ.get("GROQ_API_KEY",   "").strip()
+    gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if gemini_key and groq_key:
+        return "gemini"   # Gemini wins when both present — far higher free-tier limits
+    if gemini_key:
         return "gemini"
+    if groq_key:
+        return "groq"
     return None
 
 
@@ -168,10 +172,11 @@ def _groq_generate(prompt: str, system: str, temperature: float,
                    progress_cb=None, tracked_sections=None) -> str:
     """
     Call Groq API (free tier — llama-3.3-70b-versatile).
-    Groq uses OpenAI-compatible REST API with SSE streaming.
+    Retries up to 3 times on 429 rate-limit errors with backoff.
     """
+    import http.client, ssl
     api_key = os.environ.get("GROQ_API_KEY", "").strip()
-    model   = "llama-3.3-70b-versatile"   # free on Groq
+    model   = "llama-3.3-70b-versatile"
 
     messages = []
     if system:
@@ -186,99 +191,52 @@ def _groq_generate(prompt: str, system: str, temperature: float,
         "stream": True,
     }
     body = json.dumps(payload).encode("utf-8")
-
-    # Use http.client directly — urllib's default User-Agent triggers
-    # Cloudflare's bot detection on Groq (error 1010 / 403)
-    import http.client, ssl
-    ctx  = ssl.create_default_context()
-    conn = http.client.HTTPSConnection("api.groq.com", timeout=120, context=ctx)
-
     hdrs = {
-        "Content-Type":   "application/json",
-        "Authorization":  f"Bearer {api_key}",
-        "User-Agent":     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                          "AppleWebKit/537.36 (KHTML, like Gecko) "
-                          "Chrome/124.0.0.0 Safari/537.36",
-        "Accept":         "text/event-stream",
-        "Accept-Language":"en-US,en;q=0.9",
+        "Content-Type":    "application/json",
+        "Authorization":   f"Bearer {api_key}",
+        "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) "
+                           "Chrome/124.0.0.0 Safari/537.36",
+        "Accept":          "text/event-stream",
+        "Accept-Language": "en-US,en;q=0.9",
     }
 
-    accumulated   = ""
-    sections_done = []
-    watch         = tracked_sections if tracked_sections is not None else SECTION_ORDER
+    MAX_RETRIES = 4
+    BACKOFF     = [35, 65, 120, 180]   # seconds to wait before each retry
 
-    try:
-        conn.request("POST", "/openai/v1/chat/completions", body=body, headers=hdrs)
-        resp = conn.getresponse()
+    for attempt in range(MAX_RETRIES + 1):
+        ctx  = ssl.create_default_context()
+        conn = http.client.HTTPSConnection("api.groq.com", timeout=120, context=ctx)
+        accumulated   = ""
+        sections_done = []
+        watch = tracked_sections if tracked_sections is not None else SECTION_ORDER
 
-        if resp.status != 200:
-            err = resp.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Groq HTTP {resp.status}: {err[:400]}")
+        try:
+            conn.request("POST", "/openai/v1/chat/completions", body=body, headers=hdrs)
+            resp = conn.getresponse()
 
-        for raw_line in resp:
-            line = raw_line.decode("utf-8", errors="replace").strip()
-            if not line.startswith("data:"):
-                continue
-            data_str = line[5:].strip()
-            if data_str == "[DONE]":
-                break
-            try:
-                chunk  = json.loads(data_str)
-                token  = chunk["choices"][0]["delta"].get("content", "")
-                accumulated += token
-
-                for tag in watch:
-                    if tag not in sections_done and f"</{tag}>" in accumulated:
-                        sections_done.append(tag)
-                        pct = _AI_START + int(len(sections_done) / len(watch) * (_AI_END - _AI_START))
-                        next_idx = watch.index(tag) + 1
-                        msg = SECTION_LABELS.get(watch[next_idx], "Finishing up...") if next_idx < len(watch) else "Finishing up..."
-                        if progress_cb:
-                            progress_cb(pct, f'✓ {tag.replace("_"," ").title()} done — {msg}')
-
-            except (json.JSONDecodeError, IndexError, KeyError):
+            if resp.status == 429:
+                raw_err = resp.read().decode("utf-8", errors="replace")
+                # Try to read Retry-After header first
+                retry_after = resp.getheader("Retry-After")
+                wait = int(retry_after) if retry_after and retry_after.isdigit() else BACKOFF[min(attempt, len(BACKOFF)-1)]
+                if attempt >= MAX_RETRIES:
+                    raise RuntimeError(
+                        f"Groq rate limit hit after {MAX_RETRIES} retries. "
+                        f"Tip: set GEMINI_API_KEY (free, 1M tokens/min) as a fallback — "
+                        f"get one free at https://aistudio.google.com/app/apikey"
+                    )
+                if progress_cb:
+                    progress_cb(None, f"⏳ Groq rate limit — waiting {wait}s before retry {attempt+1}/{MAX_RETRIES}...")
+                print(f"[Groq] 429 rate limit on attempt {attempt+1}, waiting {wait}s...")
+                conn.close()
+                time.sleep(wait)
                 continue
 
-    except RuntimeError:
-        raise
-    except Exception as e:
-        raise RuntimeError(f"Groq request failed: {e}")
-    finally:
-        conn.close()
+            if resp.status != 200:
+                err = resp.read().decode("utf-8", errors="replace")
+                raise RuntimeError(f"Groq HTTP {resp.status}: {err[:400]}")
 
-    if not accumulated:
-        raise RuntimeError("Groq returned empty response.")
-    return accumulated.strip()
-
-
-def _gemini_generate(prompt: str, system: str, temperature: float,
-                     progress_cb=None, tracked_sections=None) -> str:
-    """Call Gemini via SSE streaming (free tier)."""
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY not set.")
-
-    model = "gemini-2.0-flash"
-    url   = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?key={api_key}&alt=sse"
-
-    payload = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": temperature, "maxOutputTokens": 32768},
-    }
-    if system:
-        payload["systemInstruction"] = {"parts": [{"text": system}]}
-
-    body = json.dumps(payload).encode("utf-8")
-    req  = urllib.request.Request(url, data=body,
-                                   headers={"Content-Type": "application/json"},
-                                   method="POST")
-
-    accumulated   = ""
-    sections_done = []
-    watch         = tracked_sections if tracked_sections is not None else SECTION_ORDER
-
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
             for raw_line in resp:
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line.startswith("data:"):
@@ -288,10 +246,7 @@ def _gemini_generate(prompt: str, system: str, temperature: float,
                     break
                 try:
                     chunk = json.loads(data_str)
-                    token = (chunk.get("candidates", [{}])[0]
-                                  .get("content", {})
-                                  .get("parts", [{}])[0]
-                                  .get("text", ""))
+                    token = chunk["choices"][0]["delta"].get("content", "")
                     accumulated += token
 
                     for tag in watch:
@@ -299,43 +254,150 @@ def _gemini_generate(prompt: str, system: str, temperature: float,
                             sections_done.append(tag)
                             pct = _AI_START + int(len(sections_done) / len(watch) * (_AI_END - _AI_START))
                             next_idx = watch.index(tag) + 1
-                            msg = SECTION_LABELS.get(watch[next_idx], 'Finishing up...') if next_idx < len(watch) else 'Finishing up...'
+                            msg = SECTION_LABELS.get(watch[next_idx], "Finishing up...") if next_idx < len(watch) else "Finishing up..."
                             if progress_cb:
                                 progress_cb(pct, f'✓ {tag.replace("_"," ").title()} done — {msg}')
                 except (json.JSONDecodeError, IndexError, KeyError):
                     continue
-    except urllib.error.HTTPError as e:
-        err = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Gemini HTTP {e.code}: {err[:400]}")
-    except Exception as e:
-        raise RuntimeError(f"Gemini streaming failed: {e}")
 
-    if not accumulated:
-        raise RuntimeError("Gemini returned empty response.")
-    return accumulated.strip()
+            if not accumulated:
+                raise RuntimeError("Groq returned empty response.")
+            return accumulated.strip()
+
+        except RuntimeError:
+            raise
+        except Exception as e:
+            raise RuntimeError(f"Groq request failed: {e}")
+        finally:
+            conn.close()
+
+    raise RuntimeError("Groq: max retries exceeded.")
+
+
+def _gemini_generate(prompt: str, system: str, temperature: float,
+                     progress_cb=None, tracked_sections=None) -> str:
+    """Call Gemini 2.0 Flash via SSE streaming (free tier — 1M TPM, 15 RPM)."""
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set.")
+
+    model = "gemini-2.0-flash"
+    url   = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+             f"{model}:streamGenerateContent?key={api_key}&alt=sse")
+
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": temperature, "maxOutputTokens": 8192},
+    }
+    if system:
+        payload["systemInstruction"] = {"parts": [{"text": system}]}
+
+    body = json.dumps(payload).encode("utf-8")
+
+    MAX_RETRIES = 3
+    BACKOFF     = [10, 30, 60]
+
+    for attempt in range(MAX_RETRIES + 1):
+        req = urllib.request.Request(
+            url, data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        accumulated   = ""
+        sections_done = []
+        watch = tracked_sections if tracked_sections is not None else SECTION_ORDER
+
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                for raw_line in resp:
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data_str = line[5:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                        token = (chunk.get("candidates", [{}])[0]
+                                      .get("content", {})
+                                      .get("parts", [{}])[0]
+                                      .get("text", ""))
+                        accumulated += token
+
+                        for tag in watch:
+                            if tag not in sections_done and f"</{tag}>" in accumulated:
+                                sections_done.append(tag)
+                                pct = _AI_START + int(len(sections_done) / len(watch) * (_AI_END - _AI_START))
+                                next_idx = watch.index(tag) + 1
+                                msg = SECTION_LABELS.get(watch[next_idx], "Finishing up...") if next_idx < len(watch) else "Finishing up..."
+                                if progress_cb:
+                                    progress_cb(pct, f'✓ {tag.replace("_"," ").title()} done — {msg}')
+                    except (json.JSONDecodeError, IndexError, KeyError):
+                        continue
+
+            if not accumulated:
+                raise RuntimeError("Gemini returned empty response.")
+            return accumulated.strip()
+
+        except urllib.error.HTTPError as e:
+            err = e.read().decode("utf-8", errors="replace")
+            if e.code == 429 and attempt < MAX_RETRIES:
+                wait = BACKOFF[attempt]
+                if progress_cb:
+                    progress_cb(None, f"⏳ Gemini rate limit — waiting {wait}s before retry {attempt+1}/{MAX_RETRIES}...")
+                print(f"[Gemini] 429 on attempt {attempt+1}, waiting {wait}s...")
+                time.sleep(wait)
+                continue
+            raise RuntimeError(f"Gemini HTTP {e.code}: {err[:400]}")
+        except Exception as e:
+            raise RuntimeError(f"Gemini streaming failed: {e}")
+
+    raise RuntimeError("Gemini: max retries exceeded.")
 
 
 def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
                 progress_cb=None, tracked_sections=None) -> str:
     """
-    Generate text using the best available free AI provider.
-    Priority: Groq (free) → Gemini (free tier)
+    Generate using best available free provider.
+    Priority: Gemini (1M TPM free) → Groq (12k TPM free)
+    Auto-retries on 429 with backoff. Falls back to other provider on hard failure.
     """
     provider = _detect_provider()
-    if provider == "groq":
-        return _groq_generate(prompt, system, temperature, progress_cb, tracked_sections)
-    elif provider == "gemini":
-        return _gemini_generate(prompt, system, temperature, progress_cb, tracked_sections)
-    else:
+    if provider is None:
         raise RuntimeError(
-            "No AI API key found. Set GROQ_API_KEY (free at https://console.groq.com/keys) "
-            "or GEMINI_API_KEY (free at https://aistudio.google.com/app/apikey)"
+            "No AI API key found.\n"
+            "• GEMINI_API_KEY (recommended — free, 1M tokens/min): https://aistudio.google.com/app/apikey\n"
+            "• GROQ_API_KEY (free, 12k tokens/min): https://console.groq.com/keys"
         )
+
+    primary   = provider
+    secondary = "groq" if provider == "gemini" else "gemini"
+
+    def _run(p):
+        if p == "groq":
+            return _groq_generate(prompt, system, temperature, progress_cb, tracked_sections)
+        return _gemini_generate(prompt, system, temperature, progress_cb, tracked_sections)
+
+    try:
+        return _run(primary)
+    except RuntimeError as e:
+        err_str = str(e)
+        # Only fall back on rate-limit / quota errors, not auth or bad-request
+        if any(x in err_str for x in ("429", "rate limit", "quota", "RESOURCE_EXHAUSTED")):
+            # Check if the secondary provider is even configured
+            sec_key_env = "GROQ_API_KEY" if secondary == "groq" else "GEMINI_API_KEY"
+            if os.environ.get(sec_key_env, "").strip():
+                if progress_cb:
+                    progress_cb(None, f"⚡ Switching to {secondary.title()} due to rate limit...")
+                print(f"[ai_generate] Falling back from {primary} → {secondary}: {err_str[:120]}")
+                return _run(secondary)
+        raise
 
 
 # Keep gemini_stream as alias for backward compatibility
 def gemini_stream(prompt, system="", temperature=0.7, progress_cb=None, tracked_sections=None):
     return ai_generate(prompt, system, temperature, progress_cb, tracked_sections)
+
 
 
 SYSTEM_PROMPT = (
@@ -579,6 +641,10 @@ class GeminiWriter:
         raw1 = ai_generate(p1, system=SYSTEM_PROMPT, temperature=0.7,
                            progress_cb=prog1, tracked_sections=s1)
 
+        # Brief pause to avoid bursting the per-minute token window
+        if progress_cb: progress_cb(51, '⏳ Cooling down between calls (rate limit protection)...')
+        time.sleep(8)
+
         # ── CALL 2: Literature Review + Methodology ─────────────────────────
         if progress_cb: progress_cb(51, f'{pname} writing literature review & methodology...')
         p2 = (hdr +
@@ -607,6 +673,10 @@ class GeminiWriter:
             if progress_cb: progress_cb(max(52, min(68, 52 + int((pct-30)/45*16))), msg)
         raw2 = ai_generate(p2, system=SYSTEM_PROMPT, temperature=0.7,
                            progress_cb=prog2, tracked_sections=s2)
+
+        # Brief pause before final call
+        if progress_cb: progress_cb(69, '⏳ Cooling down between calls (rate limit protection)...')
+        time.sleep(8)
 
         # ── CALL 3: Results + Discussion + Conclusion + Suggestions + Charts ─
         if progress_cb: progress_cb(69, f'{pname} writing results, discussion & conclusion...')
