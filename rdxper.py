@@ -156,15 +156,11 @@ _AI_END   = 75
 
 
 def _detect_provider():
-    """Priority: if BOTH keys set, prefer Gemini (1M TPM free vs 12k for Groq)."""
-    groq_key   = os.environ.get("GROQ_API_KEY",   "").strip()
-    gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if gemini_key and groq_key:
-        return "gemini"   # Gemini wins when both present — far higher free-tier limits
-    if gemini_key:
-        return "gemini"
-    if groq_key:
+    """Auto-detect which free AI provider to use."""
+    if os.environ.get("GROQ_API_KEY", "").strip():
         return "groq"
+    if os.environ.get("GEMINI_API_KEY", "").strip():
+        return "gemini"
     return None
 
 
@@ -172,11 +168,10 @@ def _groq_generate(prompt: str, system: str, temperature: float,
                    progress_cb=None, tracked_sections=None) -> str:
     """
     Call Groq API (free tier — llama-3.3-70b-versatile).
-    Retries up to 3 times on 429 rate-limit errors with backoff.
+    Groq uses OpenAI-compatible REST API with SSE streaming.
     """
-    import http.client, ssl
     api_key = os.environ.get("GROQ_API_KEY", "").strip()
-    model   = "llama-3.1-8b-instant"  # fastest Groq model — 750 tokens/sec vs 280 for 70B
+    model   = "llama-3.3-70b-versatile"   # free on Groq
 
     messages = []
     if system:
@@ -187,56 +182,103 @@ def _groq_generate(prompt: str, system: str, temperature: float,
         "model": model,
         "messages": messages,
         "temperature": temperature,
-        "max_tokens": 6000,
+        "max_tokens": 32768,
         "stream": True,
     }
     body = json.dumps(payload).encode("utf-8")
+
+    # Use http.client directly — urllib's default User-Agent triggers
+    # Cloudflare's bot detection on Groq (error 1010 / 403)
+    import http.client, ssl
+    ctx  = ssl.create_default_context()
+    conn = http.client.HTTPSConnection("api.groq.com", timeout=120, context=ctx)
+
     hdrs = {
-        "Content-Type":    "application/json",
-        "Authorization":   f"Bearer {api_key}",
-        "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                           "AppleWebKit/537.36 (KHTML, like Gecko) "
-                           "Chrome/124.0.0.0 Safari/537.36",
-        "Accept":          "text/event-stream",
-        "Accept-Language": "en-US,en;q=0.9",
+        "Content-Type":   "application/json",
+        "Authorization":  f"Bearer {api_key}",
+        "User-Agent":     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/124.0.0.0 Safari/537.36",
+        "Accept":         "text/event-stream",
+        "Accept-Language":"en-US,en;q=0.9",
     }
 
-    MAX_RETRIES = 2
-    BACKOFF     = [8, 20]   # fail fast → let ai_generate fall back to Gemini
+    accumulated   = ""
+    sections_done = []
+    watch         = tracked_sections if tracked_sections is not None else SECTION_ORDER
 
-    for attempt in range(MAX_RETRIES + 1):
-        ctx  = ssl.create_default_context()
-        conn = http.client.HTTPSConnection("api.groq.com", timeout=120, context=ctx)
-        accumulated   = ""
-        sections_done = []
-        watch = tracked_sections if tracked_sections is not None else SECTION_ORDER
+    try:
+        conn.request("POST", "/openai/v1/chat/completions", body=body, headers=hdrs)
+        resp = conn.getresponse()
 
-        try:
-            conn.request("POST", "/openai/v1/chat/completions", body=body, headers=hdrs)
-            resp = conn.getresponse()
+        if resp.status != 200:
+            err = resp.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Groq HTTP {resp.status}: {err[:400]}")
 
-            if resp.status == 429:
-                raw_err = resp.read().decode("utf-8", errors="replace")
-                # Try to read Retry-After header first
-                retry_after = resp.getheader("Retry-After")
-                wait = int(retry_after) if retry_after and retry_after.isdigit() else BACKOFF[min(attempt, len(BACKOFF)-1)]
-                if attempt >= MAX_RETRIES:
-                    raise RuntimeError(
-                        f"Groq rate limit hit after {MAX_RETRIES} retries. "
-                        f"Tip: set GEMINI_API_KEY (free, 1M tokens/min) as a fallback — "
-                        f"get one free at https://aistudio.google.com/app/apikey"
-                    )
-                if progress_cb:
-                    progress_cb(None, f"⏳ Groq rate limit — waiting {wait}s before retry {attempt+1}/{MAX_RETRIES}...")
-                print(f"[Groq] 429 rate limit on attempt {attempt+1}, waiting {wait}s...")
-                conn.close()
-                time.sleep(wait)
+        for raw_line in resp:
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if not line.startswith("data:"):
+                continue
+            data_str = line[5:].strip()
+            if data_str == "[DONE]":
+                break
+            try:
+                chunk  = json.loads(data_str)
+                token  = chunk["choices"][0]["delta"].get("content", "")
+                accumulated += token
+
+                for tag in watch:
+                    if tag not in sections_done and f"</{tag}>" in accumulated:
+                        sections_done.append(tag)
+                        pct = _AI_START + int(len(sections_done) / len(watch) * (_AI_END - _AI_START))
+                        next_idx = watch.index(tag) + 1
+                        msg = SECTION_LABELS.get(watch[next_idx], "Finishing up...") if next_idx < len(watch) else "Finishing up..."
+                        if progress_cb:
+                            progress_cb(pct, f'✓ {tag.replace("_"," ").title()} done — {msg}')
+
+            except (json.JSONDecodeError, IndexError, KeyError):
                 continue
 
-            if resp.status != 200:
-                err = resp.read().decode("utf-8", errors="replace")
-                raise RuntimeError(f"Groq HTTP {resp.status}: {err[:400]}")
+    except RuntimeError:
+        raise
+    except Exception as e:
+        raise RuntimeError(f"Groq request failed: {e}")
+    finally:
+        conn.close()
 
+    if not accumulated:
+        raise RuntimeError("Groq returned empty response.")
+    return accumulated.strip()
+
+
+def _gemini_generate(prompt: str, system: str, temperature: float,
+                     progress_cb=None, tracked_sections=None) -> str:
+    """Call Gemini via SSE streaming (free tier)."""
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set.")
+
+    model = "gemini-2.0-flash"
+    url   = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?key={api_key}&alt=sse"
+
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": temperature, "maxOutputTokens": 32768},
+    }
+    if system:
+        payload["systemInstruction"] = {"parts": [{"text": system}]}
+
+    body = json.dumps(payload).encode("utf-8")
+    req  = urllib.request.Request(url, data=body,
+                                   headers={"Content-Type": "application/json"},
+                                   method="POST")
+
+    accumulated   = ""
+    sections_done = []
+    watch         = tracked_sections if tracked_sections is not None else SECTION_ORDER
+
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
             for raw_line in resp:
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line.startswith("data:"):
@@ -246,7 +288,10 @@ def _groq_generate(prompt: str, system: str, temperature: float,
                     break
                 try:
                     chunk = json.loads(data_str)
-                    token = chunk["choices"][0]["delta"].get("content", "")
+                    token = (chunk.get("candidates", [{}])[0]
+                                  .get("content", {})
+                                  .get("parts", [{}])[0]
+                                  .get("text", ""))
                     accumulated += token
 
                     for tag in watch:
@@ -254,150 +299,43 @@ def _groq_generate(prompt: str, system: str, temperature: float,
                             sections_done.append(tag)
                             pct = _AI_START + int(len(sections_done) / len(watch) * (_AI_END - _AI_START))
                             next_idx = watch.index(tag) + 1
-                            msg = SECTION_LABELS.get(watch[next_idx], "Finishing up...") if next_idx < len(watch) else "Finishing up..."
+                            msg = SECTION_LABELS.get(watch[next_idx], 'Finishing up...') if next_idx < len(watch) else 'Finishing up...'
                             if progress_cb:
                                 progress_cb(pct, f'✓ {tag.replace("_"," ").title()} done — {msg}')
                 except (json.JSONDecodeError, IndexError, KeyError):
                     continue
+    except urllib.error.HTTPError as e:
+        err = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Gemini HTTP {e.code}: {err[:400]}")
+    except Exception as e:
+        raise RuntimeError(f"Gemini streaming failed: {e}")
 
-            if not accumulated:
-                raise RuntimeError("Groq returned empty response.")
-            return accumulated.strip()
-
-        except RuntimeError:
-            raise
-        except Exception as e:
-            raise RuntimeError(f"Groq request failed: {e}")
-        finally:
-            conn.close()
-
-    raise RuntimeError("Groq: max retries exceeded.")
-
-
-def _gemini_generate(prompt: str, system: str, temperature: float,
-                     progress_cb=None, tracked_sections=None) -> str:
-    """Call Gemini 2.0 Flash via SSE streaming (free tier — 1M TPM, 15 RPM)."""
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY not set.")
-
-    model = "gemini-2.5-flash-preview-04-17"
-    url   = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-             f"{model}:streamGenerateContent?key={api_key}&alt=sse")
-
-    payload = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": temperature, "maxOutputTokens": 6000},
-    }
-    if system:
-        payload["systemInstruction"] = {"parts": [{"text": system}]}
-
-    body = json.dumps(payload).encode("utf-8")
-
-    MAX_RETRIES = 3
-    BACKOFF     = [10, 30, 60]
-
-    for attempt in range(MAX_RETRIES + 1):
-        req = urllib.request.Request(
-            url, data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST"
-        )
-        accumulated   = ""
-        sections_done = []
-        watch = tracked_sections if tracked_sections is not None else SECTION_ORDER
-
-        try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                for raw_line in resp:
-                    line = raw_line.decode("utf-8", errors="replace").strip()
-                    if not line.startswith("data:"):
-                        continue
-                    data_str = line[5:].strip()
-                    if data_str == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data_str)
-                        token = (chunk.get("candidates", [{}])[0]
-                                      .get("content", {})
-                                      .get("parts", [{}])[0]
-                                      .get("text", ""))
-                        accumulated += token
-
-                        for tag in watch:
-                            if tag not in sections_done and f"</{tag}>" in accumulated:
-                                sections_done.append(tag)
-                                pct = _AI_START + int(len(sections_done) / len(watch) * (_AI_END - _AI_START))
-                                next_idx = watch.index(tag) + 1
-                                msg = SECTION_LABELS.get(watch[next_idx], "Finishing up...") if next_idx < len(watch) else "Finishing up..."
-                                if progress_cb:
-                                    progress_cb(pct, f'✓ {tag.replace("_"," ").title()} done — {msg}')
-                    except (json.JSONDecodeError, IndexError, KeyError):
-                        continue
-
-            if not accumulated:
-                raise RuntimeError("Gemini returned empty response.")
-            return accumulated.strip()
-
-        except urllib.error.HTTPError as e:
-            err = e.read().decode("utf-8", errors="replace")
-            if e.code == 429 and attempt < MAX_RETRIES:
-                wait = BACKOFF[attempt]
-                if progress_cb:
-                    progress_cb(None, f"⏳ Gemini rate limit — waiting {wait}s before retry {attempt+1}/{MAX_RETRIES}...")
-                print(f"[Gemini] 429 on attempt {attempt+1}, waiting {wait}s...")
-                time.sleep(wait)
-                continue
-            raise RuntimeError(f"Gemini HTTP {e.code}: {err[:400]}")
-        except Exception as e:
-            raise RuntimeError(f"Gemini streaming failed: {e}")
-
-    raise RuntimeError("Gemini: max retries exceeded.")
+    if not accumulated:
+        raise RuntimeError("Gemini returned empty response.")
+    return accumulated.strip()
 
 
 def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
                 progress_cb=None, tracked_sections=None) -> str:
     """
-    Generate using best available free provider.
-    Priority: Gemini (1M TPM free) → Groq (12k TPM free)
-    Auto-retries on 429 with backoff. Falls back to other provider on hard failure.
+    Generate text using the best available free AI provider.
+    Priority: Groq (free) → Gemini (free tier)
     """
     provider = _detect_provider()
-    if provider is None:
-        raise RuntimeError(
-            "No AI API key found.\n"
-            "• GEMINI_API_KEY (recommended — free, 1M tokens/min): https://aistudio.google.com/app/apikey\n"
-            "• GROQ_API_KEY (free, 12k tokens/min): https://console.groq.com/keys"
-        )
-
-    primary   = provider
-    secondary = "groq" if provider == "gemini" else "gemini"
-
-    def _run(p):
-        if p == "groq":
-            return _groq_generate(prompt, system, temperature, progress_cb, tracked_sections)
+    if provider == "groq":
+        return _groq_generate(prompt, system, temperature, progress_cb, tracked_sections)
+    elif provider == "gemini":
         return _gemini_generate(prompt, system, temperature, progress_cb, tracked_sections)
-
-    try:
-        return _run(primary)
-    except RuntimeError as e:
-        err_str = str(e)
-        # Only fall back on rate-limit / quota errors, not auth or bad-request
-        if any(x in err_str for x in ("429", "rate limit", "quota", "RESOURCE_EXHAUSTED")):
-            # Check if the secondary provider is even configured
-            sec_key_env = "GROQ_API_KEY" if secondary == "groq" else "GEMINI_API_KEY"
-            if os.environ.get(sec_key_env, "").strip():
-                if progress_cb:
-                    progress_cb(None, f"⚡ Switching to {secondary.title()} due to rate limit...")
-                print(f"[ai_generate] Falling back from {primary} → {secondary}: {err_str[:120]}")
-                return _run(secondary)
-        raise
+    else:
+        raise RuntimeError(
+            "No AI API key found. Set GROQ_API_KEY (free at https://console.groq.com/keys) "
+            "or GEMINI_API_KEY (free at https://aistudio.google.com/app/apikey)"
+        )
 
 
 # Keep gemini_stream as alias for backward compatibility
 def gemini_stream(prompt, system="", temperature=0.7, progress_cb=None, tracked_sections=None):
     return ai_generate(prompt, system, temperature, progress_cb, tracked_sections)
-
 
 
 SYSTEM_PROMPT = (
@@ -414,7 +352,7 @@ SYSTEM_PROMPT = (
 #  WEB SCRAPER  (no API keys required)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _http_get(url: str, timeout: int = 10) -> object:
+def _http_get(url: str, timeout: int = 12) -> object:
     try:
         req = urllib.request.Request(
             url,
@@ -432,7 +370,7 @@ class WebScraper:
         self.topic = topic
         self.query = urllib.parse.quote(topic)
 
-    def fetch_semantic_scholar(self, limit: int = 6) -> list:
+    def fetch_semantic_scholar(self, limit: int = 10) -> list:
         url = (
             f"https://api.semanticscholar.org/graph/v1/paper/search"
             f"?query={self.query}&limit={limit}"
@@ -530,7 +468,7 @@ class WebScraper:
 
     def gather(self, progress_cb=None) -> dict:
         if progress_cb: progress_cb(10, "Querying Semantic Scholar for real papers...")
-        ss = self.fetch_semantic_scholar(6)
+        ss = self.fetch_semantic_scholar(10)
 
         if progress_cb: progress_cb(18, "Querying CrossRef for verified journal articles...")
         cr = self.fetch_crossref(6)
@@ -585,153 +523,190 @@ class GeminiWriter:
         return "SOURCES:\n" + "\n".join(lines) + wiki
 
     def generate_all(self, progress_cb=None) -> dict:
-        """Three lean Groq/Gemini calls — each stays well under 12k TPM limit."""
+        """Two lean streaming Gemini calls — stays within free-tier token limits."""
         top      = sorted(self.papers, key=lambda x: x.get("citations", 0), reverse=True)
         top_cite = f"{top[0]['authors']} ({top[0]['year']})" if top else "prior studies"
         n, nr    = len(self.papers), self.n_respondents
         q        = self.questionnaire
-
-        # Build compact researcher-inputs block (truncated to avoid token bloat)
-        q_block = ""
+        q_block  = ""
         if any(q.values()):
-            q_block = "\nRESEARCHER INPUTS:\n"
-            if q.get('problem'):    q_block += f"PROBLEM: {q['problem'][:400]}\n"
-            if q.get('lit'):        q_block += f"LIT: {q['lit'][:400]}\n"
-            if q.get('gap'):        q_block += f"GAP: {q['gap'][:300]}\n"
-            if q.get('objectives'): q_block += f"OBJECTIVES: {q['objectives'][:300]}\n"
-            if q.get('statement'):  q_block += f"STATEMENT: {q['statement'][:300]}\n"
+            q_block = "\n\n=== RESEARCHER'S OWN INPUTS (use these EXACTLY as the foundation — do NOT invent replacements) ===\n"
+            if q.get('problem'):
+                q_block += f"PROBLEM IDENTIFIED BY RESEARCHER: {q['problem']}\n"
+            if q.get('lit'):
+                q_block += f"KEY LITERATURE CITED BY RESEARCHER: {q['lit']}\n"
+            if q.get('gap'):
+                q_block += f"RESEARCH GAP IDENTIFIED BY RESEARCHER: {q['gap']}\n"
+            if q.get('objectives'):
+                q_block += f"OBJECTIVES DEFINED BY RESEARCHER: {q['objectives']}\n"
+            if q.get('statement'):
+                q_block += f"RESEARCH STATEMENT BY RESEARCHER: {q['statement']}\n"
+            q_block += "=== END RESEARCHER INPUTS — expand these with evidence and scholarly prose, never override them ===\n"
+        hdr      = (f"{self._paper_digest}\n\nTOPIC: {self.topic} | N={nr} respondents | "
+                    f"Aware={self.aware_pct}% | Familiar={self.fam_pct}% | "
+                    f"Support={self.support_pct}% | Top paper: {top_cite}{q_block}\n\n")
 
-        # Compact header shared by all calls (~300 tokens)
-        hdr = (f"SOURCES:\n" +
-               "\n".join(
-                   f"{i}. {p['authors']} ({p['year']}). {p['title'][:80]}."
-                   for i, p in enumerate(self.papers[:5], 1)
-               ) +
-               f"\n\nTOPIC: {self.topic} | N={nr} | Aware={self.aware_pct}% | "
-               f"Support={self.support_pct}% | Top: {top_cite}{q_block}\n\n")
+        # ── CALL 1: abstract + intro + objectives ────────────────────────────
+        p1 = (hdr +
+              "Write the opening sections of an academic research paper using XML tags. "
+              "Flowing scholarly prose only — no markdown, no bullet points inside prose.\n\n"
+              "<keywords>Provide exactly 6-8 academic keywords separated by commas, relevant to the topic.</keywords>\n"
+              f"<abstract>Write a structured academic abstract of exactly 300 words as ONE flowing paragraph. "
+              f"Follow this internal structure without subheadings: "
+              f"(1) Background — introduce the broad context of {self.topic} and why it matters. "
+              f"(2) Problem statement — state the specific gap or challenge this study addresses. "
+              f"(3) Objective — 'The objective of this study is to...' state 2-3 specific aims. "
+              f"(4) Methodology — 'The study adopted a descriptive and empirical research design. "
+              f"A convenience sampling method was employed with {nr} respondents. "
+              f"Data was collected through a structured questionnaire and analysed using SPSS Version 21.' "
+              f"(5) Key findings — state 3-4 quantified findings with specific percentages relevant to {self.topic}. "
+              f"(6) Conclusion and implications — summarise the study's contribution and practical/policy implications. "
+              f"Write as one dense academic paragraph with no internal headings.</abstract>\n"
+              f"<introduction>Write a formal academic introduction of exactly 1,200-1,500 words. "
+              f"Structure using these bold subheadings in this order, each as a flowing paragraph (no bullet points):\n"
+              f"Background of the Topic (200-220 words): Describe the historical and contextual background of {self.topic}. "
+              f"Explain how the subject traditionally operated, what stakeholders are involved, and what has changed in recent decades. "
+              f"If PROBLEM IDENTIFIED BY RESEARCHER is given above, frame this as the central tension.\n"
+              f"Evolution of the Topic (200-220 words): Trace the historical development of {self.topic} from its early form "
+              f"to the present. Name specific time periods, events, technologies, or policy shifts that drove change. "
+              f"Describe the first wave of transformation, subsequent developments, and the current state with specific examples.\n"
+              f"Government Initiatives (180-200 words): Name specific government schemes, acts, policies, or programmes "
+              f"relevant to {self.topic} using their full official names. State which government body introduced each, "
+              f"its objectives, and measurable impact. Include both central and state-level examples where applicable.\n"
+              f"Factors Affecting the Topic (180-200 words): Identify and explain 5-6 key variables that influence outcomes "
+              f"in {self.topic} — covering infrastructure, socio-economic, cultural, environmental, and policy dimensions. "
+              f"Name specific barriers and enablers. "
+              f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, incorporate it as a structural gap here.\n"
+              f"Current Trends (180-200 words): Describe the present-day landscape of {self.topic}. "
+              f"Name specific technologies, platforms, legal reforms, or practices currently in use. "
+              f"Reference shifting consumer or societal demands. Include emerging innovations reshaping the field.\n"
+              f"Comparison Across Regions/States (150-180 words): Compare adoption, impact, or implementation of {self.topic} "
+              f"across at least 4 named Indian states or international regions. Explain why some lead and others lag.\n"
+              f"Aim of the Study (80-100 words): State clearly: 'The aim of this study is to...' "
+              f"If RESEARCH STATEMENT BY RESEARCHER is provided, anchor this directly to it. "
+              f"Write all sections as flowing scholarly prose. No bullet points anywhere.</introduction>\n"
+              "<objectives>"
+              "IMPORTANT: If OBJECTIVES DEFINED BY RESEARCHER are provided above, copy them VERBATIM. "
+              "Format: each objective on its own line starting with '● To ...' "
+              "If no objectives provided, write exactly 3 objectives in this format: '● To [verb] ...'</objectives>\n"
+              f"<literature_review>Write a comprehensive literature review of exactly 3,500-4,000 words. "
+              f"Include EXACTLY 25-30 source entries. "
+              f"CRITICAL FORMAT — every entry must follow this EXACT 4-sentence structure (120-150 words each):\n"
+              f"SENTENCE 1 — Citation opener: 'Lastname and Lastname (Year)' followed by a past-tense verb "
+              f"(investigated/examined/analyzed/explored/assessed/evaluated) and the subject and context. "
+              f"Example: 'Bagchi and Sharma (2024) investigated the economic impact of mobile applications on fish marketing within coastal communities.'\n"
+              f"SENTENCE 2 — Aim: Start with 'The aim of the study was to...' — state the precise research objective.\n"
+              f"SENTENCE 3 — Methodology: Start with 'The methodology employed...' — name the specific research design, "
+              f"exact participant count (e.g. 450 respondents), geographic scope, duration, and analytical tools used.\n"
+              f"SENTENCE 4 — Findings: Start with 'The findings revealed...' — report 3-4 specific quantitative results "
+              f"with exact percentages (e.g. 34% income increase, 28% reduction in post-harvest losses). "
+              f"End with a sentence on broader implications.\n"
+              f"IMPORTANT: If KEY LITERATURE CITED BY RESEARCHER is provided above, those sources appear first "
+              f"rewritten in this exact format. Then add further academic sources on {self.topic} to reach 25-30 total. "
+              f"Number each entry: first entry has no number, subsequent entries numbered 1. 2. 3. etc. "
+              f"If RESEARCH GAP IDENTIFIED BY RESEARCHER is given, end with an unnumbered synthesis paragraph. "
+              f"No subheadings, no bullet points, no brackets for citations.</literature_review>\n"
+              f"<methodology>Write a formal methodology section of exactly 500-600 words as flowing paragraphs. "
+              f"Cover ALL of the following in this order (write as connected prose, not a list):\n"
+              f"Paragraph 1 — Research design and rationale: 'The current study is based on descriptive and empirical research.' "
+              f"Explain what descriptive and empirical means in this context and why this design suits {self.topic}.\n"
+              f"Paragraph 2 — Sampling: 'A convenience sampling method is used in the research.' "
+              f"State the sample size of {nr} respondents, name the specific geographic location relevant to {self.topic}, "
+              f"explain how the sampling frame was constructed and who qualified as respondents.\n"
+              f"Paragraph 3 — Data collection: 'Data has been collected through field visits, with a structured questionnaire "
+              f"used as the primary data collection tool.' Describe the questionnaire design — number of sections, types of questions "
+              f"(Likert scale, multiple choice), how it was validated, and how it was administered.\n"
+              f"Paragraph 4 — Secondary data: 'Secondary sources such as articles, journals, reports, and newsletters have also been considered.' "
+              f"Name the specific types of secondary sources consulted relevant to {self.topic}.\n"
+              f"Paragraph 5 — Analysis: 'The collected data has been analyzed using SPSS version 21.' "
+              f"Name the specific statistical tests used: chi-square test, ANOVA, Pearson correlation, frequency analysis.\n"
+              f"Paragraph 6 — Variables: "
+              f"'The independent variables are age, gender, educational qualifications, location, and occupation.' "
+              f"'The dependent variable of the study is [main outcome directly relevant to {self.topic}].' "
+              f"Explain why these variables were chosen and what relationships are being tested.\n"
+              f"Write in formal academic paragraph style. No bullet points, no numbered lists.</methodology>")
+
+        # ── CALL 2: results + conclusion + charts ─────────────────────────────
+        p2 = (hdr +
+              "Write the analytical sections of an academic research paper using XML tags. "
+              "Flowing scholarly prose only — no markdown, no bullet points.\n\n"
+              f"<results>Write a comprehensive result section of exactly 2,000-2,500 words. "
+              f"Interpret findings FIGURE BY FIGURE from Figure 1 through Figure {self._nfigs}. "
+              f"For each figure, write a dedicated paragraph of 60-80 words following this exact structure: "
+              f"Start the paragraph with 'Figure [N]' in the text (not as a heading). "
+              f"Then write: "
+              f"(1) What the figure shows — 'Figure [N] illustrates the relationship between [independent variable] and [dependent variable].' "
+              f"(2) Dominant finding — name the highest-scoring group with its exact percentage "
+              f"(use internally consistent percentages that add up correctly across all figures). "
+              f"(3) Contrast — name a second group with a lower percentage and explain the gap. "
+              f"(4) Inference — state what this reveals about {self.topic} in one analytical sentence.\n"
+              f"Use these independent variables across figures (distribute evenly): "
+              f"educational qualification (illiterate/primary school/high school/graduate) for Figures 1-8; "
+              f"age group (18-30/31-50/51 and above) for Figures 6,9,10,14,19,20,23,26; "
+              f"gender (male/female) for Figures 11-18; "
+              f"occupation (small-scale/large-scale/non-fisher trader) for Figures 21,24,25,27,28,29; "
+              f"place of residence (rural/semi-urban/urban) for Figures 22,30.\n"
+              f"Use these as dependent/outcome variables relevant to {self.topic}: "
+              f"primary reasons for use, perception of price improvement, awareness of government programs, "
+              f"factors influencing adoption, payment timeliness, belief in higher prices, biggest difficulties. "
+              f"Include specific percentages throughout. Maintain continuous paragraph structure. "
+              f"No bullet points. Use statistical-style language throughout.</results>\n"
+              f"<discussion>Write a detailed discussion section of exactly 400-500 words. "
+              f"Interpret the overall pattern of findings across all figures in relation to the 3 research objectives. "
+              f"Connect findings to at least 5 sources from the literature review by author and year. "
+              f"Discuss implications for each demographic group. Address policy implications and practical significance. "
+              f"Write as flowing scholarly prose in multiple paragraphs.</discussion>\n"
+              f"<conclusion>Write a comprehensive conclusion of exactly 700-800 words. "
+              f"Structure as flowing paragraphs covering: "
+              f"(1) Summary of key findings across all demographic variables with specific percentages. "
+              f"(2) Whether each of the 3 objectives was achieved and how. "
+              f"(3) Theoretical and practical implications for {self.topic}. "
+              f"(4) Specific policy recommendations (name 4-5 concrete actionable reforms). "
+              f"(5) Limitations of the current study. "
+              f"(6) Future research directions. "
+              f"Write in formal academic tone. No bullet points.</conclusion>\n"
+              f"<suggestions>Write a suggestions section of exactly 200-250 words as connected prose paragraphs. "
+              f"Provide 5-6 specific, actionable recommendations directly relevant to {self.topic}. "
+              f"Each recommendation must be concrete, named specifically, and justified with brief reasoning. "
+              f"No bullet points.</suggestions>\n"
+              f"<limitations>Write a limitations section of exactly 150-200 words as 2 connected paragraphs. "
+              f"Address: sample size constraints, geographic scope, self-report bias, temporal limitations, "
+              f"and areas for future research.</limitations>\n"
+              f"<charts>{self._nfigs} lines. Format: TYPE|TITLE|CAT1,CAT2,CAT3 "
+              f"(or grouped/stacked: TYPE|TITLE|G1,G2;S1,S2). "
+              f"TYPE=bar/pie/grouped/stacked. "
+              f"Distribute chart types: use grouped/stacked for cross-tabulation figures. "
+              f"Titles must be specific to \"{self.topic[:35]}\" and reference the demographic variable shown. "
+              f"Example: 'grouped|Income Perception by Educational Qualification|Illiterate,Primary,High School,Graduate;Agree,Disagree,Neutral'</charts>")
+
+        # Build dedicated lit review + methodology prompt (same as p1 for this split)
+        p_litmethod = p1  # lit review and methodology are in p1 now
+        def prog1(pct, msg):
+            if progress_cb: progress_cb(max(30, min(55, 30 + int((pct-30)/45*25))), msg)
+        def prog2(pct, msg):
+            if progress_cb: progress_cb(max(56, min(75, 56 + int((pct-30)/45*19))), msg)
+        def prog3(pct, msg):
+            if progress_cb: progress_cb(max(56, min(75, 56 + int((pct-30)/45*19))), msg)
+
+        s1 = ['keywords','abstract','introduction','objectives','literature_review','methodology']
+        s2 = []   # unused — all front sections come from p1 now
+        s3 = ['results','discussion','suggestions','limitations','conclusion','charts']
 
         provider = _detect_provider()
         pname = "Groq (Llama 3.3 70B)" if provider == "groq" else "Gemini"
+        if progress_cb: progress_cb(30, f'{pname} writing abstract, introduction & literature review...')
+        raw1 = ai_generate(p1, system=SYSTEM_PROMPT, temperature=0.7,
+                           progress_cb=prog1, tracked_sections=s1)
 
-        # ── Build all 3 prompts ───────────────────────────────────────────────
-        p1 = (hdr +
-              "Write these sections using XML tags. Scholarly prose only — no markdown, no bullets.\n\n"
-              "<keywords>6-8 academic keywords, comma-separated.</keywords>\n"
-              f"<abstract>Exactly 200 words. ONE paragraph. Structure: (1) background of {self.topic}, "
-              f"(2) problem gap, (3) objective ('The objective of this study is to...'), "
-              f"(4) methodology (descriptive+empirical, {nr} respondents, SPSS), "
-              f"(5) 2-3 key findings with percentages, (6) implication.</abstract>\n"
-              f"<introduction>800-1000 words. Bold subheadings as flowing prose paragraphs:\n"
-              f"Background of the Topic (150w): Context of {self.topic}, stakeholders, recent changes.\n"
-              f"Evolution of the Topic (150w): Historical development with named events/policies.\n"
-              f"Government Initiatives (120w): Specific named schemes/acts relevant to {self.topic}.\n"
-              f"Factors Affecting the Topic (120w): 4-5 key variables — barriers and enablers.\n"
-              f"Current Trends (100w): Present landscape, technologies, reforms in {self.topic}.\n"
-              f"Aim of the Study (60w): 'The aim of this study is to...' "
-              f"{'Anchor to: ' + q['statement'][:150] if q.get('statement') else ''}"
-              f"</introduction>\n"
-              "<objectives>"
-              f"{'COPY VERBATIM: ' + q['objectives'][:500] if q.get('objectives') else 'Write 4 objectives starting with ● To [verb]...'}"
-              "</objectives>")
+        raw2 = raw1  # no separate call needed
 
-        p2 = (hdr +
-              "Write these sections using XML tags. Scholarly prose only — no markdown, no bullets.\n\n"
-              f"<literature_review>Write 10-12 source entries. "
-              f"Each entry MUST follow this 4-sentence structure:\n"
-              f"S1: 'Lastname (Year) [verb] [subject].'\n"
-              f"S2: 'The aim of the study was to...'\n"
-              f"S3: 'The methodology employed...[design, N, tools].'\n"
-              f"S4: 'The findings revealed...[2-3 percentages]. [Implication].'\n"
-              f"{'Start with researcher lit (rewrite in format): ' + q['lit'][:300] if q.get('lit') else ''}"
-              f"Number entries 1. 2. 3. etc. "
-              f"{'End with gap paragraph: ' + q['gap'][:200] if q.get('gap') else ''}"
-              f"No subheadings, no bullets.</literature_review>\n"
-              f"<methodology>350-450 words as 5 flowing paragraphs:\n"
-              f"P1: Descriptive and empirical design — why it suits {self.topic}.\n"
-              f"P2: Convenience sampling — {nr} respondents, geographic scope, eligibility.\n"
-              f"P3: Structured questionnaire — sections, Likert scale, validation, administration.\n"
-              f"P4: Secondary data — articles, journals, reports on {self.topic}.\n"
-              f"P5: SPSS v21 analysis — chi-square, ANOVA, Pearson, frequency. "
-              f"Independent vars: age, gender, education, location, occupation. "
-              f"Dependent var: main outcome of {self.topic}.</methodology>")
+        if progress_cb: progress_cb(56, f'{pname} writing results, discussion & conclusion...')
+        raw3 = ai_generate(p2, system=SYSTEM_PROMPT, temperature=0.7,
+                           progress_cb=prog2, tracked_sections=s3)
 
-        p3 = (hdr +
-              "Write these sections using XML tags. Scholarly prose only — no markdown, no bullets.\n\n"
-              f"<results>Write {self._nfigs} figure-paragraphs (one per figure, 50-60 words each). "
-              f"Each: 'Figure [N] illustrates [independent var] vs [dependent var]. "
-              f"[Highest group] accounted for [X]%. [Second group] recorded [Y]%. "
-              f"This suggests [inference about {self.topic[:40]}].' "
-              f"Use: education (Figs 1-4), age (Figs 5-8), gender (Figs 9-12), occupation (Figs 13+). "
-              f"After figures, write 200-word overall findings summary.</results>\n"
-              f"<discussion>300-400 words. Connect findings to 3-4 sources by author+year. "
-              f"Implications per demographic group. Policy significance.</discussion>\n"
-              f"<conclusion>500-600 words as flowing paragraphs: "
-              f"(1) key findings with percentages, (2) objectives achieved, "
-              f"(3) implications for {self.topic[:50]}, (4) 3-4 policy recommendations, "
-              f"(5) limitations, (6) future research. No bullets.</conclusion>\n"
-              f"<suggestions>150-200 words. 4-5 concrete recommendations for {self.topic[:50]}. "
-              f"Prose, no bullets.</suggestions>\n"
-              f"<limitations>100-150 words. 2 paragraphs on scope, bias, future directions.</limitations>\n"
-              f"<charts>{self._nfigs} lines. FORMAT: TYPE|TITLE|CATS "
-              f"TYPE=bar/pie/grouped/stacked; grouped/stacked: TYPE|TITLE|G1,G2;S1,S2. "
-              f"Titles reference {self.topic[:30]} and demographic shown.</charts>")
-
-        # ── All 3 calls fire simultaneously in parallel threads ───────────────
-        # Gemini: 1M TPM free — zero stagger, true parallel.
-        # Groq:   6k TPM — tiny stagger only to spread token bursts.
-        s1 = ['keywords', 'abstract', 'introduction', 'objectives']
-        s2 = ['literature_review', 'methodology']
-        s3 = ['results', 'discussion', 'suggestions', 'limitations', 'conclusion', 'charts']
-        _results = {}
-
-        def _run1():
-            def prog1(pct, msg):
-                if progress_cb:
-                    if pct is None: progress_cb(None, msg)
-                    else: progress_cb(max(32, min(55, 32 + int((pct-30)/45*23))), msg)
-            if progress_cb: progress_cb(32, f'{pname} writing abstract & introduction...')
-            _results['raw1'] = ai_generate(p1, system=SYSTEM_PROMPT, temperature=0.7,
-                                           progress_cb=prog1, tracked_sections=s1)
-
-        def _run2():
-            def prog2(pct, msg):
-                if progress_cb:
-                    if pct is None: progress_cb(None, msg)
-                    else: progress_cb(max(35, min(58, 35 + int((pct-30)/45*23))), msg)
-            if provider == "groq": time.sleep(1)
-            if progress_cb: progress_cb(35, f'{pname} writing literature review & methodology...')
-            _results['raw2'] = ai_generate(p2, system=SYSTEM_PROMPT, temperature=0.7,
-                                           progress_cb=prog2, tracked_sections=s2)
-
-        def _run3():
-            def prog3(pct, msg):
-                if progress_cb:
-                    if pct is None: progress_cb(None, msg)
-                    else: progress_cb(max(38, min(72, 38 + int((pct-30)/45*34))), msg)
-            if provider == "groq": time.sleep(2)
-            if progress_cb: progress_cb(38, f'{pname} writing results, discussion & conclusion...')
-            _results['raw3'] = ai_generate(p3, system=SYSTEM_PROMPT, temperature=0.7,
-                                           progress_cb=prog3, tracked_sections=s3)
-
-        import threading as _threading
-        if progress_cb: progress_cb(30, f'Launching all 3 {pname} calls in parallel...')
-        t1 = _threading.Thread(target=_run1, daemon=True)
-        t2 = _threading.Thread(target=_run2, daemon=True)
-        t3 = _threading.Thread(target=_run3, daemon=True)
-        t1.start(); t2.start(); t3.start()
-        t1.join(); t2.join(); t3.join()
-
-        raw1 = _results.get('raw1', '')
-        raw2 = _results.get('raw2', '')
-        raw3 = _results.get('raw3', '')
-
-        # ── Parse all sections ────────────────────────────────────────────────
         sections = {}
         for tag in s1:
             m = re.search(rf'<{tag}>(.*?)</{tag}>', raw1, re.DOTALL)
-            sections[tag] = m.group(1).strip() if m else ''
-        for tag in s2:
-            m = re.search(rf'<{tag}>(.*?)</{tag}>', raw2, re.DOTALL)
             sections[tag] = m.group(1).strip() if m else ''
         for tag in s3:
             m = re.search(rf'<{tag}>(.*?)</{tag}>', raw3, re.DOTALL)
@@ -741,11 +716,11 @@ class GeminiWriter:
             'keywords':          f'{self.topic}, empirical study, stakeholder analysis, policy framework',
             'abstract':          f'This study examines {self.topic} through {n} papers and a survey of {nr} respondents.',
             'introduction':      f'This paper investigates {self.topic}. {top_cite} made foundational contributions.',
-            'objectives':        '● To examine the topic.\n● To review literature.\n● To analyse perceptions.\n● To identify implications.',
+            'objectives':        '1. To examine the topic.\n2. To review literature.\n3. To analyse perceptions.\n4. To identify implications.\n5. To recommend improvements.',
             'literature_review': f'A growing body of work addresses {self.topic}. {top_cite} provide a foundational framework.',
             'methodology':       f'A mixed-methods approach combined {n} papers with a survey of {nr} respondents analysed via SPSS.',
-            'results':           f'{nr} respondents: {self.aware_pct}% aware, {self.fam_pct}% familiar, {self.support_pct}% supportive.',
-            'discussion':        f'Results align with {top_cite}. Awareness is growing; structural barriers persist.',
+            'results':           f'{nr} respondents: {self.aware_pct}% aware, {self.fam_pct}% familiar with tools, {self.support_pct}% support change.',
+            'discussion':        f'Results align with {top_cite}. Awareness is growing; trust in frameworks remains limited.',
             'suggestions':       'Policymakers should invest in awareness, transparent governance, and stakeholder engagement.',
             'limitations':       f'Sample size and self-reported data limit generalisability. The {n}-paper review is not exhaustive.',
             'conclusion':        f'This study advances understanding of {self.topic}. Longitudinal research is recommended.',
@@ -1047,42 +1022,13 @@ class DocBuilder:
         doc = Document()
 
         # ── PAGE SETUP: A4, 1" margins ────────────────────────────────────────
-        def _add_page_field(para, field_code):
-            """Insert a Word field (PAGE / NUMPAGES) into a paragraph run."""
-            run = para.add_run()
-            fc1 = OxmlElement('w:fldChar'); fc1.set(qn('w:fldCharType'), 'begin'); run._r.append(fc1)
-            run2 = para.add_run()
-            it = OxmlElement('w:instrText'); it.set(qn('xml:space'), 'preserve'); it.text = field_code; run2._r.append(it)
-            run3 = para.add_run()
-            fc2 = OxmlElement('w:fldChar'); fc2.set(qn('w:fldCharType'), 'end'); run3._r.append(fc2)
-
         for sec in doc.sections:
-            sec.page_width      = Inches(8.27)
-            sec.page_height     = Inches(11.69)
-            sec.top_margin      = Inches(1)
-            sec.bottom_margin   = Inches(1)
-            sec.left_margin     = Inches(1)
-            sec.right_margin    = Inches(1)
-            sec.footer_distance = Inches(0.4)
-
-            # ── Footer: "An Interactive Lawyers Tool" on every page ───────────
-            footer = sec.footer
-            footer.is_linked_to_previous = False
-            fp = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
-            fp.clear()
-            fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            fp.paragraph_format.space_before = Pt(0)
-            fp.paragraph_format.space_after  = Pt(0)
-            GREY = RGBColor(0x99, 0x99, 0x99)
-            def _fr(text, bold=False):
-                r = fp.add_run(text); r.font.size = Pt(8)
-                r.font.name = 'Times New Roman'; r.font.color.rgb = GREY; r.bold = bold; return r
-            _fr('An Interactive Lawyers Tool', bold=True)
-            _fr('   •   Page ')
-            _add_page_field(fp, 'PAGE')
-            _fr(' of ')
-            _add_page_field(fp, 'NUMPAGES')
-            _fr('   •   rdxper v4.0')
+            sec.page_width    = Inches(8.27)
+            sec.page_height   = Inches(11.69)
+            sec.top_margin    = Inches(1)
+            sec.bottom_margin = Inches(1)
+            sec.left_margin   = Inches(1)
+            sec.right_margin  = Inches(1)
 
         # ── HELPERS ───────────────────────────────────────────────────────────
         TNR = 'Times New Roman'
@@ -1422,11 +1368,8 @@ class PaperGenerator:
         self.jid  = jid
         self.jobs = jobs_ref
 
-    def prog(self, pct, msg: str):
-        if pct is not None:
-            self.jobs[self.jid].update({'progress': pct, 'message': msg, 'status': 'running'})
-        else:
-            self.jobs[self.jid].update({'message': msg, 'status': 'running'})
+    def prog(self, pct: int, msg: str):
+        self.jobs[self.jid].update({'progress': pct, 'message': msg, 'status': 'running'})
         print(f'[{self.jid[:8]}] {pct}% – {msg}')
 
     def generate(self, topic: str, nfigs: int, author: str, inst: str, email: str, questionnaire: dict = None) -> str:
@@ -1468,11 +1411,9 @@ class PaperGenerator:
         if not specs:
             specs = writer._fallback_specs(nfigs)
 
-        # ── Step 4: Render charts in parallel ────────────────────────────────
+        # ── Step 4: Render charts ────────────────────────────────────────────
         self.prog(82, f'Rendering {len(specs)} SPSS-style charts...')
-        with ThreadPoolExecutor(max_workers=min(4, len(specs))) as ex:
-            chart_futures = [ex.submit(make_chart, sp) for sp in specs]
-            charts = [f.result() for f in chart_futures]
+        charts = [make_chart(sp) for sp in specs]
 
         # ── Step 5: Build DOCX ───────────────────────────────────────────────
         self.prog(90, 'Assembling Word document...')
@@ -1495,532 +1436,488 @@ HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
-<meta name="theme-color" content="#000000">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>rdxper — Research Paper Generator</title>
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>rdxper</title>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-:root{--bg:#000;--s1:#080808;--s2:#0f0f0f;--s3:#171717;--border:rgba(255,255,255,0.08);--border2:rgba(255,255,255,0.15);--text:#fff;--muted:#555;--muted2:#888;--error:#ff4545;--r:8px}
-body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column;overflow-x:hidden}
-/* ── Noise grain overlay ── */
-body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.025;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");background-size:200px}
-/* ── Animated grid lines ── */
-body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;background-image:linear-gradient(rgba(255,255,255,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.03) 1px,transparent 1px);background-size:60px 60px;animation:gridShift 20s linear infinite}
-@keyframes gridShift{0%{background-position:0 0,0 0}100%{background-position:0 60px,60px 0}}
-/* ── Layout ── */
-.wrap{max-width:960px;margin:0 auto;padding:0 24px;position:relative;z-index:1}
-.flex-grow{flex:1}
-/* ── Header ── */
-header{padding:16px 0;border-bottom:1px solid var(--border);position:relative;z-index:10}
-header .wrap{display:flex;align-items:center;justify-content:space-between}
-.logo{display:flex;align-items:center;gap:10px;text-decoration:none}
-.logo-mark{width:30px;height:30px;background:#fff;border-radius:6px;display:grid;place-items:center;font-weight:900;font-size:11px;color:#000;letter-spacing:-.5px;transition:transform .2s}
-.logo:hover .logo-mark{transform:rotate(-5deg) scale(1.05)}
-.logo-text{font-size:18px;font-weight:800;letter-spacing:-1px;color:#fff}
-.nav-links{display:flex;gap:6px;align-items:center}
-.nav-btn{background:none;border:1px solid var(--border);color:var(--muted2);padding:5px 11px;border-radius:6px;cursor:pointer;font-size:12px;transition:all .18s;white-space:nowrap}
-.nav-btn:hover{border-color:rgba(255,255,255,.4);color:#fff}
-.nav-btn.danger{border-color:rgba(255,69,69,.25);color:var(--error)}
-.nav-btn.danger:hover{border-color:var(--error);background:rgba(255,69,69,.06)}
-.user-chip{display:flex;align-items:center;gap:7px;background:var(--s2);border:1px solid var(--border);border-radius:30px;padding:4px 11px 4px 4px;cursor:pointer;transition:border-color .18s}
-.user-chip:hover{border-color:var(--border2)}
-.user-chip img{width:24px;height:24px;border-radius:50%;object-fit:cover}
-.user-chip span{font-size:12px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted2)}
-/* ── Screens ── */
-.screen{display:none;animation:fadeUp .3s ease both}.screen.active{display:flex;flex-direction:column;flex:1}
-@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
-/* ── Footer ── */
-footer{border-top:1px solid var(--border);padding:20px 0;position:relative;z-index:10;margin-top:auto}
-footer .wrap{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
-.footer-brand{font-size:11px;color:var(--muted);letter-spacing:.5px}
-.footer-tag{font-size:11px;color:var(--muted);font-style:italic;letter-spacing:.3px}
-.footer-lawyers{font-size:11px;font-weight:600;color:rgba(255,255,255,.35);letter-spacing:1.5px;text-transform:uppercase;border:1px solid rgba(255,255,255,.08);padding:3px 10px;border-radius:30px}
-/* ── Typography ── */
-h1{font-size:clamp(28px,5vw,50px);font-weight:900;line-height:1.08;letter-spacing:-2px}
-h1 em{font-style:normal;color:rgba(255,255,255,.35)}
-.eyebrow{font-size:10px;letter-spacing:3px;text-transform:uppercase;color:var(--muted2);font-family:monospace;margin-bottom:14px}
-.sub{font-size:15px;color:var(--muted2);line-height:1.6;max-width:500px}
-/* ── Cards & Surfaces ── */
-.card{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:28px}
-.card-sm{background:var(--s2);border:1px solid var(--border);border-radius:var(--r);padding:16px}
-/* ── Inputs ── */
-.fg{margin-bottom:14px}
-.fg label{display:block;font-size:12px;color:var(--muted2);margin-bottom:6px;letter-spacing:.3px}
-.fg input,.fg select,textarea{width:100%;background:var(--s2);border:1px solid var(--border);border-radius:var(--r);padding:10px 13px;color:var(--text);font-size:13px;outline:none;transition:border-color .18s,background .18s;font-family:inherit;resize:vertical}
-.fg input:focus,.fg select:focus,textarea:focus{border-color:rgba(255,255,255,.35);background:var(--s3)}
-textarea{min-height:100px;line-height:1.55}
-/* ── Buttons ── */
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:11px 20px;border-radius:var(--r);border:none;font-size:14px;font-weight:600;cursor:pointer;transition:all .18s;width:100%;font-family:inherit}
-.btn:disabled{opacity:.4;cursor:not-allowed}
-.btn-p{background:#fff;color:#000}
-.btn-p:hover:not(:disabled){background:#e8e8e8;transform:translateY(-1px);box-shadow:0 8px 24px rgba(255,255,255,.1)}
-.btn-p:active:not(:disabled){transform:translateY(0)}
-.btn-s{background:transparent;color:var(--muted2);border:1px solid var(--border)}
-.btn-s:hover:not(:disabled){border-color:var(--border2);color:#fff}
-.btn-dl{background:#fff;color:#000;box-shadow:0 4px 20px rgba(255,255,255,.08)}
-.btn-dl:hover:not(:disabled){background:#e8e8e8;transform:translateY(-2px);box-shadow:0 10px 32px rgba(255,255,255,.15)}
-/* ── Notifs ── */
-.notif{display:none;padding:10px 14px;border-radius:var(--r);font-size:13px;margin-bottom:12px;animation:fadeUp .2s ease}
+body{font-family:'Segoe UI',Arial,sans-serif;background:#060810;color:#e6edf3;min-height:100vh}
+:root{--bg:#060810;--surface:#0d1117;--surface2:#161b22;--surface3:#1c2330;--border:rgba(255,255,255,0.08);--accent:#00ff88;--accent2:#0066ff;--text:#e6edf3;--muted:#7d8590;--dim:#484f58;--error:#ff4757;--r:12px}
+.wrap{max-width:960px;margin:0 auto;padding:0 20px}
+header{padding:18px 0;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}
+.logo{display:flex;align-items:center;gap:10px}
+.logo-mark{width:32px;height:32px;background:linear-gradient(135deg,var(--accent),#00ccff);border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:12px;color:#000}
+.logo-text{font-size:20px;font-weight:800;letter-spacing:-0.5px}
+.logo-text span{color:var(--accent)}
+.user-chip{display:flex;align-items:center;gap:8px;background:var(--surface2);border:1px solid var(--border);border-radius:40px;padding:5px 12px 5px 5px;cursor:pointer}
+.user-chip img{width:26px;height:26px;border-radius:50%;object-fit:cover}
+.user-chip span{font-size:13px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nav-links{display:flex;gap:8px;align-items:center}
+.nav-btn{background:none;border:1px solid var(--border);color:var(--muted);padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px;transition:all .2s}
+.nav-btn:hover{border-color:var(--accent);color:var(--accent)}
+.nav-btn.danger{border-color:rgba(255,71,87,.3);color:var(--error)}
+.screen{display:none}.screen.active{display:block}
+.hero{padding:56px 0 32px;text-align:center}
+.htag{font-size:12px;color:var(--accent);letter-spacing:2px;text-transform:uppercase;margin-bottom:16px;font-family:Consolas,monospace}
+h1{font-size:clamp(28px,5vw,52px);font-weight:900;line-height:1.1;margin-bottom:16px}
+h1 em{color:var(--accent);font-style:normal}
+.sub{font-size:16px;color:var(--muted);max-width:560px;margin:0 auto 32px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:32px;max-width:440px;margin:0 auto;width:100%}
+.ct{font-size:20px;font-weight:700;margin-bottom:6px}
+.cs{font-size:14px;color:var(--muted);margin-bottom:24px}
+.btn{width:100%;padding:13px 20px;border-radius:8px;border:none;font-size:15px;font-weight:600;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:10px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn-p{background:linear-gradient(135deg,var(--accent),#00ccaa);color:#000}
+.btn-p:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 6px 20px rgba(0,255,136,.3)}
+.btn-dl{background:linear-gradient(135deg,var(--accent2),#0044cc);color:#fff;box-shadow:0 4px 16px rgba(0,102,255,.3)}
+.btn-dl:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 28px rgba(0,102,255,.4)}
+.btn-s{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+.btn-s:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.fg{margin-bottom:16px}.fg label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
+.fg input,.fg select{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-size:14px;outline:none;transition:border-color .2s}
+.fg input:focus{border-color:var(--accent)}
+.notif{display:none;padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:14px}
 .notif.show{display:block}
-.notif.success{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.15);color:#ccc}
-.notif.error{background:rgba(255,69,69,.08);border:1px solid rgba(255,69,69,.25);color:var(--error)}
-.notif.info{background:rgba(255,255,255,.04);border:1px solid var(--border);color:var(--muted2)}
-/* ── Hero ── */
-.hero{padding:64px 0 40px;flex:1}
-/* ── Progress bar ── */
-.prog-wrap{background:var(--s3);border-radius:100px;height:3px;overflow:hidden;margin:10px 0}
-.prog-fill{height:100%;background:#fff;border-radius:100px;transition:width .5s cubic-bezier(.4,0,.2,1);position:relative}
-.prog-fill::after{content:'';position:absolute;right:0;top:-2px;width:6px;height:7px;background:#fff;border-radius:50%;box-shadow:0 0 8px rgba(255,255,255,.8),0 0 16px rgba(255,255,255,.4)}
-.prog-row{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:6px;font-family:monospace}
-/* ── Stage box ── */
-.stage-box{background:var(--s2);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;display:flex;align-items:center;gap:10px;margin:10px 0}
-.stage-msg{font-size:11px;color:rgba(255,255,255,.7);font-family:monospace;flex:1}
-.spin{width:12px;height:12px;border:1.5px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;flex-shrink:0}
+.notif.success{background:rgba(0,255,136,.1);border:1px solid rgba(0,255,136,.3);color:var(--accent)}
+.notif.error{background:rgba(255,71,87,.1);border:1px solid rgba(255,71,87,.3);color:var(--error)}
+.notif.info{background:rgba(0,102,255,.1);border:1px solid rgba(0,102,255,.3);color:#4d9fff}
+.prog-wrap{background:var(--surface3);border-radius:100px;height:6px;overflow:hidden;margin:12px 0}
+.prog-fill{height:100%;background:linear-gradient(90deg,var(--accent),#00ccff);border-radius:100px;transition:width .4s ease}
+.prog-row{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:4px}
+.stage-box{background:var(--surface2);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;margin:10px 0;display:flex;align-items:center;gap:8px}
+.stage-msg{font-size:12px;color:var(--accent);font-family:Consolas,monospace;flex:1}
+.sections-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-bottom:12px}
+.sec-item{font-size:9px;padding:4px;border-radius:5px;background:var(--surface3);border:1px solid var(--border);color:var(--dim);text-align:center;font-family:Consolas,monospace;transition:all .3s}
+.sec-item.writing{background:rgba(0,102,255,.12);border-color:rgba(0,102,255,.4);color:#4d9fff;animation:sp 1s ease-in-out infinite}
+.sec-item.done{background:rgba(0,255,136,.08);border-color:rgba(0,255,136,.3);color:var(--accent)}
+@keyframes sp{0%,100%{opacity:1}50%{opacity:.4}}
+.spin{width:14px;height:14px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
 @keyframes spin{to{transform:rotate(360deg)}}
-/* ── Section grid ── */
-.sections-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-bottom:10px}
-.sec-item{font-size:9px;padding:5px 3px;border-radius:5px;background:var(--s3);border:1px solid var(--border);color:var(--muted);text-align:center;font-family:monospace;transition:all .3s;letter-spacing:.3px}
-.sec-item.writing{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.25);color:#fff;animation:pulse 1.2s ease-in-out infinite}
-.sec-item.done{background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.12);color:rgba(255,255,255,.5)}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-/* ── Stats ── */
-.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:20px}
-.stat-card{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:18px}
-.stat-val{font-size:26px;font-weight:900;color:#fff;letter-spacing:-1px}
-.stat-lbl{font-size:11px;color:var(--muted);margin-top:3px;letter-spacing:.3px}
-/* ── Tables ── */
-.table-wrap{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:20px}
-.table-head{padding:12px 18px;border-bottom:1px solid var(--border);font-size:13px;font-weight:700}
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:24px}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:20px}
+.stat-val{font-size:28px;font-weight:900;color:var(--accent)}
+.stat-lbl{font-size:12px;color:var(--muted);margin-top:4px}
+.table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:24px}
+.table-head{padding:14px 20px;border-bottom:1px solid var(--border);font-size:14px;font-weight:600}
 table{width:100%;border-collapse:collapse}
-th{text-align:left;padding:9px 16px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;border-bottom:1px solid var(--border);font-weight:600}
-td{padding:9px 16px;font-size:12px;border-bottom:1px solid rgba(255,255,255,.03)}
+th{text-align:left;padding:10px 16px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border);font-weight:600}
+td{padding:10px 16px;font-size:13px;border-bottom:1px solid rgba(255,255,255,.04)}
 tr:last-child td{border-bottom:none}
-tr:hover td{background:var(--s2)}
-/* ── Badges ── */
-.badge{padding:2px 8px;border-radius:20px;font-size:10px;font-weight:600;letter-spacing:.3px}
-.badge-done{background:rgba(255,255,255,.07);color:rgba(255,255,255,.7);border:1px solid rgba(255,255,255,.15)}
-.badge-pending{background:rgba(255,255,255,.03);color:var(--muted);border:1px solid var(--border)}
-.badge-paid{background:rgba(255,255,255,.08);color:#fff;border:1px solid rgba(255,255,255,.2)}
-/* ── Tabs ── */
-.tabs{display:flex;gap:0;margin-bottom:18px;border-bottom:1px solid var(--border)}
-.tab{padding:9px 16px;font-size:12px;cursor:pointer;color:var(--muted);border:none;background:none;transition:color .18s;border-bottom:2px solid transparent;margin-bottom:-1px;font-family:inherit}
-.tab.active{color:#fff;border-bottom-color:#fff;font-weight:600}
-/* ── Profile ── */
-.profile-header{display:flex;align-items:center;gap:16px;background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:22px;margin-bottom:18px}
-.profile-avatar{width:56px;height:56px;border-radius:50%;border:2px solid rgba(255,255,255,.15)}
-.avatar{width:28px;height:28px;border-radius:50%;object-fit:cover}
-/* ── Questionnaire ── */
-.q-steps{display:flex;align-items:center;margin-bottom:24px;padding:0 2px}
-.q-step{display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;min-width:52px}
-.q-num{width:26px;height:26px;border-radius:50%;background:var(--s2);border:1.5px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--muted);transition:all .25s}
-.q-lbl{font-size:9px;color:var(--muted);transition:color .25s;white-space:nowrap;letter-spacing:.3px}
-.q-step.active .q-num{background:#fff;border-color:#fff;color:#000}
-.q-step.active .q-lbl{color:#fff}
-.q-step.done .q-num{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.2);color:rgba(255,255,255,.5)}
-.q-step.done .q-lbl{color:rgba(255,255,255,.35)}
-.q-line{flex:1;height:1px;background:var(--border);margin:0 4px;margin-bottom:12px;transition:background .25s}
-.q-line.done{background:rgba(255,255,255,.2)}
-.q-panel{display:none;animation:fadeUp .25s ease}.q-panel.active{display:block}
-.q-badge{display:inline-block;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--muted2);border:1px solid var(--border);border-radius:20px;padding:3px 10px;margin-bottom:14px;font-family:monospace}
-.q-hint{background:var(--s2);border:1px solid var(--border);border-left:2px solid rgba(255,255,255,.2);border-radius:var(--r);padding:10px 13px;font-size:12px;color:var(--muted2);margin-bottom:14px;line-height:1.5}
-.ct{font-size:19px;font-weight:800;margin-bottom:4px;letter-spacing:-.3px}
-.cs{font-size:13px;color:var(--muted2);margin-bottom:18px;line-height:1.5}
-.q-summary{background:var(--s2);border:1px solid var(--border);border-radius:var(--r);padding:14px;margin-bottom:18px}
-.q-summary-item{margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+tr:hover td{background:var(--surface2)}
+.badge-paid{background:rgba(0,255,136,.1);color:var(--accent);border:1px solid rgba(0,255,136,.3);padding:2px 8px;border-radius:20px;font-size:11px}
+.badge-free{background:rgba(255,255,255,.06);color:var(--muted);padding:2px 8px;border-radius:20px;font-size:11px}
+.badge-pending{background:rgba(255,193,7,.1);color:#ffc107;padding:2px 8px;border-radius:20px;font-size:11px}
+.avatar{width:32px;height:32px;border-radius:50%;object-fit:cover}
+.profile-header{display:flex;align-items:center;gap:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:24px;margin-bottom:20px}
+.profile-avatar{width:64px;height:64px;border-radius:50%;border:2px solid var(--accent)}
+.tabs{display:flex;gap:0;margin-bottom:20px;border-bottom:1px solid var(--border)}
+.tab{padding:10px 18px;font-size:13px;cursor:pointer;border-radius:0;color:var(--muted);border:none;background:none;transition:all .2s;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab.active{color:var(--accent);border-bottom:2px solid var(--accent);font-weight:600}
+.empty{text-align:center;padding:40px;color:var(--dim);font-size:14px}
+.pay-box{background:linear-gradient(135deg,#0a2a1a,#0d3d1e);border:1px solid rgba(0,255,136,.2);border-radius:12px;padding:20px;text-align:center;margin:16px 0}
+.pay-amt{font-size:40px;font-weight:900;color:var(--accent)}
+.page-title{font-size:24px;font-weight:800;margin:32px 0 4px}
+.page-sub{font-size:14px;color:var(--muted);margin-bottom:24px}
+footer{text-align:center;padding:32px 0;color:var(--dim);font-size:12px;border-top:1px solid var(--border);margin-top:40px}
+/* Questionnaire */
+.q-steps{display:flex;align-items:center;margin-bottom:28px;padding:0 4px}
+.q-step{display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;min-width:56px}
+.q-num{width:28px;height:28px;border-radius:50%;background:var(--surface2);border:2px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--dim);transition:all .3s}
+.q-lbl{font-size:10px;color:var(--dim);transition:color .3s;white-space:nowrap}
+.q-step.active .q-num{background:var(--accent);border-color:var(--accent);color:#000}
+.q-step.active .q-lbl{color:var(--accent)}
+.q-step.done .q-num{background:rgba(0,255,136,.15);border-color:var(--accent);color:var(--accent)}
+.q-step.done .q-lbl{color:var(--accent)}
+.q-line{flex:1;height:2px;background:var(--border);margin:0 4px;margin-bottom:14px;transition:background .3s}
+.q-line.done{background:var(--accent)}
+.q-panel{display:none}.q-panel.active{display:block}
+.q-badge{font-size:11px;color:var(--accent);font-family:Consolas,monospace;letter-spacing:1px;margin-bottom:8px}
+.q-hint{background:rgba(0,102,255,.07);border:1px solid rgba(0,102,255,.2);border-radius:8px;padding:10px 14px;font-size:12px;color:#6db3ff;margin-bottom:16px;line-height:1.5}
+textarea{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-size:13px;outline:none;transition:border-color .2s;resize:vertical;font-family:'Segoe UI',Arial,sans-serif;line-height:1.6}
+textarea:focus{border-color:var(--accent)}
+textarea::placeholder{color:var(--dim);font-size:12px}
+.q-summary{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:20px;font-size:12px}
+.q-summary-item{margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,.06)}
 .q-summary-item:last-child{margin-bottom:0;padding-bottom:0;border-bottom:none}
-.q-summary-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px}
-.q-summary-val{font-size:12px;color:rgba(255,255,255,.7);line-height:1.4}
+.q-summary-label{color:var(--accent);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.q-summary-val{color:var(--text);line-height:1.5;max-height:60px;overflow:hidden;text-overflow:ellipsis}
+@media(max-width:600px){.q-lbl{display:none}.q-steps{gap:0}.q-step{min-width:36px}}
+@media(max-width:600px){.sections-grid{grid-template-columns:repeat(3,1fr)}.stat-grid{grid-template-columns:repeat(2,1fr)}.nav-links{gap:4px}}
 /* ── Dashboard ── */
-.dash-header{padding:36px 0 4px}
-.dash-greeting{font-size:12px;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;font-family:monospace}
-.dash-title{font-size:32px;font-weight:900;letter-spacing:-1.5px;margin-top:4px}
-.dash-title span{color:rgba(255,255,255,.2)}
-.dash-empty{text-align:center;padding:60px 20px;border:1px solid var(--border);border-radius:var(--r);border-style:dashed}
-.dash-empty-icon{font-size:28px;margin-bottom:12px;opacity:.4}
-.dash-empty-txt{font-size:15px;font-weight:700;color:rgba(255,255,255,.4);margin-bottom:4px}
-.dash-empty-sub{font-size:12px;color:var(--muted)}
-.papers-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-bottom:24px}
-.paper-card{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:16px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden}
-.paper-card::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(255,255,255,.03) 0%,transparent 60%);opacity:0;transition:opacity .2s}
-.paper-card:hover{border-color:rgba(255,255,255,.2);transform:translateY(-1px)}
+.dash-header{padding:36px 0 8px}
+.dash-greeting{font-size:13px;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;font-family:Consolas,monospace;margin-bottom:6px}
+.dash-title{font-size:30px;font-weight:900;letter-spacing:-1px}
+.dash-title span{color:var(--accent)}
+.dash-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 20px;text-align:center;border:2px dashed var(--border);border-radius:16px;margin:28px 0}
+.dash-empty-icon{font-size:48px;margin-bottom:16px;opacity:.4}
+.dash-empty-txt{font-size:16px;font-weight:600;color:var(--muted);margin-bottom:6px}
+.dash-empty-sub{font-size:13px;color:var(--dim)}
+.papers-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin:24px 0}
+.paper-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;cursor:default;transition:border-color .2s,transform .15s;position:relative;overflow:hidden}
+.paper-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--accent),#00ccff);opacity:0;transition:opacity .2s}
+.paper-card:hover{border-color:rgba(0,255,136,.25);transform:translateY(-2px)}
 .paper-card:hover::before{opacity:1}
-.paper-card-topic{font-size:13px;font-weight:700;line-height:1.35;margin-bottom:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.paper-card-meta{display:flex;align-items:center;justify-content:space-between;font-size:10px;color:var(--muted)}
-.paper-card-date{font-family:monospace}
-/* ── Dashboard add button ── */
-.dash-add-btn{display:inline-flex;align-items:center;gap:7px;background:#fff;color:#000;border:none;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer;transition:all .2s;white-space:nowrap;font-family:inherit;margin-bottom:6px}
-.dash-add-btn:hover{background:#e8e8e8;transform:translateY(-1px);box-shadow:0 6px 20px rgba(255,255,255,.12)}
-.dash-add-btn:active{transform:translateY(0)}
-@media(max-width:380px){.dash-add-btn span{display:none}}
-/* ── Done screen ── */
-.done-mark{width:56px;height:56px;border-radius:50%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;font-size:22px;margin:0 auto 20px;animation:popIn .4s cubic-bezier(.34,1.56,.64,1)}
-@keyframes popIn{from{transform:scale(0) rotate(-20deg);opacity:0}to{transform:scale(1) rotate(0);opacity:1}}
-/* ── Pay ── */
-.pay-box{background:var(--s2);border:1px solid var(--border);border-radius:var(--r);padding:18px;text-align:center;margin:14px 0}
-.pay-amt{font-size:36px;font-weight:900;letter-spacing:-2px}
-/* ── Responsive ── */
-@media(max-width:960px){
-  .wrap{padding:0 20px}
-}
-@media(max-width:768px){
-  .wrap{padding:0 16px}
-  .nav-btn:not(.danger){display:none}
-  .user-chip span{max-width:80px}
-  .stat-grid{grid-template-columns:repeat(2,1fr)}
-  .card{padding:20px}
-  .q-steps{overflow-x:auto;padding-bottom:4px}
-  table{font-size:11px}
-  th,td{padding:7px 10px}
-  .sections-grid{grid-template-columns:repeat(3,1fr)}
-  .papers-grid{grid-template-columns:repeat(2,1fr)}
-}
-@media(max-width:600px){
-  .wrap{padding:0 14px}
-  header{padding:12px 0}
-  header .wrap{gap:8px}
-  .nav-links{gap:4px}
-  .nav-btn{padding:5px 8px;font-size:11px}
-  .papers-grid{grid-template-columns:1fr 1fr}
-  h1{font-size:28px;letter-spacing:-1.5px}
-  .sections-grid{grid-template-columns:repeat(3,1fr)}
-  .hero{padding:36px 0 24px}
-  .dash-header{padding:24px 0 4px}
-  .dash-title{font-size:26px}
-  .q-lbl{display:none}
-  .profile-header{flex-direction:column;text-align:center;gap:10px}
-  .card{padding:18px}
-  .stat-grid{grid-template-columns:repeat(2,1fr);gap:8px}
-  .stat-val{font-size:22px}
-  .btn{font-size:13px;padding:10px 16px}
+.paper-card-topic{font-size:14px;font-weight:700;color:var(--text);line-height:1.4;margin-bottom:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.paper-card-meta{display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--dim)}
+.paper-card-date{font-family:Consolas,monospace}
+.paper-card-badge{padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:.3px}
+.badge-done{background:rgba(0,255,136,.1);color:var(--accent);border:1px solid rgba(0,255,136,.25)}
+.badge-pending{background:rgba(255,193,7,.1);color:#ffc107;border:1px solid rgba(255,193,7,.25)}
+.fab{position:fixed;bottom:32px;right:32px;width:58px;height:58px;border-radius:50%;background:linear-gradient(135deg,var(--accent),#00ccaa);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(0,255,136,.35);transition:transform .2s,box-shadow .2s;z-index:100}
+.fab:hover{transform:scale(1.1) translateY(-2px);box-shadow:0 14px 36px rgba(0,255,136,.45)}
+.fab svg{width:24px;height:24px;stroke:#000;stroke-width:2.5;stroke-linecap:round}
+.fab-tooltip{position:fixed;bottom:44px;right:100px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:7px 12px;font-size:12px;color:var(--text);white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .2s;z-index:99}
+.fab:hover ~ .fab-tooltip{opacity:1}
+@media(max-width:600px){.fab{bottom:24px;right:20px}.papers-grid{grid-template-columns:1fr}}
+/* ── Comprehensive Responsive Styles ── */
+@media(max-width:480px){
+  .wrap{padding:0 12px}
+  header{padding:12px 0;flex-wrap:wrap;gap:8px}
+  .logo-text{font-size:17px}
+  .logo-mark{width:28px;height:28px;font-size:10px}
+  .nav-btn{padding:4px 8px;font-size:11px}
+  .user-chip{padding:4px 8px 4px 4px}
+  .user-chip span{max-width:80px;font-size:12px}
+  .hero{padding:32px 0 20px}
+  h1{font-size:26px}
   .sub{font-size:14px}
-  textarea{min-height:80px}
-  .prog-wrap{margin:8px 0}
-  footer .wrap{justify-content:center}
-}
-@media(max-width:380px){
-  .wrap{padding:0 10px}
-  h1{font-size:24px}
-  .papers-grid{grid-template-columns:1fr}
-  .sections-grid{grid-template-columns:repeat(2,1fr)}
+  .card{padding:20px 16px}
+  .ct{font-size:17px}
+  .cs{font-size:13px}
+  .btn{padding:12px 16px;font-size:14px}
+  .fg input,.fg select{padding:9px 12px;font-size:14px}
+  textarea{font-size:13px}
+  .dash-header{padding:24px 0 4px}
+  .dash-title{font-size:24px}
+  .dash-empty{padding:48px 16px}
   .stat-grid{grid-template-columns:1fr 1fr}
-  .card{padding:14px}
-  .nav-btn{display:none}
+  .stat-val{font-size:22px}
+  .table-wrap{overflow-x:auto}
+  table{font-size:12px;min-width:360px}
+  th,td{padding:8px 10px}
+  .profile-header{flex-direction:column;text-align:center;gap:12px}
+  .profile-avatar{width:56px;height:56px}
+  .tabs{overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}
+  .tab{padding:8px 14px;font-size:12px}
+  .card[style*="max-width:560px"]{padding:20px 16px}
+  .stage-box{padding:8px 12px}
+  .stage-msg{font-size:11px}
+  .sections-grid{grid-template-columns:repeat(3,1fr)}
+  .sec-item{font-size:8px;padding:3px}
+  .q-badge{font-size:10px}
+  .q-hint{font-size:11px;padding:8px 12px}
+  .q-summary{padding:12px}
+  .q-summary-label{font-size:10px}
+  .q-summary-val{font-size:12px}
+  .page-title{font-size:20px}
+  .page-sub{font-size:13px}
 }
-@media(max-width:600px) and (orientation:landscape){
-  .hero{padding:20px 0 16px}
-  h1{font-size:24px}
+@media(min-width:481px) and (max-width:768px){
+  .wrap{padding:0 16px}
+  header{padding:14px 0}
+  h1{font-size:36px}
+  .card{padding:28px 24px;max-width:100%}
+  .stat-grid{grid-template-columns:repeat(3,1fr)}
+  .papers-grid{grid-template-columns:repeat(2,1fr)}
+  .user-chip span{max-width:110px}
+  .table-wrap{overflow-x:auto}
+  table{min-width:420px}
 }
-/* iPad / tablet specific */
-@media(min-width:601px) and (max-width:1024px){
-  .wrap{padding:0 32px}
-  .papers-grid{grid-template-columns:repeat(3,1fr)}
+@media(min-width:769px) and (max-width:1024px){
+  .wrap{padding:0 24px}
+  .papers-grid{grid-template-columns:repeat(2,1fr)}
   .stat-grid{grid-template-columns:repeat(4,1fr)}
-  .sections-grid{grid-template-columns:repeat(4,1fr)}
 }
-@media(hover:none){.paper-card:hover{transform:none}}
-/* Touch-friendly tap targets */
-@media(pointer:coarse){
-  .btn{min-height:44px}
-  .nav-btn{min-height:36px;padding:6px 12px}
-  .tab{padding:12px 18px}
-  input,textarea,select{min-height:42px}
-  .paper-card{padding:18px}
+@media(hover:none){
+  .paper-card:hover{transform:none}
+  .paper-card:hover::before{opacity:0}
+  .btn-p:hover:not(:disabled){transform:none;box-shadow:none}
+  .btn-dl:hover:not(:disabled){transform:none}
+  .fab:hover{transform:scale(1);box-shadow:0 8px 24px rgba(0,255,136,.35)}
 }
-/* ── Cursor blink for monospace elements ── */
-.mono{font-family:monospace}
-.page-title{font-size:22px;font-weight:800;margin:28px 0 3px;letter-spacing:-.5px}
-.page-sub{font-size:13px;color:var(--muted2);margin-bottom:20px}
-/* ── Animated border on card hover ── */
-@keyframes borderGlow{0%,100%{border-color:rgba(255,255,255,.08)}50%{border-color:rgba(255,255,255,.2)}}
 </style>
 </head>
 <body>
+<div class="wrap">
 <header>
-  <div class="wrap">
-    <a class="logo" href="#">
-      <div class="logo-mark">rx</div>
-      <div class="logo-text">rdxper</div>
-    </a>
-    <div class="nav-links" id="nav-auth" style="display:none">
-      <button class="nav-btn" onclick="showProfile()">Profile</button>
-      <div id="admin-link" style="display:none"><button class="nav-btn" onclick="showAdmin()">Admin</button></div>
-      <div class="user-chip" onclick="showProfile()">
-        <img id="nav-avatar" src="" onerror="this.style.display='none'" style="display:none">
-        <span id="nav-name">User</span>
-      </div>
-      <button class="nav-btn danger" onclick="logout()">Sign out</button>
+  <div class="logo">
+    <div class="logo-mark">rx</div>
+    <div class="logo-text">RD<span>Xper</span></div>
+  </div>
+  <div class="nav-links" id="nav-auth" style="display:none">
+    <button class="nav-btn" onclick="showProfile()">👤 Profile</button>
+    <div id="admin-link" style="display:none"><button class="nav-btn" onclick="showAdmin()">⚙️ Admin</button></div>
+    <div class="user-chip" onclick="showProfile()">
+      <img id="nav-avatar" src="" onerror="this.style.display='none'" style="display:none">
+      <span id="nav-name">User</span>
     </div>
+    <button class="nav-btn danger" onclick="logout()">Sign out</button>
   </div>
 </header>
 
-<!-- ═══ LOGIN ═══ -->
+<!-- LOGIN -->
 <div class="screen active" id="s-home">
-  <div class="wrap flex-grow">
-    <div class="hero" style="text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center">
-      <h1 style="margin-bottom:16px">Generate <em>Genuine</em><br>Research Papers</h1>
-      <p class="sub" style="margin-bottom:40px">Real sources. Real citations. AI-written prose. Delivered as a formatted .docx.</p>
-      <div class="card" style="max-width:400px;width:100%;text-align:left">
-        <div class="ct">Sign in to continue</div>
-        <div class="cs">Use your Google account — no password needed</div>
-        <div id="n-login" class="notif"></div>
-        <div id="g-btn-wrap" style="display:flex;justify-content:center;min-height:44px;align-items:center"></div>
-        <!-- Dev login (hidden in prod) -->
-        <div id="dev-auth-wrap" style="margin-top:14px;display:none">
-          <div style="text-align:center;font-size:10px;color:var(--muted);margin-bottom:10px;letter-spacing:1px;text-transform:uppercase">or dev login</div>
-          <div class="fg"><input type="text" id="dev-name" placeholder="Your name (optional)"></div>
-          <div class="fg"><input type="email" id="dev-email" placeholder="Email address"></div>
-          <button class="btn btn-s" onclick="devLogin()">Continue with Email</button>
-        </div>
-      </div>
-    </div>
+  <div class="hero">
+    
+    <h1>Generate <em>Genuine</em><br>Research Papers</h1>
+    
   </div>
-  <footer><div class="wrap">
-    <span class="footer-lawyers">An Interactive Lawyers Tool</span>
-  </div></footer>
+  <div class="card">
+    <div class="ct">Sign in to continue</div>
+    <div class="cs">Use your Google account — no password needed</div>
+    <div id="n-login" class="notif"></div>
+    <div id="g-btn-wrap" style="display:flex;justify-content:center;min-height:44px;align-items:center"></div>
+  </div>
 </div>
 
-<!-- ═══ DASHBOARD ═══ -->
+<!-- DASHBOARD -->
 <div class="screen" id="s-dashboard">
-  <div class="wrap flex-grow">
-    <div class="dash-header" style="display:flex;align-items:flex-end;justify-content:space-between">
-      <div>
-        <div class="dash-greeting">Welcome back</div>
-        <div class="dash-title" id="dash-name-title">Researcher<span>.</span></div>
-      </div>
-      <button class="dash-add-btn" onclick="startNewPaper()" title="New Research Paper">
-        <svg viewBox="0 0 24 24" fill="none" width="18" height="18"><line x1="12" y1="5" x2="12" y2="19" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
-        New Paper
-      </button>
-    </div>
-    <div style="display:flex;align-items:center;justify-content:space-between;margin:24px 0 8px">
-      <div style="font-size:14px;font-weight:700">Your Research Papers</div>
-      <button class="nav-btn" onclick="loadDashboard()" style="font-size:11px">↻ Refresh</button>
-    </div>
-    <div id="dash-papers-wrap">
-      <div class="dash-empty">
-        <div class="dash-empty-icon">📄</div>
-        <div class="dash-empty-txt">No papers yet</div>
-        <div class="dash-empty-sub">Press <strong style="color:#fff">+ New Paper</strong> above to generate your first research paper</div>
-      </div>
+  <div class="dash-header">
+    <div class="dash-greeting">Welcome back</div>
+    <div class="dash-title" id="dash-name-title">Researcher</div>
+  </div>
+
+  <div style="display:flex;align-items:center;justify-content:space-between;margin:28px 0 8px">
+    <div style="font-size:16px;font-weight:700">Your Research Papers</div>
+    <button class="nav-btn" onclick="loadDashboard()" style="font-size:11px">↻ Refresh</button>
+  </div>
+
+  <div id="dash-papers-wrap">
+    <div class="dash-empty">
+      <div class="dash-empty-icon">📄</div>
+      <div class="dash-empty-txt">No papers yet</div>
+      <div class="dash-empty-sub">Press <strong style="color:var(--accent)">+</strong> below to generate your first research paper</div>
     </div>
   </div>
-  <footer><div class="wrap">
-    <span class="footer-lawyers">An Interactive Lawyers Tool</span>
-  </div></footer>
+
+  <!-- Floating Action Button -->
+  <button class="fab" onclick="startNewPaper()" title="New Research Paper">
+    <svg viewBox="0 0 24 24" fill="none"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+  </button>
+  <div class="fab-tooltip">New Research Paper</div>
 </div>
 
-<!-- ═══ GENERATE — 6-Step Questionnaire ═══ -->
+<!-- GENERATE — 5-Step Questionnaire -->
 <div class="screen" id="s-gen">
-  <div class="wrap flex-grow" style="padding-top:24px;max-width:700px">
-    <button class="btn btn-s" style="width:auto;padding:7px 14px;font-size:12px;margin-bottom:16px" onclick="loadDashboard();show('s-dashboard')">← Dashboard</button>
-    <div class="q-steps" id="q-steps">
-      <div class="q-step active" id="qs-0" onclick="goStep(0)"><span class="q-num">1</span><span class="q-lbl">Problem</span></div>
-      <div class="q-line"></div>
-      <div class="q-step" id="qs-1" onclick="goStep(1)"><span class="q-num">2</span><span class="q-lbl">Literature</span></div>
-      <div class="q-line"></div>
-      <div class="q-step" id="qs-2" onclick="goStep(2)"><span class="q-num">3</span><span class="q-lbl">Gap</span></div>
-      <div class="q-line"></div>
-      <div class="q-step" id="qs-3" onclick="goStep(3)"><span class="q-num">4</span><span class="q-lbl">Objectives</span></div>
-      <div class="q-line"></div>
-      <div class="q-step" id="qs-4" onclick="goStep(4)"><span class="q-num">5</span><span class="q-lbl">Statement</span></div>
-      <div class="q-line"></div>
-      <div class="q-step" id="qs-5" onclick="goStep(5)"><span class="q-num">6</span><span class="q-lbl">Settings</span></div>
-    </div>
+<div style="padding-top:28px;max-width:700px;margin:0 auto">
 
-    <!-- Step 0: Problem -->
-    <div class="q-panel active" id="qp-0">
-      <div class="q-badge">Step 1 of 6</div>
-      <div class="ct">Identification of the Problem</div>
-      <div class="cs">What specific problem prompted this research? <strong style="color:rgba(255,255,255,.4)">Optional — skip if you prefer AI to write this.</strong></div>
-      <div class="q-hint">💡 Think about: What is wrong or missing? Who is affected? What are the consequences?</div>
-      <div class="fg"><label>Research Topic / Title *</label><input type="text" id="topic-in" placeholder="e.g. Legal Frameworks for Environmental Restoration in Post-War Reconstruction"></div>
-      <div class="fg"><label>Problem Statement <span style="color:var(--muted);font-weight:400">(optional)</span></label><textarea id="q-problem" rows="5" placeholder="Describe the core problem your research addresses. What issue exists? What are its consequences?&#10;&#10;Example: Armed conflicts inflict lasting environmental damage. Existing legal frameworks under the Geneva Conventions fail to address post-war ecological restoration, leaving communities without legal recourse..."></textarea></div>
-      <div style="display:flex;gap:8px;justify-content:flex-end">
-        <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(0)">Skip →</button>
-        <button class="btn btn-p" style="width:auto;padding:10px 24px" onclick="nextStep(0)">Next →</button>
-      </div>
-    </div>
-
-    <!-- Step 1: Literature -->
-    <div class="q-panel" id="qp-1">
-      <div class="q-badge">Step 2 of 6</div>
-      <div class="ct">Literature Review</div>
-      <div class="cs">What sources have you reviewed? <strong style="color:rgba(255,255,255,.4)">Optional — AI finds real papers automatically if you skip.</strong></div>
-      <div class="q-hint">💡 Include: Author names and years, key arguments, relevant laws, treaties, or court cases.</div>
-      <div class="fg"><label>Key Sources & Their Main Arguments</label><textarea id="q-lit" rows="7" placeholder="- Geneva Conventions (1949) — establish basic environmental protections during armed conflict&#10;- UNEP (2009) From Conflict to Peacebuilding — documents how environmental damage sustains conflict cycles&#10;- Bothe, Bruch & Jensen (2010) — argue existing IHL is inadequate for modern environmental warfare..."></textarea></div>
-      <div style="display:flex;gap:8px;justify-content:space-between">
-        <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="prevStep(1)">← Back</button>
-        <div style="display:flex;gap:8px">
-          <button class="btn btn-s" style="width:auto;padding:10px 16px" onclick="nextStep(1)">Skip →</button>
-          <button class="btn btn-p" style="width:auto;padding:10px 24px" onclick="nextStep(1)">Next →</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Step 2: Gap -->
-    <div class="q-panel" id="qp-2">
-      <div class="q-badge">Step 3 of 6</div>
-      <div class="ct">Research Gap</div>
-      <div class="cs">What is missing from existing research? <strong style="color:rgba(255,255,255,.4)">Optional — AI will identify a gap automatically.</strong></div>
-      <div class="q-hint">💡 Ask: What do existing studies not cover? What contradictions exist? What methodology hasn't been applied?</div>
-      <div class="fg"><label>The Research Gap <span style="color:var(--muted);font-weight:400">(optional)</span></label><textarea id="q-gap" rows="5" placeholder="While significant scholarship exists on environmental protection during armed conflict, there is a critical gap on post-war restoration obligations. No comparative study has examined how different post-conflict nations have implemented environmental restoration under international law..."></textarea></div>
-      <div style="display:flex;gap:8px;justify-content:space-between">
-        <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="prevStep(2)">← Back</button>
-        <div style="display:flex;gap:8px">
-          <button class="btn btn-s" style="width:auto;padding:10px 16px" onclick="nextStep(2)">Skip →</button>
-          <button class="btn btn-p" style="width:auto;padding:10px 24px" onclick="nextStep(2)">Next →</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Step 3: Objectives -->
-    <div class="q-panel" id="qp-3">
-      <div class="q-badge">Step 4 of 6</div>
-      <div class="ct">Objectives of the Research</div>
-      <div class="cs">List your research objectives — they will appear verbatim in your paper. <strong style="color:rgba(255,255,255,.4)">Optional.</strong></div>
-      <div class="q-hint">💡 Start with "To examine / To analyse / To evaluate / To compare / To propose". One per line.</div>
-      <div class="fg"><label>Research Objectives <span style="color:var(--muted);font-weight:400">(optional — one per line)</span></label><textarea id="q-objectives" rows="6" placeholder="To examine existing international legal frameworks governing environmental restoration&#10;To analyse compensation mechanisms including liability and reparations&#10;To evaluate practical challenges such as political instability and resource constraints&#10;To compare legal approaches across different post-conflict contexts&#10;To propose recommendations for strengthening enforcement mechanisms"></textarea></div>
-      <div style="display:flex;gap:8px;justify-content:space-between">
-        <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="prevStep(3)">← Back</button>
-        <div style="display:flex;gap:8px">
-          <button class="btn btn-s" style="width:auto;padding:10px 16px" onclick="nextStep(3)">Skip →</button>
-          <button class="btn btn-p" style="width:auto;padding:10px 24px" onclick="nextStep(3)">Next →</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Step 4: Statement -->
-    <div class="q-panel" id="qp-4">
-      <div class="q-badge">Step 5 of 6</div>
-      <div class="ct">Research Statement</div>
-      <div class="cs">Your thesis in 2–4 sentences. <strong style="color:rgba(255,255,255,.4)">Optional — AI will formulate one if you skip.</strong></div>
-      <div class="q-hint">💡 Name the topic, identify the method, and state the significance.</div>
-      <div class="fg"><label>Research Statement <span style="color:var(--muted);font-weight:400">(optional)</span></label><textarea id="q-statement" rows="4" placeholder="This study investigates legal frameworks governing environmental restoration in post-war reconstruction, focusing on obligations and compensation mechanisms. Through comparative doctrinal analysis and case studies from four post-conflict regions, this research identifies critical gaps and proposes actionable reforms to strengthen ecological restoration as a component of sustainable peace-building."></textarea></div>
-      <div style="display:flex;gap:8px;justify-content:space-between">
-        <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="prevStep(4)">← Back</button>
-        <div style="display:flex;gap:8px">
-          <button class="btn btn-s" style="width:auto;padding:10px 16px" onclick="nextStep(4)">Skip →</button>
-          <button class="btn btn-p" style="width:auto;padding:10px 24px" onclick="nextStep(4)">Next →</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Step 5: Settings + Summary -->
-    <div class="q-panel" id="qp-5">
-      <div class="q-badge">Step 6 of 6</div>
-      <div class="ct">Paper Settings</div>
-      <div class="cs">Final details before generation.</div>
-      <div id="q-summary" class="q-summary" style="margin-bottom:16px"></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <div class="fg"><label>Author Name</label><input type="text" id="author-in" placeholder="Your name"></div>
-        <div class="fg"><label>Institution <span style="color:var(--muted);font-weight:400">(optional)</span></label><input type="text" id="inst-in" placeholder="University / Organisation"></div>
-      </div>
-      <div class="fg">
-        <label>Number of Figures — <span id="sl-display" style="color:#fff">6</span></label>
-        <input type="range" id="sl" min="3" max="15" value="6" style="width:100%;accent-color:#fff;background:transparent;border:none;padding:4px 0" oninput="document.getElementById('sl-display').textContent=this.value">
-      </div>
-      <div id="n-gen" class="notif"></div>
-      <button class="btn btn-p" id="btn-gen" onclick="generate()" style="margin-top:4px">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-        Generate Research Paper
-      </button>
-      <button class="btn btn-s" style="margin-top:8px" onclick="prevStep(5)">← Back</button>
-    </div>
-  </div>
-  <footer><div class="wrap">
-    <span class="footer-lawyers">An Interactive Lawyers Tool</span>
-  </div></footer>
+<div style="margin-bottom:16px">
+  <button class="btn btn-s" style="width:auto;padding:8px 16px;font-size:12px" onclick="loadDashboard();show('s-dashboard')">← Dashboard</button>
 </div>
 
-<!-- ═══ PROGRESS ═══ -->
+<!-- Step indicator -->
+<div class="q-steps" id="q-steps">
+  <div class="q-step active" id="qs-0" onclick="goStep(0)"><span class="q-num">1</span><span class="q-lbl">Problem</span></div>
+  <div class="q-line"></div>
+  <div class="q-step" id="qs-1" onclick="goStep(1)"><span class="q-num">2</span><span class="q-lbl">Literature</span></div>
+  <div class="q-line"></div>
+  <div class="q-step" id="qs-2" onclick="goStep(2)"><span class="q-num">3</span><span class="q-lbl">Gap</span></div>
+  <div class="q-line"></div>
+  <div class="q-step" id="qs-3" onclick="goStep(3)"><span class="q-num">4</span><span class="q-lbl">Objectives</span></div>
+  <div class="q-line"></div>
+  <div class="q-step" id="qs-4" onclick="goStep(4)"><span class="q-num">5</span><span class="q-lbl">Statement</span></div>
+  <div class="q-line"></div>
+  <div class="q-step" id="qs-5" onclick="goStep(5)"><span class="q-num">6</span><span class="q-lbl">Settings</span></div>
+</div>
+
+<!-- ── Step 0: Problem Identification ───────────────────── -->
+<div class="q-panel active" id="qp-0">
+  <div class="q-badge">Step 1 of 6</div>
+  <div class="ct" style="margin-bottom:6px">Identification of the Problem</div>
+  <div class="cs" style="margin-bottom:20px">What specific problem prompted this research? Describe it in your own words, AI will use this as the foundation. <strong style="color:var(--accent)">Optional — skip if you prefer AI to write this.</strong></div>
+  <div class="q-hint">💡 Think about: What is wrong or missing? Who is affected? What is the scale of the problem? What are the consequences of not addressing it?</div>
+  <div class="fg">
+    <label>Research Topic / Title *</label>
+    <input type="text" id="topic-in" placeholder="e.g. Legal Frameworks for Environmental Restoration in Post-War Reconstruction">
+  </div>
+  <div class="fg">
+    <label>Problem Statement <span style="color:var(--dim);font-weight:400">(optional)</span></label>
+    <textarea id="q-problem" rows="5" placeholder="Describe the core problem your research addresses. What issue exists? What are its consequences? Why does it need to be studied now?&#10;&#10;Example: Armed conflicts inflict devastating environmental damage that persists long after hostilities cease. Existing legal frameworks under the Geneva Conventions and Rome Statute fail to adequately address post-war ecological restoration, leaving affected communities without legal recourse or environmental remediation. This gap in international humanitarian law creates a vacuum where neither state nor non-state actors are held accountable for long-term environmental harm..."></textarea>
+  </div>
+  <div style="display:flex;gap:10px;justify-content:flex-end">
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="nextStep(0)">Skip →</button>
+      <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(0)">Next → Literature Review</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Step 1: Literature Review ────────────────────────── -->
+<div class="q-panel" id="qp-1">
+  <div class="q-badge">Step 2 of 6</div>
+  <div class="ct" style="margin-bottom:6px">Literature Review</div>
+  <div class="cs" style="margin-bottom:20px">What sources have you reviewed? List them and AI will expand into a full literature review. <strong style="color:var(--accent)">Optional — AI will find real papers automatically if you skip.</strong></div>
+  <div class="q-hint">💡 Include: Author names and years, key arguments, relevant reports, laws, treaties, court cases, or books. Even brief notes are fine — AI will elaborate.</div>
+  <div class="fg">
+    <label>Key Sources & Their Main Arguments *</label>
+    <textarea id="q-lit" rows="8" placeholder="List the sources you have reviewed and what they say. Examples:&#10;&#10;- Geneva Conventions (1949) & Additional Protocol I (1977) — establish basic environmental protections during armed conflict but lack post-war restoration obligations&#10;- UNEP (2009) From Conflict to Peacebuilding — documents how environmental damage sustains conflict cycles&#10;- Bothe, Bruch & Jensen (2010) — argue existing IHL is inadequate for modern environmental warfare&#10;- Rome Statute Art. 8 — criminalises widespread environmental damage but enforcement is rare&#10;- UN Compensation Commission (Kuwait, 1991) — first successful precedent for war environmental claims..."></textarea>
+  </div>
+  <div style="display:flex;gap:10px;justify-content:space-between">
+    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(1)">← Back</button>
+    <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(1)">Skip →</button>
+    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(1)">Next → Research Gap</button>
+  </div>
+</div>
+
+<!-- ── Step 2: Research Gap ──────────────────────────────── -->
+<div class="q-panel" id="qp-2">
+  <div class="q-badge">Step 3 of 6</div>
+  <div class="ct" style="margin-bottom:6px">Research Gap</div>
+  <div class="cs" style="margin-bottom:20px">What is missing from existing research? AI will use your answer as the gap statement. <strong style="color:var(--accent)">Optional — AI will identify a gap automatically if you skip.</strong></div>
+  <div class="q-hint">💡 Ask yourself: What do existing studies not cover? What contradictions exist in the literature? What context or population has been ignored? What methodology hasn't been applied?</div>
+  <div class="fg">
+    <label>The Research Gap <span style="color:var(--dim);font-weight:400">(optional)</span></label>
+    <textarea id="q-gap" rows="5" placeholder="Describe what is missing from current research and why your study is needed.&#10;&#10;Example: While significant scholarship exists on environmental protection during armed conflict, there is a critical gap in research on post-war environmental restoration obligations. Existing studies either focus on pre-conflict prevention or general humanitarian law without addressing the specific legal mechanisms required for ecological recovery. Furthermore, no comparative study has examined how different post-conflict nations (Iraq, Kosovo, Lebanon, Ukraine) have implemented or failed to implement environmental restoration under international law..."></textarea>
+  </div>
+  <div style="display:flex;gap:10px;justify-content:space-between">
+    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(2)">← Back</button>
+    <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(2)">Skip →</button>
+    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(2)">Next → Objectives</button>
+  </div>
+</div>
+
+<!-- ── Step 3: Objectives ────────────────────────────────── -->
+<div class="q-panel" id="qp-3">
+  <div class="q-badge">Step 4 of 6</div>
+  <div class="ct" style="margin-bottom:6px">Objectives of the Research</div>
+  <div class="cs" style="margin-bottom:20px">List your research objectives — they will appear verbatim in your paper. <strong style="color:var(--accent)">Optional — AI will generate objectives aligned to your topic if you skip.</strong></div>
+  <div class="q-hint">💡 Good objectives: Start with "To examine / To analyse / To evaluate / To compare / To propose". Be specific. You need 4–6 objectives. One per line.</div>
+  <div class="fg">
+    <label>Research Objectives <span style="color:var(--dim);font-weight:400">(optional — one per line)</span></label>
+    <textarea id="q-objectives" rows="7" placeholder="To examine the existing international legal frameworks governing environmental restoration in post-war reconstruction&#10;To analyse compensation mechanisms including liability determination, reparations, and restoration funding&#10;To evaluate practical challenges such as political instability, limited resources, and technical capacity gaps&#10;To compare legal approaches from different post-conflict contexts including Iraq, Kosovo, Lebanon, and Ukraine&#10;To propose recommendations for strengthening enforcement mechanisms and legal accountability for wartime environmental harm"></textarea>
+  </div>
+  <div style="display:flex;gap:10px;justify-content:space-between">
+    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(3)">← Back</button>
+    <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(3)">Skip →</button>
+    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(3)">Next → Research Statement</button>
+  </div>
+</div>
+
+<!-- ── Step 4: Research Statement ───────────────────────── -->
+<div class="q-panel" id="qp-4">
+  <div class="q-badge">Step 5 of 6</div>
+  <div class="ct" style="margin-bottom:6px">Research Statement</div>
+  <div class="cs" style="margin-bottom:20px">Your thesis in 2–4 sentences — what this research does, how, and why. <strong style="color:var(--accent)">Optional — AI will formulate a research statement if you skip.</strong></div>
+  <div class="q-hint">💡 A good research statement: Names the topic, identifies the method (doctrinal/empirical/comparative), and states the significance. Typically 2–4 sentences.</div>
+  <div class="fg">
+    <label>Research Statement <span style="color:var(--dim);font-weight:400">(optional)</span></label>
+    <textarea id="q-statement" rows="5" placeholder="This study investigates the legal frameworks governing environmental restoration in post-war reconstruction, focusing on obligations, compensation mechanisms, and practical implementation challenges. Through a comparative doctrinal analysis of international instruments and empirical case studies from four post-conflict regions, this research identifies critical gaps in existing law and proposes actionable reforms to strengthen ecological restoration as an integral component of sustainable peace-building."></textarea>
+  </div>
+  <div style="display:flex;gap:10px;justify-content:space-between">
+    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(4)">← Back</button>
+    <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(4)">Skip →</button>
+    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(4)">Next → Paper Settings</button>
+  </div>
+</div>
+
+<!-- ── Step 5: Settings + Generate ──────────────────────── -->
+<div class="q-panel" id="qp-5">
+  <div class="q-badge">Step 6 of 6</div>
+  <div class="ct" style="margin-bottom:6px">Paper Settings</div>
+  <div class="cs" style="margin-bottom:20px">Final details for your paper. AI will now use all your inputs to generate a genuine research paper.</div>
+  <div id="n-gen" class="notif"></div>
+  <!-- Summary of inputs -->
+  <div class="q-summary" id="q-summary"></div>
+  <div class="fg"><label>Author Name</label>
+    <input type="text" id="author-in" placeholder="Your full name">
+  </div>
+  <div class="fg"><label>Institution (optional)</label>
+    <input type="text" id="inst-in" placeholder="University / College / Organisation">
+  </div>
+  <div class="fg"><label>Number of Figures: <b id="sl-display">6</b></label>
+    <input type="range" id="sl" min="3" max="15" value="6"
+      oninput="document.getElementById('sl-display').textContent=this.value"
+      style="width:100%;accent-color:var(--accent)">
+  </div>
+  <div style="display:flex;gap:10px;justify-content:space-between">
+    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(5)">← Back</button>
+    <button class="btn btn-p" id="btn-gen" onclick="generate()" style="flex:1">Generate Research Paper</button>
+  </div>
+</div>
+
+</div>
+</div>
+
+<!-- PROGRESS -->
 <div class="screen" id="s-prog">
-  <div class="wrap flex-grow" style="padding-top:40px;max-width:600px">
-    <div class="eyebrow" style="text-align:center;margin-bottom:24px">Generating your paper</div>
-    <div id="prog-topic" style="font-size:15px;font-weight:700;text-align:center;margin-bottom:28px;letter-spacing:-.3px;color:rgba(255,255,255,.7)"></div>
-    <div class="prog-row"><span class="mono">Progress</span><span class="mono" id="prog-pct">0%</span></div>
-    <div class="prog-wrap"><div class="prog-fill" id="prog-fill" style="width:0%"></div></div>
-    <div class="stage-box">
-      <div class="spin"></div>
-      <div class="stage-msg" id="stage-msg">Initializing...</div>
+  <div style="padding-top:40px">
+    <div class="card" style="max-width:560px">
+      <div class="ct" id="prog-ct">Generating your paper...</div>
+      <div class="cs" id="prog-topic"></div>
+      <div class="stage-box"><span style="font-size:18px">⚡</span><span class="stage-msg" id="stage-msg">Initialising...</span></div>
+      <div class="prog-row"><span></span><span id="prog-pct">0%</span></div>
+      <div class="prog-wrap"><div class="prog-fill" id="prog-fill" style="width:0%"></div></div>
+      <div class="sections-grid" id="sec-grid"></div>
     </div>
-    <div class="sections-grid" id="sec-grid"></div>
-    <p style="font-size:11px;color:var(--muted);text-align:center;margin-top:16px;line-height:1.6">This typically takes 1–2 minutes.<br>Fetching real papers from Semantic Scholar, CrossRef & Wikipedia.</p>
   </div>
-  <footer><div class="wrap">
-    <span class="footer-lawyers">An Interactive Lawyers Tool</span>
-  </div></footer>
 </div>
 
-<!-- ═══ DONE ═══ -->
+<!-- DONE -->
 <div class="screen" id="s-done">
-  <div class="wrap flex-grow" style="padding-top:48px;max-width:520px;text-align:center">
-    <div class="done-mark">✓</div>
-    <h1 style="font-size:28px;margin-bottom:8px">Paper Ready</h1>
-    <p class="sub" style="margin:0 auto 28px">Your research paper has been generated successfully.</p>
-    <div class="card" style="text-align:left;margin-bottom:16px">
-      <div style="font-size:12px;color:var(--muted);margin-bottom:10px;text-transform:uppercase;letter-spacing:.8px">Summary</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <div class="card-sm"><div style="font-size:10px;color:var(--muted);margin-bottom:2px">Topic</div><div id="d-topic" style="font-size:12px;font-weight:700;line-height:1.3"></div></div>
-        <div class="card-sm"><div style="font-size:10px;color:var(--muted);margin-bottom:2px">Figures</div><div id="d-figs" style="font-size:12px;font-weight:700"></div></div>
-        <div class="card-sm" style="grid-column:1/-1"><div style="font-size:10px;color:var(--muted);margin-bottom:2px">Generated at</div><div id="d-time" style="font-size:12px;font-weight:700;font-family:monospace"></div></div>
+  <div style="padding-top:48px">
+    <div class="card" style="text-align:center">
+      <div style="font-size:48px;margin-bottom:12px">✅</div>
+      <div class="ct">Paper ready!</div>
+      <div class="cs">Your research paper has been generated successfully</div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:16px;margin:16px 0;text-align:left">
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+          <span style="color:var(--muted);font-size:13px">Topic</span>
+          <span style="font-size:13px;font-weight:600;max-width:220px;text-align:right" id="d-topic"></span></div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+          <span style="color:var(--muted);font-size:13px">Figures</span>
+          <span style="font-size:13px" id="d-figs"></span></div>
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:var(--muted);font-size:13px">Generated</span>
+          <span style="font-size:13px" id="d-time"></span></div>
       </div>
+      <button class="btn btn-dl" id="btn-dl" onclick="download()">⬇ Download Research Paper (.docx)</button>
+      <button class="btn btn-s" onclick="again()" style="margin-top:8px">Generate another paper</button>
+      <button class="btn btn-s" onclick="loadDashboard();show('s-dashboard')" style="margin-top:6px;opacity:.7">← Back to Dashboard</button>
     </div>
-    <button class="btn btn-dl" id="btn-dl" onclick="download()" style="margin-bottom:10px">⬇ Download Research Paper (.docx)</button>
-    <button class="btn btn-s" onclick="again()">Generate Another Paper</button>
   </div>
-  <footer><div class="wrap">
-    <span class="footer-lawyers">An Interactive Lawyers Tool</span>
-  </div></footer>
 </div>
 
-<!-- ═══ PROFILE ═══ -->
+<!-- PROFILE -->
 <div class="screen" id="s-profile">
-  <div class="wrap flex-grow" style="padding-top:8px">
-    <button class="btn btn-s" style="width:auto;padding:7px 14px;font-size:12px;margin:16px 0" onclick="show('s-dashboard')">← Dashboard</button>
+  <div style="padding-top:28px">
     <div class="profile-header">
-      <img class="profile-avatar" id="prof-avatar" src="" onerror="this.src=''" style="background:var(--s3)">
+      <img class="profile-avatar" id="prof-avatar" src=""
+        onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><circle cx=%2232%22 cy=%2232%22 r=%2232%22 fill=%22%23333%22/></svg>'">
       <div>
-        <div style="font-size:17px;font-weight:800;letter-spacing:-.3px" id="prof-name">—</div>
-        <div style="font-size:12px;color:var(--muted2);margin-top:2px" id="prof-email">—</div>
-        <div style="font-size:10px;color:var(--muted);margin-top:4px;font-family:monospace">Member since <span id="prof-since">—</span></div>
+        <div style="font-size:20px;font-weight:700" id="prof-name">—</div>
+        <div style="font-size:13px;color:var(--muted);margin-top:3px" id="prof-email">—</div>
+        <div style="font-size:11px;color:var(--dim);margin-top:4px">Member since <span id="prof-since">—</span></div>
       </div>
     </div>
     <div class="stat-grid">
-      <div class="stat-card"><div class="stat-val" id="prof-papers">0</div><div class="stat-lbl">Papers Generated</div></div>
+      <div class="stat-card"><div class="stat-val" id="prof-papers-count">0</div><div class="stat-lbl">Papers Generated</div></div>
       <div class="stat-card"><div class="stat-val" id="prof-spent">₹0</div><div class="stat-lbl">Total Spent</div></div>
+      <div class="stat-card"><div class="stat-val" id="prof-paid-count">0</div><div class="stat-lbl">Papers Downloaded</div></div>
     </div>
     <div class="table-wrap">
-      <div class="table-head">Recent Papers</div>
+      <div class="table-head">📄 Your Papers</div>
       <table><thead><tr><th>Topic</th><th>Date</th><th>Status</th></tr></thead>
-      <tbody id="prof-papers-list"><tr><td colspan="3" style="text-align:center;color:var(--muted);padding:20px">Loading...</td></tr></tbody></table>
+      <tbody id="prof-papers-list"><tr><td colspan="3" class="empty">Loading...</td></tr></tbody></table>
     </div>
-    <button class="btn btn-s" style="max-width:200px" onclick="logout()">Sign Out</button>
+    <button class="btn btn-s" onclick="loadDashboard();show('s-dashboard')" style="max-width:180px">← Back</button>
   </div>
-  <footer><div class="wrap">
-    <span class="footer-lawyers">An Interactive Lawyers Tool</span>
-  </div></footer>
 </div>
 
-<!-- ═══ ADMIN ═══ -->
+<!-- ADMIN -->
 <div class="screen" id="s-admin">
-  <div class="wrap flex-grow" style="padding-top:8px">
-    <button class="btn btn-s" style="width:auto;padding:7px 14px;font-size:12px;margin:16px 0" onclick="show('s-dashboard')">← Dashboard</button>
-    <div class="page-title">Admin Panel</div>
-    <div class="page-sub">Platform overview</div>
+  <div style="padding-top:28px">
+    <div class="page-title">⚙️ Admin Dashboard</div>
+    <div class="page-sub">All users, papers and payments</div>
     <div class="stat-grid">
-      <div class="stat-card"><div class="stat-val" id="adm-users">—</div><div class="stat-lbl">Total Users</div></div>
-      <div class="stat-card"><div class="stat-val" id="adm-papers">—</div><div class="stat-lbl">Papers Generated</div></div>
-      <div class="stat-card"><div class="stat-val" id="adm-revenue">—</div><div class="stat-lbl">Revenue (₹)</div></div>
-      <div class="stat-card"><div class="stat-val" id="adm-paid">—</div><div class="stat-lbl">Paid Papers</div></div>
+      <div class="stat-card"><div class="stat-val" id="adm-users-c">—</div><div class="stat-lbl">Total Users</div></div>
+      <div class="stat-card"><div class="stat-val" id="adm-papers-c">—</div><div class="stat-lbl">Papers Generated</div></div>
+      <div class="stat-card"><div class="stat-val" id="adm-revenue-c">—</div><div class="stat-lbl">Total Revenue</div></div>
+      <div class="stat-card"><div class="stat-val" id="adm-paid-c">—</div><div class="stat-lbl">Paid Downloads</div></div>
     </div>
     <div class="tabs">
-      <button class="tab active" onclick="admTab('users',this)">Users</button>
-      <button class="tab" onclick="admTab('papers',this)">Papers</button>
-      <button class="tab" onclick="admTab('payments',this)">Payments</button>
+      <button class="tab active" onclick="admTab('users',this)">👥 Users</button>
+      <button class="tab" onclick="admTab('papers',this)">📄 Papers</button>
+      <button class="tab" onclick="admTab('payments',this)">💳 Payments</button>
     </div>
     <div id="adm-tab-users">
       <div class="table-wrap"><table><thead><tr><th></th><th>Name</th><th>Email</th><th>Joined</th><th>Last Login</th></tr></thead>
@@ -2034,53 +1931,66 @@ tr:hover td{background:var(--s2)}
       <div class="table-wrap"><table><thead><tr><th>User</th><th>Amount</th><th>Payment ID</th><th>Date</th><th>Status</th></tr></thead>
       <tbody id="adm-payments-list"></tbody></table></div>
     </div>
+    <button class="btn btn-s" onclick="loadDashboard();show('s-dashboard')" style="max-width:180px;margin-top:12px">← Back</button>
   </div>
-  <footer><div class="wrap">
-    <span class="footer-lawyers">An Interactive Lawyers Tool</span>
-  </div></footer>
+</div>
+
+<footer></footer>
 </div>
 
 <script>
-const G_CLIENT='__GOOGLE_CLIENT_ID__';
-const ADMIN_EM='__ADMIN_EMAIL__';
+const SECS=['keywords','abstract','introduction','objectives','literature_review','methodology','results','discussion','suggestions','limitations','conclusion'];
 let token='',userEmail='',userName='',userPicture='',jobId='',curTopic='',curFigs=6,poll=null;
-const SECS=['keywords','abstract','introduction','objectives','literature_review','methodology','results','discussion','suggestions','limitations','conclusion','charts'];
+const ADMIN_EM='__ADMIN_EMAIL__';
+const G_CLIENT='__GOOGLE_CLIENT_ID__';
 
-// ── Restore session ───────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded',()=>{
+// Restore session
+(async function(){
   try{
-    token=localStorage.getItem('rx_tok')||'';
-    userEmail=localStorage.getItem('rx_em')||'';
-    userName=localStorage.getItem('rx_nm')||'';
-    userPicture=localStorage.getItem('rx_pic')||'';
+    const t=localStorage.getItem('rx_tok'),e=localStorage.getItem('rx_em'),
+          n=localStorage.getItem('rx_nm'),p=localStorage.getItem('rx_pic');
+    if(t&&e){
+      // Validate token is still alive on the server before showing dashboard
+      const r=await fetch('/api/profile',{headers:{'Authorization':'Bearer '+t}});
+      if(r.ok){
+        token=t;userEmail=e;userName=n||'';userPicture=p||'';onLoggedIn();
+      } else {
+        // Token expired or server restarted — clear stale data
+        ['rx_tok','rx_em','rx_nm','rx_pic'].forEach(k=>localStorage.removeItem(k));
+      }
+    }
   }catch(e){}
-  if(token){
-    fetch('/api/profile',{headers:{'Authorization':'Bearer '+token}}).then(r=>{
-      if(r.status===401){forceLogout();initGoogle();return;}
-      return r.json();
-    }).then(d=>{
-      if(d&&d.success){onLoggedIn();}else{forceLogout();initGoogle();}
-    }).catch(()=>initGoogle());
-  }else{initGoogle();}
+})();
 
-  // Show dev auth if no Google client ID
-  if(!G_CLIENT||G_CLIENT===''){
-    const w=document.getElementById('dev-auth-wrap');if(w)w.style.display='block';
+// Google Sign-In init
+window.addEventListener('load',function(){
+  if(!G_CLIENT){
+    // Dev mode: show simple login form instead of Google button
+    document.getElementById('g-btn-wrap').innerHTML=`
+      <div style="width:100%">
+        <div style="background:rgba(255,200,0,.1);border:1px solid rgba(255,200,0,.3);border-radius:8px;padding:10px 14px;font-size:12px;color:#ffd700;margin-bottom:14px;text-align:center">
+          🛠️ Local / Dev Mode — Google Sign-In not configured
+        </div>
+        <div class="fg" style="margin-bottom:10px">
+          <label style="font-size:12px">Your Name</label>
+          <input type="text" id="dev-name" placeholder="e.g. Rakunatha Khrishanth" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);width:100%;font-size:13px;outline:none">
+        </div>
+        <div class="fg" style="margin-bottom:14px">
+          <label style="font-size:12px">Your Email</label>
+          <input type="email" id="dev-email" placeholder="e.g. you@email.com" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);width:100%;font-size:13px;outline:none">
+        </div>
+        <button class="btn btn-p" onclick="devLogin()" style="width:100%">Continue →</button>
+      </div>`;
+    return;
   }
-});
-
-function initGoogle(){
-  if(!G_CLIENT||G_CLIENT==='') return;
   function tryInit(){
     if(window.google&&google.accounts){
       google.accounts.id.initialize({client_id:G_CLIENT,callback:handleGoogle,auto_select:false});
-      const gWrap=document.getElementById('g-btn-wrap');
-      const gW=Math.min(360,gWrap.offsetWidth||360);
-      google.accounts.id.renderButton(gWrap,{theme:'outline',size:'large',width:gW,text:'continue_with',shape:'rectangular'});
-    }else{setTimeout(tryInit,300);}
+      const gWrap=document.getElementById('g-btn-wrap');const gW=Math.min(376,gWrap.offsetWidth||376);google.accounts.id.renderButton(gWrap,{theme:'outline',size:'large',width:gW,text:'continue_with',shape:'rectangular'});
+    } else { setTimeout(tryInit,300); }
   }
   tryInit();
-}
+});
 
 async function handleGoogle(resp){
   const n=document.getElementById('n-login');
@@ -2090,23 +2000,26 @@ async function handleGoogle(resp){
     const d=await r.json();
     if(!d.success){n.className='notif error show';n.textContent=d.message||'Sign in failed';return;}
     token=d.token;userEmail=d.email;userName=d.name;userPicture=d.picture;
-    try{localStorage.setItem('rx_tok',token);localStorage.setItem('rx_em',userEmail);localStorage.setItem('rx_nm',userName);localStorage.setItem('rx_pic',userPicture);}catch(e){}
+    try{localStorage.setItem('rx_tok',token);localStorage.setItem('rx_em',userEmail);
+        localStorage.setItem('rx_nm',userName);localStorage.setItem('rx_pic',userPicture);}catch(e){}
     onLoggedIn();
   }catch(e){n.className='notif error show';n.textContent='Connection error. Try again.';}
 }
 
 async function devLogin(){
-  const name=(document.getElementById('dev-name')||{value:''}).value.trim();
-  const email=(document.getElementById('dev-email')||{value:''}).value.trim();
-  if(!email){alert('Please enter your email to continue.');return;}
+  const name  = (document.getElementById('dev-name')||{value:''}).value.trim();
+  const email = (document.getElementById('dev-email')||{value:''}).value.trim();
+  if(!email){ alert('Please enter your email to continue.'); return; }
   const n=document.getElementById('n-login');
-  n.className='notif info show';n.textContent='Signing in...';
+  n.className='notif info show'; n.textContent='Signing in...';
   try{
-    const r=await fetch('/api/auth/dev',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name||email.split('@')[0],email})});
+    const r=await fetch('/api/auth/dev',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name:name||email.split('@')[0], email})});
     const d=await r.json();
     if(!d.success){n.className='notif error show';n.textContent=d.message||'Sign in failed';return;}
     token=d.token;userEmail=d.email;userName=d.name;userPicture='';
-    try{localStorage.setItem('rx_tok',token);localStorage.setItem('rx_em',userEmail);localStorage.setItem('rx_nm',userName);localStorage.setItem('rx_pic','');}catch(e){}
+    try{localStorage.setItem('rx_tok',token);localStorage.setItem('rx_em',userEmail);
+        localStorage.setItem('rx_nm',userName);localStorage.setItem('rx_pic','');}catch(e){}
     onLoggedIn();
   }catch(e){n.className='notif error show';n.textContent='Connection error. Try again.';}
 }
@@ -2119,7 +2032,8 @@ function onLoggedIn(){
   if(userEmail===ADMIN_EM) document.getElementById('admin-link').style.display='block';
   const aIn=document.getElementById('author-in');
   if(aIn&&!aIn.value) aIn.value=userName||'';
-  loadDashboard();show('s-dashboard');
+  loadDashboard();
+  show('s-dashboard');
 }
 
 async function loadDashboard(){
@@ -2133,14 +2047,18 @@ async function loadDashboard(){
     const papers=d.papers||[];
     const wrap=document.getElementById('dash-papers-wrap');
     if(papers.length===0){
-      wrap.innerHTML=`<div class="dash-empty"><div class="dash-empty-icon">📄</div><div class="dash-empty-txt">No papers yet</div><div class="dash-empty-sub">Press <strong style="color:#fff">+</strong> below to generate your first research paper</div></div>`;
-    }else{
+      wrap.innerHTML=`<div class="dash-empty">
+        <div class="dash-empty-icon">📄</div>
+        <div class="dash-empty-txt">No papers yet</div>
+        <div class="dash-empty-sub">Press <strong style="color:var(--accent)">+</strong> below to generate your first research paper</div>
+      </div>`;
+    } else {
       wrap.innerHTML='<div class="papers-grid">'+papers.map(p=>`
         <div class="paper-card">
           <div class="paper-card-topic">${escHtml(p.topic||'Untitled')}</div>
           <div class="paper-card-meta">
             <span class="paper-card-date">${(p.created_at||'').slice(0,10)}</span>
-            <span class="badge ${p.file_path?'badge-done':'badge-pending'}">${p.file_path?'✓ Done':'Pending'}</span>
+            <span class="paper-card-badge ${p.file_path?'badge-done':'badge-pending'}">${p.file_path?'✓ Done':'Pending'}</span>
           </div>
         </div>`).join('')+'</div>';
     }
@@ -2159,65 +2077,114 @@ function forceLogout(){
 function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
 function startNewPaper(){
-  ['topic-in','inst-in','q-problem','q-lit','q-gap','q-objectives','q-statement'].forEach(id=>{const el=document.getElementById(id);if(el) el.value='';});
-  const aIn=document.getElementById('author-in');if(aIn) aIn.value=userName||'';
-  goStep(0);show('s-gen');
+  // Reset questionnaire state then navigate
+  ['topic-in','inst-in','q-problem','q-lit','q-gap','q-objectives','q-statement'].forEach(id=>{
+    const el=document.getElementById(id);if(el) el.value='';
+  });
+  const aIn=document.getElementById('author-in');
+  if(aIn) aIn.value=userName||'';
+  goStep(0);
+  show('s-gen');
 }
 
-function show(id){
-  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
-  document.getElementById(id).classList.add('active');
-  window.scrollTo({top:0,behavior:'smooth'});
-}
+function show(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');window.scrollTo({top:0,behavior:'smooth'});}
 function notify(id,msg,type){const e=document.getElementById(id);e.textContent=msg;e.className='notif '+type+' show';if(type!=='error')setTimeout(()=>e.classList.remove('show'),6000);}
-function logout(){token='';userEmail='';userName='';userPicture='';try{['rx_tok','rx_em','rx_nm','rx_pic'].forEach(k=>localStorage.removeItem(k));}catch(e){}document.getElementById('nav-auth').style.display='none';document.getElementById('admin-link').style.display='none';try{google.accounts.id.disableAutoSelect();}catch(e){}show('s-home');}
 
-// ── Questionnaire nav ─────────────────────────────────────────────────────────
-let currentStep=0;const totalSteps=6;
-function goStep(n){if(n>currentStep)return;currentStep=n;renderStep();}
-function nextStep(from){
-  if(from===0&&!document.getElementById('topic-in').value.trim()){alert('Please enter your research topic — this is the only required field.');return;}
-  currentStep=from+1;if(currentStep===5)buildSummary();renderStep();
+function logout(){
+  token='';userEmail='';userName='';userPicture='';
+  try{['rx_tok','rx_em','rx_nm','rx_pic'].forEach(k=>localStorage.removeItem(k));}catch(e){}
+  document.getElementById('nav-auth').style.display='none';
+  document.getElementById('admin-link').style.display='none';
+  try{google.accounts.id.disableAutoSelect();}catch(e){}
+  show('s-home');
 }
-function prevStep(from){currentStep=from-1;renderStep();}
+
+// ── QUESTIONNAIRE NAVIGATION ────────────────────────────────────────────────
+let currentStep = 0;
+const totalSteps = 6;
+
+function goStep(n){
+  // Only allow going back to completed steps
+  if(n > currentStep) return;
+  currentStep = n;
+  renderStep();
+}
+
+function nextStep(from){
+  // Only validate the topic (required), everything else is optional
+  if(from===0 && !document.getElementById('topic-in').value.trim()){
+    alert('Please enter your research topic — this is the only required field.'); return;
+  }
+  currentStep = from + 1;
+  if(currentStep === 5) buildSummary();
+  renderStep();
+}
+
+function prevStep(from){
+  currentStep = from - 1;
+  renderStep();
+}
+
 function renderStep(){
   for(let i=0;i<totalSteps;i++){
-    const panel=document.getElementById('qp-'+i);const step=document.getElementById('qs-'+i);
-    if(!panel||!step)continue;
-    panel.classList.toggle('active',i===currentStep);
+    const panel = document.getElementById('qp-'+i);
+    const step  = document.getElementById('qs-'+i);
+    if(!panel||!step) continue;
+    panel.classList.toggle('active', i===currentStep);
     step.classList.remove('active','done');
-    if(i===currentStep)step.classList.add('active');
-    else if(i<currentStep)step.classList.add('done');
-    const lines=document.querySelectorAll('.q-line');
-    lines.forEach((l,li)=>{l.classList.toggle('done',li<currentStep);});
+    if(i===currentStep) step.classList.add('active');
+    else if(i<currentStep) step.classList.add('done');
+    // Update connector lines
+    const lines = document.querySelectorAll('.q-line');
+    lines.forEach((l,li)=>{ l.classList.toggle('done', li < currentStep); });
   }
   window.scrollTo({top:0,behavior:'smooth'});
 }
+
 function buildSummary(){
-  const items=[{label:'Problem Identified',id:'q-problem'},{label:'Literature Reviewed',id:'q-lit'},{label:'Research Gap',id:'q-gap'},{label:'Objectives',id:'q-objectives'},{label:'Research Statement',id:'q-statement'}];
-  const s=document.getElementById('q-summary');if(!s)return;
-  s.innerHTML='<div style="font-size:11px;font-weight:700;margin-bottom:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:.8px">Your Research Inputs</div>'+
-    items.map(item=>{const val=(document.getElementById(item.id)||{}).value||'';const preview=val.length>100?val.slice(0,100)+'...':val;
-      return `<div class="q-summary-item"><div class="q-summary-label">${item.label}</div><div class="q-summary-val">${preview||'<span style="color:var(--muted)">Not filled</span>'}</div></div>`;}).join('');
+  const items = [
+    {label:'Problem Identified', id:'q-problem'},
+    {label:'Literature Reviewed', id:'q-lit'},
+    {label:'Research Gap', id:'q-gap'},
+    {label:'Objectives', id:'q-objectives'},
+    {label:'Research Statement', id:'q-statement'},
+  ];
+  const s = document.getElementById('q-summary');
+  if(!s) return;
+  s.innerHTML = '<div style="font-size:13px;font-weight:700;margin-bottom:12px;color:var(--text)">📋 Your Research Inputs</div>' +
+    items.map(item=>{
+      const val = (document.getElementById(item.id)||{}).value||'';
+      const preview = val.length > 120 ? val.slice(0,120)+'...' : val;
+      return `<div class="q-summary-item">
+        <div class="q-summary-label">${item.label}</div>
+        <div class="q-summary-val">${preview||'<span style="color:var(--dim)">Not filled</span>'}</div>
+      </div>`;
+    }).join('');
 }
 
-// ── Generate ──────────────────────────────────────────────────────────────────
 async function generate(){
-  const topic=document.getElementById('topic-in').value.trim();
-  const author=document.getElementById('author-in').value.trim();
-  const inst=document.getElementById('inst-in').value.trim();
-  const nfigs=parseInt(document.getElementById('sl').value);
-  const qProblem=document.getElementById('q-problem').value.trim();
-  const qLit=document.getElementById('q-lit').value.trim();
-  const qGap=document.getElementById('q-gap').value.trim();
-  const qObjectives=document.getElementById('q-objectives').value.trim();
-  const qStatement=document.getElementById('q-statement').value.trim();
+  const topic  = document.getElementById('topic-in').value.trim();
+  const author = document.getElementById('author-in').value.trim();
+  const inst   = document.getElementById('inst-in').value.trim();
+  const nfigs  = parseInt(document.getElementById('sl').value);
+  const qProblem    = document.getElementById('q-problem').value.trim();
+  const qLit        = document.getElementById('q-lit').value.trim();
+  const qGap        = document.getElementById('q-gap').value.trim();
+  const qObjectives = document.getElementById('q-objectives').value.trim();
+  const qStatement  = document.getElementById('q-statement').value.trim();
+
   if(!topic){notify('n-gen','Please enter a research topic.','error');return;}
+
   const btn=document.getElementById('btn-gen');
-  btn.disabled=true;btn.innerHTML='<span class="spin"></span> Generating...';
+  btn.disabled=true;btn.innerHTML='<span class="spin"></span>Generating...';
   try{
-    const r=await fetch('/api/generate',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
-      body:JSON.stringify({topic,author_name:author,institution:inst,num_figures:nfigs,q_problem:qProblem,q_lit:qLit,q_gap:qGap,q_objectives:qObjectives,q_statement:qStatement})});
+    const r=await fetch('/api/generate',{method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+      body:JSON.stringify({
+        topic, author_name:author, institution:inst, num_figures:nfigs,
+        q_problem:qProblem, q_lit:qLit, q_gap:qGap,
+        q_objectives:qObjectives, q_statement:qStatement
+      })});
     const d=await r.json();
     if(r.status===401){btn.disabled=false;btn.innerHTML='Generate Research Paper';forceLogout();return;}
     if(!d.success){notify('n-gen',d.message||'Failed.','error');btn.disabled=false;btn.innerHTML='Generate Research Paper';return;}
@@ -2231,6 +2198,7 @@ function buildSecGrid(){
   const g=document.getElementById('sec-grid');g.innerHTML='';
   SECS.forEach(s=>{const d=document.createElement('div');d.className='sec-item';d.id='sec-'+s;d.textContent=s.replace('_',' ');g.appendChild(d);});
 }
+
 function updateSecs(pct){
   const idx=Math.floor((Math.max(0,pct-30))/45*SECS.length);
   SECS.forEach((s,i)=>{const el=document.getElementById('sec-'+s);if(!el)return;
@@ -2242,12 +2210,10 @@ function pollStatus(){
     try{
       const r=await fetch('/api/status/'+jobId,{headers:{'Authorization':'Bearer '+token}});
       const d=await r.json();if(!d.success)return;
-      if(d.progress!=null){
-        document.getElementById('prog-fill').style.width=d.progress+'%';
-        document.getElementById('prog-pct').textContent=d.progress+'%';
-        updateSecs(d.progress);
-      }
+      document.getElementById('prog-fill').style.width=d.progress+'%';
+      document.getElementById('prog-pct').textContent=d.progress+'%';
       document.getElementById('stage-msg').textContent=d.message;
+      updateSecs(d.progress);
       if(d.status==='done'){
         clearInterval(poll);
         SECS.forEach(s=>{const e=document.getElementById('sec-'+s);if(e)e.className='sec-item done';});
@@ -2257,7 +2223,7 @@ function pollStatus(){
         show('s-done');
       }else if(d.status==='error'){
         clearInterval(poll);
-        const btn=document.getElementById('btn-gen');btn.disabled=false;btn.innerHTML='Generate Research Paper';
+        const btn=document.getElementById('btn-gen');btn.disabled=false;btn.innerHTML='✦ Generate Paper (Free AI)';
         alert('Generation failed: '+d.message);show('s-gen');
       }
     }catch(e){console.error(e);}
@@ -2265,7 +2231,7 @@ function pollStatus(){
 }
 
 async function download(){
-  const btn=document.getElementById('btn-dl');btn.disabled=true;btn.innerHTML='<span class="spin"></span> Downloading...';
+  const btn=document.getElementById('btn-dl');btn.disabled=true;btn.innerHTML='<span class="spin"></span>Downloading...';
   try{
     const r=await fetch('/api/download/'+jobId,{headers:{'Authorization':'Bearer '+token}});
     if(!r.ok)throw new Error('failed');
@@ -2277,11 +2243,16 @@ async function download(){
 
 function again(){
   jobId='';curTopic='';
-  ['topic-in','inst-in','q-problem','q-lit','q-gap','q-objectives','q-statement'].forEach(id=>{const el=document.getElementById(id);if(el) el.value='';});
+  ['topic-in','inst-in','q-problem','q-lit','q-gap','q-objectives','q-statement'].forEach(id=>{
+    const el=document.getElementById(id);if(el) el.value='';
+  });
   document.getElementById('sl').value=6;document.getElementById('sl-display').textContent='6';
-  const btn=document.getElementById('btn-gen');if(btn){btn.disabled=false;btn.innerHTML='Generate Research Paper';}
+  const btn=document.getElementById('btn-gen');
+  if(btn){btn.disabled=false;btn.innerHTML='✦ Generate Research Paper';}
   document.getElementById('n-gen').classList.remove('show');
-  currentStep=0;renderStep();loadDashboard();show('s-dashboard');
+  currentStep=0;renderStep();
+  loadDashboard();
+  show('s-dashboard');
 }
 
 async function showProfile(){
@@ -2294,11 +2265,17 @@ async function showProfile(){
     document.getElementById('prof-name').textContent=u.name||u.email;
     document.getElementById('prof-email').textContent=u.email;
     document.getElementById('prof-since').textContent=(u.created_at||'').split('T')[0]||u.created_at||'—';
-    document.getElementById('prof-papers').textContent=d.papers_count||0;
-    document.getElementById('prof-spent').textContent='₹'+(d.total_spent||0);
-    const list=document.getElementById('prof-papers-list');
-    list.innerHTML=d.papers.length===0?'<tr><td colspan="3" style="text-align:center;color:var(--muted);padding:20px">No papers yet.</td></tr>':
-      d.papers.map(p=>`<tr><td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(p.topic||'—')}</td><td style="font-family:monospace">${(p.created_at||'').split('T')[0]||'—'}</td><td><span class="badge ${p.file_path?'badge-done':'badge-pending'}">${p.file_path?'Done':'Pending'}</span></td></tr>`).join('');
+    document.getElementById('prof-papers-count').textContent=d.papers_count;
+    document.getElementById('prof-spent').textContent='₹'+d.total_spent;
+    document.getElementById('prof-paid-count').textContent=d.papers.filter(p=>p.paid).length;
+    const tb=document.getElementById('prof-papers-list');
+    tb.innerHTML=d.papers.length===0
+      ?'<tr><td colspan="3" class="empty">No papers yet. Generate your first one!</td></tr>'
+      :d.papers.map(p=>`<tr>
+        <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${p.topic||''}">${p.topic||'—'}</td>
+        <td style="white-space:nowrap">${(p.created_at||'').split('T')[0]||'—'}</td>
+        <td>${p.paid?'<span class="badge-paid">✓ Downloaded</span>':'<span class="badge-free">Generated</span>'}</td>
+      </tr>`).join('');
   }catch(e){console.error(e);}
 }
 
@@ -2306,23 +2283,45 @@ async function showAdmin(){
   show('s-admin');
   try{
     const r=await fetch('/api/admin/stats',{headers:{'Authorization':'Bearer '+token}});
-    const d=await r.json();if(!d.success)return;
-    document.getElementById('adm-users').textContent=d.stats.total_users;
-    document.getElementById('adm-papers').textContent=d.stats.total_papers;
-    document.getElementById('adm-revenue').textContent='₹'+d.stats.total_revenue;
-    document.getElementById('adm-paid').textContent=d.stats.paid_papers;
-    document.getElementById('adm-users-list').innerHTML=d.users.length===0?'<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:20px">No users yet.</td></tr>':
-      d.users.map(u=>`<tr><td><img class="avatar" src="${u.picture||''}" onerror="this.style.display='none'"></td><td>${u.name||'—'}</td><td>${u.email}</td><td style="font-family:monospace">${(u.created_at||'').split('T')[0]||'—'}</td><td style="font-family:monospace">${(u.last_login||'').split('T')[0]||'—'}</td></tr>`).join('');
-    document.getElementById('adm-papers-list').innerHTML=d.papers.length===0?'<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:20px">No papers yet.</td></tr>':
-      d.papers.map(p=>`<tr><td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.topic||'—'}</td><td>${p.email||'—'}</td><td style="font-family:monospace">${(p.created_at||'').split('T')[0]||'—'}</td><td>${p.paid?'<span class="badge badge-paid">✓ Paid</span>':'<span class="badge badge-pending">Pending</span>'}</td></tr>`).join('');
-    document.getElementById('adm-payments-list').innerHTML=d.payments.length===0?'<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:20px">No payments yet.</td></tr>':
-      d.payments.map(p=>`<tr><td>${p.email||'—'}</td><td style="font-weight:700">₹${p.amount||0}</td><td style="font-family:monospace;font-size:11px">${(p.razorpay_payment||'—').slice(0,22)}</td><td style="font-family:monospace">${(p.created_at||'').split('T')[0]||'—'}</td><td><span class="badge badge-${p.status==='paid'?'paid':'pending'}">${p.status}</span></td></tr>`).join('');
+    const d=await r.json();
+    if(!d.success){alert('Access denied');show('s-gen');return;}
+    document.getElementById('adm-users-c').textContent=d.stats.total_users;
+    document.getElementById('adm-papers-c').textContent=d.stats.total_papers;
+    document.getElementById('adm-revenue-c').textContent='₹'+d.stats.total_revenue;
+    document.getElementById('adm-paid-c').textContent=d.stats.paid_papers;
+    document.getElementById('adm-users-list').innerHTML=d.users.length===0
+      ?'<tr><td colspan="5" class="empty">No users yet.</td></tr>'
+      :d.users.map(u=>`<tr>
+        <td><img class="avatar" src="${u.picture||''}" onerror="this.style.display='none'"></td>
+        <td>${u.name||'—'}</td><td>${u.email}</td>
+        <td>${(u.created_at||'').split('T')[0]||'—'}</td>
+        <td>${(u.last_login||'').split('T')[0]||'—'}</td>
+      </tr>`).join('');
+    document.getElementById('adm-papers-list').innerHTML=d.papers.length===0
+      ?'<tr><td colspan="4" class="empty">No papers yet.</td></tr>'
+      :d.papers.map(p=>`<tr>
+        <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.topic||'—'}</td>
+        <td>${p.email||'—'}</td>
+        <td>${(p.created_at||'').split('T')[0]||'—'}</td>
+        <td>${p.paid?'<span class="badge-paid">✓ Paid</span>':'<span class="badge-pending">Pending</span>'}</td>
+      </tr>`).join('');
+    document.getElementById('adm-payments-list').innerHTML=d.payments.length===0
+      ?'<tr><td colspan="5" class="empty">No payments yet.</td></tr>'
+      :d.payments.map(p=>`<tr>
+        <td>${p.email||'—'}</td>
+        <td style="color:var(--accent);font-weight:700">₹${p.amount||0}</td>
+        <td style="font-family:monospace;font-size:11px">${(p.razorpay_payment||'—').slice(0,24)}</td>
+        <td>${(p.created_at||'').split('T')[0]||'—'}</td>
+        <td><span class="badge-${p.status==='paid'?'paid':'pending'}">${p.status}</span></td>
+      </tr>`).join('');
   }catch(e){console.error(e);}
 }
 
 function admTab(name,el){
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));el.classList.add('active');
-  ['users','papers','payments'].forEach(t=>{const d=document.getElementById('adm-tab-'+t);if(d)d.style.display=t===name?'block':'none';});
+  ['users','papers','payments'].forEach(t=>{
+    const d=document.getElementById('adm-tab-'+t);if(d)d.style.display=t===name?'block':'none';
+  });
 }
 </script>
 </body>
@@ -2475,7 +2474,7 @@ def _try_smtp(to_email: str, otp: str):
         msg['Subject'] = 'Your rdxper Login Code'
         msg['From'] = u; msg['To'] = to_email
         msg.attach(MIMEText(
-            f'<h2 style="color:#000">Your rdxper OTP</h2>'
+            f'<h2 style="color:#00ff88">Your rdxper OTP</h2>'
             f'<p style="font-size:32px;letter-spacing:8px;font-family:monospace"><b>{otp}</b></p>'
             f'<p>Valid for 10 minutes.</p>', 'html'))
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
