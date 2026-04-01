@@ -176,7 +176,7 @@ def _groq_generate(prompt: str, system: str, temperature: float,
     """
     import http.client, ssl
     api_key = os.environ.get("GROQ_API_KEY", "").strip()
-    model   = "llama-3.3-70b-versatile"
+    model   = "llama-3.1-8b-instant"  # fastest Groq model — 750 tokens/sec vs 280 for 70B
 
     messages = []
     if system:
@@ -201,8 +201,8 @@ def _groq_generate(prompt: str, system: str, temperature: float,
         "Accept-Language": "en-US,en;q=0.9",
     }
 
-    MAX_RETRIES = 4
-    BACKOFF     = [35, 65, 120, 180]   # seconds to wait before each retry
+    MAX_RETRIES = 2
+    BACKOFF     = [8, 20]   # fail fast → let ai_generate fall back to Gemini
 
     for attempt in range(MAX_RETRIES + 1):
         ctx  = ssl.create_default_context()
@@ -281,7 +281,7 @@ def _gemini_generate(prompt: str, system: str, temperature: float,
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY not set.")
 
-    model = "gemini-2.0-flash"
+    model = "gemini-2.5-flash-preview-04-17"
     url   = (f"https://generativelanguage.googleapis.com/v1beta/models/"
              f"{model}:streamGenerateContent?key={api_key}&alt=sse")
 
@@ -432,7 +432,7 @@ class WebScraper:
         self.topic = topic
         self.query = urllib.parse.quote(topic)
 
-    def fetch_semantic_scholar(self, limit: int = 10) -> list:
+    def fetch_semantic_scholar(self, limit: int = 6) -> list:
         url = (
             f"https://api.semanticscholar.org/graph/v1/paper/search"
             f"?query={self.query}&limit={limit}"
@@ -530,7 +530,7 @@ class WebScraper:
 
     def gather(self, progress_cb=None) -> dict:
         if progress_cb: progress_cb(10, "Querying Semantic Scholar for real papers...")
-        ss = self.fetch_semantic_scholar(10)
+        ss = self.fetch_semantic_scholar(6)
 
         if progress_cb: progress_cb(18, "Querying CrossRef for verified journal articles...")
         cr = self.fetch_crossref(6)
@@ -613,8 +613,7 @@ class GeminiWriter:
         provider = _detect_provider()
         pname = "Groq (Llama 3.3 70B)" if provider == "groq" else "Gemini"
 
-        # ── CALL 1: Keywords + Abstract + Introduction ──────────────────────
-        if progress_cb: progress_cb(30, f'{pname} writing abstract & introduction...')
+        # ── Build all 3 prompts ───────────────────────────────────────────────
         p1 = (hdr +
               "Write these sections using XML tags. Scholarly prose only — no markdown, no bullets.\n\n"
               "<keywords>6-8 academic keywords, comma-separated.</keywords>\n"
@@ -635,15 +634,6 @@ class GeminiWriter:
               f"{'COPY VERBATIM: ' + q['objectives'][:500] if q.get('objectives') else 'Write 4 objectives starting with ● To [verb]...'}"
               "</objectives>")
 
-        s1 = ['keywords', 'abstract', 'introduction', 'objectives']
-        def prog1(pct, msg):
-            if progress_cb:
-                if pct is None: progress_cb(None, msg)
-                else: progress_cb(max(30, min(50, 30 + int((pct-30)/45*20))), msg)
-        raw1 = ai_generate(p1, system=SYSTEM_PROMPT, temperature=0.7,
-                           progress_cb=prog1, tracked_sections=s1)
-
-        # ── CALL 2 & 3 built while call 1 was streaming ──────────────────────
         p2 = (hdr +
               "Write these sections using XML tags. Scholarly prose only — no markdown, no bullets.\n\n"
               f"<literature_review>Write 10-12 source entries. "
@@ -686,23 +676,30 @@ class GeminiWriter:
               f"TYPE=bar/pie/grouped/stacked; grouped/stacked: TYPE|TITLE|G1,G2;S1,S2. "
               f"Titles reference {self.topic[:30]} and demographic shown.</charts>")
 
-        # ── Calls 2 & 3 run in parallel threads — saves ~40% wall time ───────
+        # ── All 3 calls fire simultaneously in parallel threads ───────────────
+        # Gemini: 1M TPM free — zero stagger, true parallel.
+        # Groq:   6k TPM — tiny stagger only to spread token bursts.
+        s1 = ['keywords', 'abstract', 'introduction', 'objectives']
         s2 = ['literature_review', 'methodology']
         s3 = ['results', 'discussion', 'suggestions', 'limitations', 'conclusion', 'charts']
         _results = {}
 
-        # Gemini has 1M TPM free — no staggering needed at all.
-        # Groq has 6k TPM — small stagger reduces rate-limit risk.
-        stagger2 = 0 if provider == "gemini" else 1
-        stagger3 = 0 if provider == "gemini" else 2
+        def _run1():
+            def prog1(pct, msg):
+                if progress_cb:
+                    if pct is None: progress_cb(None, msg)
+                    else: progress_cb(max(32, min(55, 32 + int((pct-30)/45*23))), msg)
+            if progress_cb: progress_cb(32, f'{pname} writing abstract & introduction...')
+            _results['raw1'] = ai_generate(p1, system=SYSTEM_PROMPT, temperature=0.7,
+                                           progress_cb=prog1, tracked_sections=s1)
 
         def _run2():
             def prog2(pct, msg):
                 if progress_cb:
                     if pct is None: progress_cb(None, msg)
-                    else: progress_cb(max(52, min(68, 52 + int((pct-30)/45*16))), msg)
-            if stagger2: time.sleep(stagger2)
-            if progress_cb: progress_cb(52, f'{pname} writing literature review & methodology...')
+                    else: progress_cb(max(35, min(58, 35 + int((pct-30)/45*23))), msg)
+            if provider == "groq": time.sleep(1)
+            if progress_cb: progress_cb(35, f'{pname} writing literature review & methodology...')
             _results['raw2'] = ai_generate(p2, system=SYSTEM_PROMPT, temperature=0.7,
                                            progress_cb=prog2, tracked_sections=s2)
 
@@ -710,19 +707,21 @@ class GeminiWriter:
             def prog3(pct, msg):
                 if progress_cb:
                     if pct is None: progress_cb(None, msg)
-                    else: progress_cb(max(55, min(75, 55 + int((pct-30)/45*20))), msg)
-            if stagger3: time.sleep(stagger3)
-            if progress_cb: progress_cb(55, f'{pname} writing results, discussion & conclusion...')
+                    else: progress_cb(max(38, min(72, 38 + int((pct-30)/45*34))), msg)
+            if provider == "groq": time.sleep(2)
+            if progress_cb: progress_cb(38, f'{pname} writing results, discussion & conclusion...')
             _results['raw3'] = ai_generate(p3, system=SYSTEM_PROMPT, temperature=0.7,
                                            progress_cb=prog3, tracked_sections=s3)
 
         import threading as _threading
-        if progress_cb: progress_cb(51, f'Dispatching parallel AI calls for remaining sections...')
+        if progress_cb: progress_cb(30, f'Launching all 3 {pname} calls in parallel...')
+        t1 = _threading.Thread(target=_run1, daemon=True)
         t2 = _threading.Thread(target=_run2, daemon=True)
         t3 = _threading.Thread(target=_run3, daemon=True)
-        t2.start(); t3.start()
-        t2.join(); t3.join()
+        t1.start(); t2.start(); t3.start()
+        t1.join(); t2.join(); t3.join()
 
+        raw1 = _results.get('raw1', '')
         raw2 = _results.get('raw2', '')
         raw3 = _results.get('raw3', '')
 
@@ -1949,7 +1948,7 @@ tr:hover td{background:var(--s2)}
       <div class="stage-msg" id="stage-msg">Initializing...</div>
     </div>
     <div class="sections-grid" id="sec-grid"></div>
-    <p style="font-size:11px;color:var(--muted);text-align:center;margin-top:16px;line-height:1.6">This typically takes 2–5 minutes.<br>Fetching real papers from Semantic Scholar, CrossRef & Wikipedia.</p>
+    <p style="font-size:11px;color:var(--muted);text-align:center;margin-top:16px;line-height:1.6">This typically takes 1–2 minutes.<br>Fetching real papers from Semantic Scholar, CrossRef & Wikipedia.</p>
   </div>
   <footer><div class="wrap">
     <span class="footer-lawyers">An Interactive Lawyers Tool</span>
