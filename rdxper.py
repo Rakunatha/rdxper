@@ -187,7 +187,7 @@ def _groq_generate(prompt: str, system: str, temperature: float,
         "model": model,
         "messages": messages,
         "temperature": temperature,
-        "max_tokens": 8192,
+        "max_tokens": 6000,
         "stream": True,
     }
     body = json.dumps(payload).encode("utf-8")
@@ -287,7 +287,7 @@ def _gemini_generate(prompt: str, system: str, temperature: float,
 
     payload = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": temperature, "maxOutputTokens": 8192},
+        "generationConfig": {"temperature": temperature, "maxOutputTokens": 6000},
     }
     if system:
         payload["systemInstruction"] = {"parts": [{"text": system}]}
@@ -638,22 +638,15 @@ class GeminiWriter:
         s1 = ['keywords', 'abstract', 'introduction', 'objectives']
         def prog1(pct, msg):
             if progress_cb:
-                if pct is None:
-                    progress_cb(None, msg)
-                else:
-                    progress_cb(max(30, min(50, 30 + int((pct-30)/45*20))), msg)
+                if pct is None: progress_cb(None, msg)
+                else: progress_cb(max(30, min(50, 30 + int((pct-30)/45*20))), msg)
         raw1 = ai_generate(p1, system=SYSTEM_PROMPT, temperature=0.7,
                            progress_cb=prog1, tracked_sections=s1)
 
-        # Brief pause to avoid bursting the per-minute token window
-        if progress_cb: progress_cb(51, '⏳ Cooling down between calls (rate limit protection)...')
-        time.sleep(8)
-
-        # ── CALL 2: Literature Review + Methodology ─────────────────────────
-        if progress_cb: progress_cb(51, f'{pname} writing literature review & methodology...')
+        # ── CALL 2 & 3 built while call 1 was streaming ──────────────────────
         p2 = (hdr +
               "Write these sections using XML tags. Scholarly prose only — no markdown, no bullets.\n\n"
-              f"<literature_review>Write 15-18 source entries. "
+              f"<literature_review>Write 10-12 source entries. "
               f"Each entry MUST follow this 4-sentence structure:\n"
               f"S1: 'Lastname (Year) [verb] [subject].'\n"
               f"S2: 'The aim of the study was to...'\n"
@@ -672,22 +665,6 @@ class GeminiWriter:
               f"Independent vars: age, gender, education, location, occupation. "
               f"Dependent var: main outcome of {self.topic}.</methodology>")
 
-        s2 = ['literature_review', 'methodology']
-        def prog2(pct, msg):
-            if progress_cb:
-                if pct is None:
-                    progress_cb(None, msg)
-                else:
-                    progress_cb(max(52, min(68, 52 + int((pct-30)/45*16))), msg)
-        raw2 = ai_generate(p2, system=SYSTEM_PROMPT, temperature=0.7,
-                           progress_cb=prog2, tracked_sections=s2)
-
-        # Brief pause before final call
-        if progress_cb: progress_cb(69, '⏳ Cooling down between calls (rate limit protection)...')
-        time.sleep(8)
-
-        # ── CALL 3: Results + Discussion + Conclusion + Suggestions + Charts ─
-        if progress_cb: progress_cb(69, f'{pname} writing results, discussion & conclusion...')
         p3 = (hdr +
               "Write these sections using XML tags. Scholarly prose only — no markdown, no bullets.\n\n"
               f"<results>Write {self._nfigs} figure-paragraphs (one per figure, 50-60 words each). "
@@ -709,15 +686,40 @@ class GeminiWriter:
               f"TYPE=bar/pie/grouped/stacked; grouped/stacked: TYPE|TITLE|G1,G2;S1,S2. "
               f"Titles reference {self.topic[:30]} and demographic shown.</charts>")
 
+        # ── Calls 2 & 3 run in parallel threads — saves ~40% wall time ───────
+        s2 = ['literature_review', 'methodology']
         s3 = ['results', 'discussion', 'suggestions', 'limitations', 'conclusion', 'charts']
-        def prog3(pct, msg):
-            if progress_cb:
-                if pct is None:
-                    progress_cb(None, msg)
-                else:
-                    progress_cb(max(70, min(75, 70 + int((pct-30)/45*5))), msg)
-        raw3 = ai_generate(p3, system=SYSTEM_PROMPT, temperature=0.7,
-                           progress_cb=prog3, tracked_sections=s3)
+        _results = {}
+
+        def _run2():
+            def prog2(pct, msg):
+                if progress_cb:
+                    if pct is None: progress_cb(None, msg)
+                    else: progress_cb(max(52, min(68, 52 + int((pct-30)/45*16))), msg)
+            time.sleep(3)   # brief stagger so API sees two distinct requests
+            if progress_cb: progress_cb(52, f'{pname} writing literature review & methodology...')
+            _results['raw2'] = ai_generate(p2, system=SYSTEM_PROMPT, temperature=0.7,
+                                           progress_cb=prog2, tracked_sections=s2)
+
+        def _run3():
+            def prog3(pct, msg):
+                if progress_cb:
+                    if pct is None: progress_cb(None, msg)
+                    else: progress_cb(max(55, min(75, 55 + int((pct-30)/45*20))), msg)
+            time.sleep(6)   # stagger so API tokens are spread
+            if progress_cb: progress_cb(55, f'{pname} writing results, discussion & conclusion...')
+            _results['raw3'] = ai_generate(p3, system=SYSTEM_PROMPT, temperature=0.7,
+                                           progress_cb=prog3, tracked_sections=s3)
+
+        import threading as _threading
+        if progress_cb: progress_cb(51, f'Dispatching parallel AI calls for remaining sections...')
+        t2 = _threading.Thread(target=_run2, daemon=True)
+        t3 = _threading.Thread(target=_run3, daemon=True)
+        t2.start(); t3.start()
+        t2.join(); t3.join()
+
+        raw2 = _results.get('raw2', '')
+        raw3 = _results.get('raw3', '')
 
         # ── Parse all sections ────────────────────────────────────────────────
         sections = {}
@@ -1041,13 +1043,42 @@ class DocBuilder:
         doc = Document()
 
         # ── PAGE SETUP: A4, 1" margins ────────────────────────────────────────
+        def _add_page_field(para, field_code):
+            """Insert a Word field (PAGE / NUMPAGES) into a paragraph run."""
+            run = para.add_run()
+            fc1 = OxmlElement('w:fldChar'); fc1.set(qn('w:fldCharType'), 'begin'); run._r.append(fc1)
+            run2 = para.add_run()
+            it = OxmlElement('w:instrText'); it.set(qn('xml:space'), 'preserve'); it.text = field_code; run2._r.append(it)
+            run3 = para.add_run()
+            fc2 = OxmlElement('w:fldChar'); fc2.set(qn('w:fldCharType'), 'end'); run3._r.append(fc2)
+
         for sec in doc.sections:
-            sec.page_width    = Inches(8.27)
-            sec.page_height   = Inches(11.69)
-            sec.top_margin    = Inches(1)
-            sec.bottom_margin = Inches(1)
-            sec.left_margin   = Inches(1)
-            sec.right_margin  = Inches(1)
+            sec.page_width      = Inches(8.27)
+            sec.page_height     = Inches(11.69)
+            sec.top_margin      = Inches(1)
+            sec.bottom_margin   = Inches(1)
+            sec.left_margin     = Inches(1)
+            sec.right_margin    = Inches(1)
+            sec.footer_distance = Inches(0.4)
+
+            # ── Footer: "An Interactive Lawyers Tool" on every page ───────────
+            footer = sec.footer
+            footer.is_linked_to_previous = False
+            fp = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+            fp.clear()
+            fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            fp.paragraph_format.space_before = Pt(0)
+            fp.paragraph_format.space_after  = Pt(0)
+            GREY = RGBColor(0x99, 0x99, 0x99)
+            def _fr(text, bold=False):
+                r = fp.add_run(text); r.font.size = Pt(8)
+                r.font.name = 'Times New Roman'; r.font.color.rgb = GREY; r.bold = bold; return r
+            _fr('An Interactive Lawyers Tool', bold=True)
+            _fr('   •   Page ')
+            _add_page_field(fp, 'PAGE')
+            _fr(' of ')
+            _add_page_field(fp, 'NUMPAGES')
+            _fr('   •   rdxper v4.0')
 
         # ── HELPERS ───────────────────────────────────────────────────────────
         TNR = 'Times New Roman'
@@ -1459,487 +1490,483 @@ HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>rdxper</title>
+<title>rdxper — Research Paper Generator</title>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Segoe UI',Arial,sans-serif;background:#000;color:#fff;min-height:100vh}
-:root{--bg:#000;--surface:#0a0a0a;--surface2:#141414;--surface3:#1a1a1a;--border:rgba(255,255,255,0.12);--accent:#fff;--accent2:#fff;--text:#fff;--muted:#888;--dim:#555;--error:#ff4444;--r:12px}
-.wrap{max-width:960px;margin:0 auto;padding:0 20px}
-header{padding:18px 0;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}
-.logo{display:flex;align-items:center;gap:10px}
-.logo-mark{width:32px;height:32px;background:#fff;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:12px;color:#000}
-.logo-text{font-size:20px;font-weight:800;letter-spacing:-0.5px}
-.logo-text span{color:#fff}
-.user-chip{display:flex;align-items:center;gap:8px;background:var(--surface2);border:1px solid var(--border);border-radius:40px;padding:5px 12px 5px 5px;cursor:pointer}
-.user-chip img{width:26px;height:26px;border-radius:50%;object-fit:cover}
-.user-chip span{font-size:13px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.nav-links{display:flex;gap:8px;align-items:center}
-.nav-btn{background:none;border:1px solid var(--border);color:var(--muted);padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px;transition:all .2s}
-.nav-btn:hover{border-color:#fff;color:#fff}
-.nav-btn.danger{border-color:rgba(255,68,68,.35);color:var(--error)}
-.screen{display:none}.screen.active{display:block}
-.hero{padding:56px 0 32px;text-align:center}
-.htag{font-size:12px;color:#fff;letter-spacing:2px;text-transform:uppercase;margin-bottom:16px;font-family:Consolas,monospace}
-h1{font-size:clamp(28px,5vw,52px);font-weight:900;line-height:1.1;margin-bottom:16px}
-h1 em{color:#fff;font-style:normal}
-.sub{font-size:16px;color:var(--muted);max-width:560px;margin:0 auto 32px}
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:32px;max-width:440px;margin:0 auto;width:100%}
-.ct{font-size:20px;font-weight:700;margin-bottom:6px}
-.cs{font-size:14px;color:var(--muted);margin-bottom:24px}
-.btn{width:100%;padding:13px 20px;border-radius:8px;border:none;font-size:15px;font-weight:600;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:10px}
-.btn:disabled{opacity:.5;cursor:not-allowed}
-.btn-p{background:#fff;color:#000;border:none}
-.btn-p:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 6px 20px rgba(255,255,255,.15)}
-.btn-dl{background:#fff;color:#000;box-shadow:0 4px 16px rgba(255,255,255,.12)}
-.btn-dl:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 28px rgba(255,255,255,.2)}
-.btn-s{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
-.btn-s:hover:not(:disabled){border-color:#fff;color:#fff}
-.fg{margin-bottom:16px}.fg label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
-.fg input,.fg select{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-size:14px;outline:none;transition:border-color .2s}
-.fg input:focus{border-color:#fff}
-.notif{display:none;padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:14px}
+:root{--bg:#000;--s1:#080808;--s2:#0f0f0f;--s3:#171717;--border:rgba(255,255,255,0.08);--border2:rgba(255,255,255,0.15);--text:#fff;--muted:#555;--muted2:#888;--error:#ff4545;--r:8px}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column;overflow-x:hidden}
+/* ── Noise grain overlay ── */
+body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.025;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");background-size:200px}
+/* ── Animated grid lines ── */
+body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;background-image:linear-gradient(rgba(255,255,255,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.03) 1px,transparent 1px);background-size:60px 60px;animation:gridShift 20s linear infinite}
+@keyframes gridShift{0%{background-position:0 0,0 0}100%{background-position:0 60px,60px 0}}
+/* ── Layout ── */
+.wrap{max-width:960px;margin:0 auto;padding:0 24px;position:relative;z-index:1}
+.flex-grow{flex:1}
+/* ── Header ── */
+header{padding:16px 0;border-bottom:1px solid var(--border);position:relative;z-index:10}
+header .wrap{display:flex;align-items:center;justify-content:space-between}
+.logo{display:flex;align-items:center;gap:10px;text-decoration:none}
+.logo-mark{width:30px;height:30px;background:#fff;border-radius:6px;display:grid;place-items:center;font-weight:900;font-size:11px;color:#000;letter-spacing:-.5px;transition:transform .2s}
+.logo:hover .logo-mark{transform:rotate(-5deg) scale(1.05)}
+.logo-text{font-size:18px;font-weight:800;letter-spacing:-1px;color:#fff}
+.nav-links{display:flex;gap:6px;align-items:center}
+.nav-btn{background:none;border:1px solid var(--border);color:var(--muted2);padding:5px 11px;border-radius:6px;cursor:pointer;font-size:12px;transition:all .18s;white-space:nowrap}
+.nav-btn:hover{border-color:rgba(255,255,255,.4);color:#fff}
+.nav-btn.danger{border-color:rgba(255,69,69,.25);color:var(--error)}
+.nav-btn.danger:hover{border-color:var(--error);background:rgba(255,69,69,.06)}
+.user-chip{display:flex;align-items:center;gap:7px;background:var(--s2);border:1px solid var(--border);border-radius:30px;padding:4px 11px 4px 4px;cursor:pointer;transition:border-color .18s}
+.user-chip:hover{border-color:var(--border2)}
+.user-chip img{width:24px;height:24px;border-radius:50%;object-fit:cover}
+.user-chip span{font-size:12px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted2)}
+/* ── Screens ── */
+.screen{display:none;animation:fadeUp .3s ease both}.screen.active{display:flex;flex-direction:column;flex:1}
+@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+/* ── Footer ── */
+footer{border-top:1px solid var(--border);padding:20px 0;position:relative;z-index:10;margin-top:auto}
+footer .wrap{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
+.footer-brand{font-size:11px;color:var(--muted);letter-spacing:.5px}
+.footer-tag{font-size:11px;color:var(--muted);font-style:italic;letter-spacing:.3px}
+.footer-lawyers{font-size:11px;font-weight:600;color:rgba(255,255,255,.35);letter-spacing:1.5px;text-transform:uppercase;border:1px solid rgba(255,255,255,.08);padding:3px 10px;border-radius:30px}
+/* ── Typography ── */
+h1{font-size:clamp(28px,5vw,50px);font-weight:900;line-height:1.08;letter-spacing:-2px}
+h1 em{font-style:normal;color:rgba(255,255,255,.35)}
+.eyebrow{font-size:10px;letter-spacing:3px;text-transform:uppercase;color:var(--muted2);font-family:monospace;margin-bottom:14px}
+.sub{font-size:15px;color:var(--muted2);line-height:1.6;max-width:500px}
+/* ── Cards & Surfaces ── */
+.card{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:28px}
+.card-sm{background:var(--s2);border:1px solid var(--border);border-radius:var(--r);padding:16px}
+/* ── Inputs ── */
+.fg{margin-bottom:14px}
+.fg label{display:block;font-size:12px;color:var(--muted2);margin-bottom:6px;letter-spacing:.3px}
+.fg input,.fg select,textarea{width:100%;background:var(--s2);border:1px solid var(--border);border-radius:var(--r);padding:10px 13px;color:var(--text);font-size:13px;outline:none;transition:border-color .18s,background .18s;font-family:inherit;resize:vertical}
+.fg input:focus,.fg select:focus,textarea:focus{border-color:rgba(255,255,255,.35);background:var(--s3)}
+textarea{min-height:100px;line-height:1.55}
+/* ── Buttons ── */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:11px 20px;border-radius:var(--r);border:none;font-size:14px;font-weight:600;cursor:pointer;transition:all .18s;width:100%;font-family:inherit}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-p{background:#fff;color:#000}
+.btn-p:hover:not(:disabled){background:#e8e8e8;transform:translateY(-1px);box-shadow:0 8px 24px rgba(255,255,255,.1)}
+.btn-p:active:not(:disabled){transform:translateY(0)}
+.btn-s{background:transparent;color:var(--muted2);border:1px solid var(--border)}
+.btn-s:hover:not(:disabled){border-color:var(--border2);color:#fff}
+.btn-dl{background:#fff;color:#000;box-shadow:0 4px 20px rgba(255,255,255,.08)}
+.btn-dl:hover:not(:disabled){background:#e8e8e8;transform:translateY(-2px);box-shadow:0 10px 32px rgba(255,255,255,.15)}
+/* ── Notifs ── */
+.notif{display:none;padding:10px 14px;border-radius:var(--r);font-size:13px;margin-bottom:12px;animation:fadeUp .2s ease}
 .notif.show{display:block}
-.notif.success{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.25);color:#fff}
-.notif.error{background:rgba(255,68,68,.1);border:1px solid rgba(255,68,68,.3);color:var(--error)}
-.notif.info{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.2);color:#ccc}
-.prog-wrap{background:var(--surface3);border-radius:100px;height:6px;overflow:hidden;margin:12px 0}
-.prog-fill{height:100%;background:#fff;border-radius:100px;transition:width .4s ease}
-.prog-row{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:4px}
-.stage-box{background:var(--surface2);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;margin:10px 0;display:flex;align-items:center;gap:8px}
-.stage-msg{font-size:12px;color:#fff;font-family:Consolas,monospace;flex:1}
-.sections-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-bottom:12px}
-.sec-item{font-size:9px;padding:4px;border-radius:5px;background:var(--surface3);border:1px solid var(--border);color:var(--dim);text-align:center;font-family:Consolas,monospace;transition:all .3s}
-.sec-item.writing{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.4);color:#fff;animation:sp 1s ease-in-out infinite}
-.sec-item.done{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.3);color:#fff}
-@keyframes sp{0%,100%{opacity:1}50%{opacity:.4}}
-.spin{width:14px;height:14px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
+.notif.success{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.15);color:#ccc}
+.notif.error{background:rgba(255,69,69,.08);border:1px solid rgba(255,69,69,.25);color:var(--error)}
+.notif.info{background:rgba(255,255,255,.04);border:1px solid var(--border);color:var(--muted2)}
+/* ── Hero ── */
+.hero{padding:64px 0 40px;flex:1}
+/* ── Progress bar ── */
+.prog-wrap{background:var(--s3);border-radius:100px;height:3px;overflow:hidden;margin:10px 0}
+.prog-fill{height:100%;background:#fff;border-radius:100px;transition:width .5s cubic-bezier(.4,0,.2,1);position:relative}
+.prog-fill::after{content:'';position:absolute;right:0;top:-2px;width:6px;height:7px;background:#fff;border-radius:50%;box-shadow:0 0 8px rgba(255,255,255,.8),0 0 16px rgba(255,255,255,.4)}
+.prog-row{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:6px;font-family:monospace}
+/* ── Stage box ── */
+.stage-box{background:var(--s2);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;display:flex;align-items:center;gap:10px;margin:10px 0}
+.stage-msg{font-size:11px;color:rgba(255,255,255,.7);font-family:monospace;flex:1}
+.spin{width:12px;height:12px;border:1.5px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;flex-shrink:0}
 @keyframes spin{to{transform:rotate(360deg)}}
-.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:24px}
-.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:20px}
-.stat-val{font-size:28px;font-weight:900;color:#fff}
-.stat-lbl{font-size:12px;color:var(--muted);margin-top:4px}
-.table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:24px}
-.table-head{padding:14px 20px;border-bottom:1px solid var(--border);font-size:14px;font-weight:600}
+/* ── Section grid ── */
+.sections-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-bottom:10px}
+.sec-item{font-size:9px;padding:5px 3px;border-radius:5px;background:var(--s3);border:1px solid var(--border);color:var(--muted);text-align:center;font-family:monospace;transition:all .3s;letter-spacing:.3px}
+.sec-item.writing{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.25);color:#fff;animation:pulse 1.2s ease-in-out infinite}
+.sec-item.done{background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.12);color:rgba(255,255,255,.5)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+/* ── Stats ── */
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:20px}
+.stat-card{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:18px}
+.stat-val{font-size:26px;font-weight:900;color:#fff;letter-spacing:-1px}
+.stat-lbl{font-size:11px;color:var(--muted);margin-top:3px;letter-spacing:.3px}
+/* ── Tables ── */
+.table-wrap{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:20px}
+.table-head{padding:12px 18px;border-bottom:1px solid var(--border);font-size:13px;font-weight:700}
 table{width:100%;border-collapse:collapse}
-th{text-align:left;padding:10px 16px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border);font-weight:600}
-td{padding:10px 16px;font-size:13px;border-bottom:1px solid rgba(255,255,255,.04)}
+th{text-align:left;padding:9px 16px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;border-bottom:1px solid var(--border);font-weight:600}
+td{padding:9px 16px;font-size:12px;border-bottom:1px solid rgba(255,255,255,.03)}
 tr:last-child td{border-bottom:none}
-tr:hover td{background:var(--surface2)}
-.badge-paid{background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.3);padding:2px 8px;border-radius:20px;font-size:11px}
-.badge-free{background:rgba(255,255,255,.04);color:#666;padding:2px 8px;border-radius:20px;font-size:11px}
-.badge-pending{background:rgba(255,255,255,.06);color:#aaa;padding:2px 8px;border-radius:20px;font-size:11px}
-.avatar{width:32px;height:32px;border-radius:50%;object-fit:cover}
-.profile-header{display:flex;align-items:center;gap:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:24px;margin-bottom:20px}
-.profile-avatar{width:64px;height:64px;border-radius:50%;border:2px solid #fff}
-.tabs{display:flex;gap:0;margin-bottom:20px;border-bottom:1px solid var(--border)}
-.tab{padding:10px 18px;font-size:13px;cursor:pointer;border-radius:0;color:var(--muted);border:none;background:none;transition:all .2s;border-bottom:2px solid transparent;margin-bottom:-1px}
-.tab.active{color:#fff;border-bottom:2px solid #fff;font-weight:600}
-.empty{text-align:center;padding:40px;color:var(--dim);font-size:14px}
-.pay-box{background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:20px;text-align:center;margin:16px 0}
-.pay-amt{font-size:40px;font-weight:900;color:#fff}
-.page-title{font-size:24px;font-weight:800;margin:32px 0 4px}
-.page-sub{font-size:14px;color:var(--muted);margin-bottom:24px}
-footer{text-align:center;padding:32px 0;color:var(--dim);font-size:12px;border-top:1px solid var(--border);margin-top:40px}
-/* Questionnaire */
-.q-steps{display:flex;align-items:center;margin-bottom:28px;padding:0 4px}
-.q-step{display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;min-width:56px}
-.q-num{width:28px;height:28px;border-radius:50%;background:var(--surface2);border:2px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--dim);transition:all .3s}
-.q-lbl{font-size:10px;color:var(--dim);transition:color .3s;white-space:nowrap}
+tr:hover td{background:var(--s2)}
+/* ── Badges ── */
+.badge{padding:2px 8px;border-radius:20px;font-size:10px;font-weight:600;letter-spacing:.3px}
+.badge-done{background:rgba(255,255,255,.07);color:rgba(255,255,255,.7);border:1px solid rgba(255,255,255,.15)}
+.badge-pending{background:rgba(255,255,255,.03);color:var(--muted);border:1px solid var(--border)}
+.badge-paid{background:rgba(255,255,255,.08);color:#fff;border:1px solid rgba(255,255,255,.2)}
+/* ── Tabs ── */
+.tabs{display:flex;gap:0;margin-bottom:18px;border-bottom:1px solid var(--border)}
+.tab{padding:9px 16px;font-size:12px;cursor:pointer;color:var(--muted);border:none;background:none;transition:color .18s;border-bottom:2px solid transparent;margin-bottom:-1px;font-family:inherit}
+.tab.active{color:#fff;border-bottom-color:#fff;font-weight:600}
+/* ── Profile ── */
+.profile-header{display:flex;align-items:center;gap:16px;background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:22px;margin-bottom:18px}
+.profile-avatar{width:56px;height:56px;border-radius:50%;border:2px solid rgba(255,255,255,.15)}
+.avatar{width:28px;height:28px;border-radius:50%;object-fit:cover}
+/* ── Questionnaire ── */
+.q-steps{display:flex;align-items:center;margin-bottom:24px;padding:0 2px}
+.q-step{display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;min-width:52px}
+.q-num{width:26px;height:26px;border-radius:50%;background:var(--s2);border:1.5px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--muted);transition:all .25s}
+.q-lbl{font-size:9px;color:var(--muted);transition:color .25s;white-space:nowrap;letter-spacing:.3px}
 .q-step.active .q-num{background:#fff;border-color:#fff;color:#000}
 .q-step.active .q-lbl{color:#fff}
-.q-step.done .q-num{background:rgba(255,255,255,.1);border-color:#fff;color:#fff}
-.q-step.done .q-lbl{color:#aaa}
-.q-line{flex:1;height:2px;background:var(--border);margin:0 4px;margin-bottom:14px;transition:background .3s}
-.q-line.done{background:#fff}
-.q-panel{display:none}.q-panel.active{display:block}
-.q-badge{font-size:11px;color:#aaa;font-family:Consolas,monospace;letter-spacing:1px;margin-bottom:8px}
-.q-hint{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:10px 14px;font-size:12px;color:#aaa;margin-bottom:16px;line-height:1.5}
-textarea{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-size:13px;outline:none;transition:border-color .2s;resize:vertical;font-family:'Segoe UI',Arial,sans-serif;line-height:1.6}
-textarea:focus{border-color:#fff}
-textarea::placeholder{color:var(--dim);font-size:12px}
-.q-summary{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:20px;font-size:12px}
-.q-summary-item{margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,.06)}
+.q-step.done .q-num{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.2);color:rgba(255,255,255,.5)}
+.q-step.done .q-lbl{color:rgba(255,255,255,.35)}
+.q-line{flex:1;height:1px;background:var(--border);margin:0 4px;margin-bottom:12px;transition:background .25s}
+.q-line.done{background:rgba(255,255,255,.2)}
+.q-panel{display:none;animation:fadeUp .25s ease}.q-panel.active{display:block}
+.q-badge{display:inline-block;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--muted2);border:1px solid var(--border);border-radius:20px;padding:3px 10px;margin-bottom:14px;font-family:monospace}
+.q-hint{background:var(--s2);border:1px solid var(--border);border-left:2px solid rgba(255,255,255,.2);border-radius:var(--r);padding:10px 13px;font-size:12px;color:var(--muted2);margin-bottom:14px;line-height:1.5}
+.ct{font-size:19px;font-weight:800;margin-bottom:4px;letter-spacing:-.3px}
+.cs{font-size:13px;color:var(--muted2);margin-bottom:18px;line-height:1.5}
+.q-summary{background:var(--s2);border:1px solid var(--border);border-radius:var(--r);padding:14px;margin-bottom:18px}
+.q-summary-item{margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border)}
 .q-summary-item:last-child{margin-bottom:0;padding-bottom:0;border-bottom:none}
-.q-summary-label{color:#fff;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
-.q-summary-val{color:var(--text);line-height:1.5;max-height:60px;overflow:hidden;text-overflow:ellipsis}
-@media(max-width:600px){.q-lbl{display:none}.q-steps{gap:0}.q-step{min-width:36px}}
-@media(max-width:600px){.sections-grid{grid-template-columns:repeat(3,1fr)}.stat-grid{grid-template-columns:repeat(2,1fr)}.nav-links{gap:4px}}
+.q-summary-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px}
+.q-summary-val{font-size:12px;color:rgba(255,255,255,.7);line-height:1.4}
 /* ── Dashboard ── */
-.dash-header{padding:36px 0 8px}
-.dash-greeting{font-size:13px;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;font-family:Consolas,monospace;margin-bottom:6px}
-.dash-title{font-size:30px;font-weight:900;letter-spacing:-1px}
-.dash-title span{color:#fff}
-.dash-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 20px;text-align:center;border:2px dashed var(--border);border-radius:16px;margin:28px 0}
-.dash-empty-icon{font-size:48px;margin-bottom:16px;opacity:.4}
-.dash-empty-txt{font-size:16px;font-weight:600;color:var(--muted);margin-bottom:6px}
-.dash-empty-sub{font-size:13px;color:var(--dim)}
-.papers-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin:24px 0}
-.paper-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;cursor:default;transition:border-color .2s,transform .15s;position:relative;overflow:hidden}
-.paper-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:#fff;opacity:0;transition:opacity .2s}
-.paper-card:hover{border-color:rgba(255,255,255,.3);transform:translateY(-2px)}
+.dash-header{padding:36px 0 4px}
+.dash-greeting{font-size:12px;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;font-family:monospace}
+.dash-title{font-size:32px;font-weight:900;letter-spacing:-1.5px;margin-top:4px}
+.dash-title span{color:rgba(255,255,255,.2)}
+.dash-empty{text-align:center;padding:60px 20px;border:1px solid var(--border);border-radius:var(--r);border-style:dashed}
+.dash-empty-icon{font-size:28px;margin-bottom:12px;opacity:.4}
+.dash-empty-txt{font-size:15px;font-weight:700;color:rgba(255,255,255,.4);margin-bottom:4px}
+.dash-empty-sub{font-size:12px;color:var(--muted)}
+.papers-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-bottom:24px}
+.paper-card{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:16px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden}
+.paper-card::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(255,255,255,.03) 0%,transparent 60%);opacity:0;transition:opacity .2s}
+.paper-card:hover{border-color:rgba(255,255,255,.2);transform:translateY(-1px)}
 .paper-card:hover::before{opacity:1}
-.paper-card-topic{font-size:14px;font-weight:700;color:var(--text);line-height:1.4;margin-bottom:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.paper-card-meta{display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--dim)}
-.paper-card-date{font-family:Consolas,monospace}
-.paper-card-badge{padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:.3px}
-.badge-done{background:rgba(255,255,255,.08);color:#fff;border:1px solid rgba(255,255,255,.2)}
-.badge-pending{background:rgba(255,255,255,.04);color:#888;border:1px solid rgba(255,255,255,.12)}
-.fab{position:fixed;bottom:32px;right:32px;width:58px;height:58px;border-radius:50%;background:#fff;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(255,255,255,.15);transition:transform .2s,box-shadow .2s;z-index:100}
-.fab:hover{transform:scale(1.1) translateY(-2px);box-shadow:0 14px 36px rgba(255,255,255,.25)}
-.fab svg{width:24px;height:24px;stroke:#000;stroke-width:2.5;stroke-linecap:round}
-.fab-tooltip{position:fixed;bottom:44px;right:100px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:7px 12px;font-size:12px;color:var(--text);white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .2s;z-index:99}
-.fab:hover ~ .fab-tooltip{opacity:1}
-@media(max-width:600px){.fab{bottom:24px;right:20px}.papers-grid{grid-template-columns:1fr}}
-/* ── Comprehensive Responsive Styles ── */
-@media(max-width:480px){
-  .wrap{padding:0 12px}
-  header{padding:12px 0;flex-wrap:wrap;gap:8px}
-  .logo-text{font-size:17px}
-  .logo-mark{width:28px;height:28px;font-size:10px}
-  .nav-btn{padding:4px 8px;font-size:11px}
-  .user-chip{padding:4px 8px 4px 4px}
-  .user-chip span{max-width:80px;font-size:12px}
-  .hero{padding:32px 0 20px}
-  h1{font-size:26px}
-  .sub{font-size:14px}
-  .card{padding:20px 16px}
-  .ct{font-size:17px}
-  .cs{font-size:13px}
-  .btn{padding:12px 16px;font-size:14px}
-  .fg input,.fg select{padding:9px 12px;font-size:14px}
-  textarea{font-size:13px}
-  .dash-header{padding:24px 0 4px}
-  .dash-title{font-size:24px}
-  .dash-empty{padding:48px 16px}
-  .stat-grid{grid-template-columns:1fr 1fr}
-  .stat-val{font-size:22px}
-  .table-wrap{overflow-x:auto}
-  table{font-size:12px;min-width:360px}
-  th,td{padding:8px 10px}
-  .profile-header{flex-direction:column;text-align:center;gap:12px}
-  .profile-avatar{width:56px;height:56px}
-  .tabs{overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}
-  .tab{padding:8px 14px;font-size:12px}
-  .card[style*="max-width:560px"]{padding:20px 16px}
-  .stage-box{padding:8px 12px}
-  .stage-msg{font-size:11px}
+.paper-card-topic{font-size:13px;font-weight:700;line-height:1.35;margin-bottom:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.paper-card-meta{display:flex;align-items:center;justify-content:space-between;font-size:10px;color:var(--muted)}
+.paper-card-date{font-family:monospace}
+/* ── FAB ── */
+.fab{position:fixed;bottom:28px;right:28px;width:52px;height:52px;border-radius:50%;background:#fff;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 28px rgba(255,255,255,.12);transition:all .2s;z-index:100}
+.fab:hover{transform:scale(1.08) translateY(-2px);box-shadow:0 14px 40px rgba(255,255,255,.2)}
+.fab svg{width:22px;height:22px;stroke:#000;stroke-width:2.5;stroke-linecap:round}
+/* ── Done screen ── */
+.done-mark{width:56px;height:56px;border-radius:50%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;font-size:22px;margin:0 auto 20px;animation:popIn .4s cubic-bezier(.34,1.56,.64,1)}
+@keyframes popIn{from{transform:scale(0) rotate(-20deg);opacity:0}to{transform:scale(1) rotate(0);opacity:1}}
+/* ── Pay ── */
+.pay-box{background:var(--s2);border:1px solid var(--border);border-radius:var(--r);padding:18px;text-align:center;margin:14px 0}
+.pay-amt{font-size:36px;font-weight:900;letter-spacing:-2px}
+/* ── Responsive ── */
+@media(max-width:600px){
+  .wrap{padding:0 14px}
+  header{padding:12px 0}
+  .papers-grid{grid-template-columns:1fr 1fr}
+  .fab{bottom:20px;right:16px;width:46px;height:46px}
+  h1{font-size:28px}
   .sections-grid{grid-template-columns:repeat(3,1fr)}
-  .sec-item{font-size:8px;padding:3px}
-  .q-badge{font-size:10px}
-  .q-hint{font-size:11px;padding:8px 12px}
-  .q-summary{padding:12px}
-  .q-summary-label{font-size:10px}
-  .q-summary-val{font-size:12px}
-  .page-title{font-size:20px}
-  .page-sub{font-size:13px}
+  .hero{padding:36px 0 24px}
+  .dash-header{padding:24px 0 4px}
+  .dash-title{font-size:26px}
+  .q-lbl{display:none}
+  .profile-header{flex-direction:column;text-align:center;gap:10px}
 }
-@media(min-width:481px) and (max-width:768px){
-  .wrap{padding:0 16px}
-  header{padding:14px 0}
-  h1{font-size:36px}
-  .card{padding:28px 24px;max-width:100%}
-  .stat-grid{grid-template-columns:repeat(3,1fr)}
-  .papers-grid{grid-template-columns:repeat(2,1fr)}
-  .user-chip span{max-width:110px}
-  .table-wrap{overflow-x:auto}
-  table{min-width:420px}
-}
-@media(min-width:769px) and (max-width:1024px){
-  .wrap{padding:0 24px}
-  .papers-grid{grid-template-columns:repeat(2,1fr)}
-  .stat-grid{grid-template-columns:repeat(4,1fr)}
-}
-@media(hover:none){
-  .paper-card:hover{transform:none}
-  .paper-card:hover::before{opacity:0}
-  .btn-p:hover:not(:disabled){transform:none;box-shadow:none}
-  .btn-dl:hover:not(:disabled){transform:none}
-  .fab:hover{transform:scale(1);box-shadow:0 8px 24px rgba(255,255,255,.15)}
-}
+@media(hover:none){.paper-card:hover{transform:none}.fab:hover{transform:scale(1)}}
+/* ── Cursor blink for monospace elements ── */
+.mono{font-family:monospace}
+.page-title{font-size:22px;font-weight:800;margin:28px 0 3px;letter-spacing:-.5px}
+.page-sub{font-size:13px;color:var(--muted2);margin-bottom:20px}
+/* ── Animated border on card hover ── */
+@keyframes borderGlow{0%,100%{border-color:rgba(255,255,255,.08)}50%{border-color:rgba(255,255,255,.2)}}
 </style>
 </head>
 <body>
-<div class="wrap">
 <header>
-  <div class="logo">
-    <div class="logo-mark">rx</div>
-    <div class="logo-text">RD<span>Xper</span></div>
-  </div>
-  <div class="nav-links" id="nav-auth" style="display:none">
-    <button class="nav-btn" onclick="showProfile()">👤 Profile</button>
-    <div id="admin-link" style="display:none"><button class="nav-btn" onclick="showAdmin()">⚙️ Admin</button></div>
-    <div class="user-chip" onclick="showProfile()">
-      <img id="nav-avatar" src="" onerror="this.style.display='none'" style="display:none">
-      <span id="nav-name">User</span>
+  <div class="wrap">
+    <a class="logo" href="#">
+      <div class="logo-mark">rx</div>
+      <div class="logo-text">rdxper</div>
+    </a>
+    <div class="nav-links" id="nav-auth" style="display:none">
+      <button class="nav-btn" onclick="showProfile()">Profile</button>
+      <div id="admin-link" style="display:none"><button class="nav-btn" onclick="showAdmin()">Admin</button></div>
+      <div class="user-chip" onclick="showProfile()">
+        <img id="nav-avatar" src="" onerror="this.style.display='none'" style="display:none">
+        <span id="nav-name">User</span>
+      </div>
+      <button class="nav-btn danger" onclick="logout()">Sign out</button>
     </div>
-    <button class="nav-btn danger" onclick="logout()">Sign out</button>
   </div>
 </header>
 
-<!-- LOGIN -->
+<!-- ═══ LOGIN ═══ -->
 <div class="screen active" id="s-home">
-  <div class="hero">
-    
-    <h1>Generate <em>Genuine</em><br>Research Papers</h1>
-    
-  </div>
-  <div class="card">
-    <div class="ct">Sign in to continue</div>
-    <div class="cs">Use your Google account — no password needed</div>
-    <div id="n-login" class="notif"></div>
-    <div id="g-btn-wrap" style="display:flex;justify-content:center;min-height:44px;align-items:center"></div>
-  </div>
-</div>
-
-<!-- DASHBOARD -->
-<div class="screen" id="s-dashboard">
-  <div class="dash-header">
-    <div class="dash-greeting">Welcome back</div>
-    <div class="dash-title" id="dash-name-title">Researcher</div>
-  </div>
-
-  <div style="display:flex;align-items:center;justify-content:space-between;margin:28px 0 8px">
-    <div style="font-size:16px;font-weight:700">Your Research Papers</div>
-    <button class="nav-btn" onclick="loadDashboard()" style="font-size:11px">↻ Refresh</button>
-  </div>
-
-  <div id="dash-papers-wrap">
-    <div class="dash-empty">
-      <div class="dash-empty-icon">📄</div>
-      <div class="dash-empty-txt">No papers yet</div>
-      <div class="dash-empty-sub">Press <strong style="color:#fff">+</strong> below to generate your first research paper</div>
-    </div>
-  </div>
-
-  <!-- Floating Action Button -->
-  <button class="fab" onclick="startNewPaper()" title="New Research Paper">
-    <svg viewBox="0 0 24 24" fill="none"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-  </button>
-  <div class="fab-tooltip">New Research Paper</div>
-</div>
-
-<!-- GENERATE — 5-Step Questionnaire -->
-<div class="screen" id="s-gen">
-<div style="padding-top:28px;max-width:700px;margin:0 auto">
-
-<div style="margin-bottom:16px">
-  <button class="btn btn-s" style="width:auto;padding:8px 16px;font-size:12px" onclick="loadDashboard();show('s-dashboard')">← Dashboard</button>
-</div>
-
-<!-- Step indicator -->
-<div class="q-steps" id="q-steps">
-  <div class="q-step active" id="qs-0" onclick="goStep(0)"><span class="q-num">1</span><span class="q-lbl">Problem</span></div>
-  <div class="q-line"></div>
-  <div class="q-step" id="qs-1" onclick="goStep(1)"><span class="q-num">2</span><span class="q-lbl">Literature</span></div>
-  <div class="q-line"></div>
-  <div class="q-step" id="qs-2" onclick="goStep(2)"><span class="q-num">3</span><span class="q-lbl">Gap</span></div>
-  <div class="q-line"></div>
-  <div class="q-step" id="qs-3" onclick="goStep(3)"><span class="q-num">4</span><span class="q-lbl">Objectives</span></div>
-  <div class="q-line"></div>
-  <div class="q-step" id="qs-4" onclick="goStep(4)"><span class="q-num">5</span><span class="q-lbl">Statement</span></div>
-  <div class="q-line"></div>
-  <div class="q-step" id="qs-5" onclick="goStep(5)"><span class="q-num">6</span><span class="q-lbl">Settings</span></div>
-</div>
-
-<!-- ── Step 0: Problem Identification ───────────────────── -->
-<div class="q-panel active" id="qp-0">
-  <div class="q-badge">Step 1 of 6</div>
-  <div class="ct" style="margin-bottom:6px">Identification of the Problem</div>
-  <div class="cs" style="margin-bottom:20px">What specific problem prompted this research? Describe it in your own words, AI will use this as the foundation. <strong style="color:#aaa">Optional — skip if you prefer AI to write this.</strong></div>
-  <div class="q-hint">💡 Think about: What is wrong or missing? Who is affected? What is the scale of the problem? What are the consequences of not addressing it?</div>
-  <div class="fg">
-    <label>Research Topic / Title *</label>
-    <input type="text" id="topic-in" placeholder="e.g. Legal Frameworks for Environmental Restoration in Post-War Reconstruction">
-  </div>
-  <div class="fg">
-    <label>Problem Statement <span style="color:var(--dim);font-weight:400">(optional)</span></label>
-    <textarea id="q-problem" rows="5" placeholder="Describe the core problem your research addresses. What issue exists? What are its consequences? Why does it need to be studied now?&#10;&#10;Example: Armed conflicts inflict devastating environmental damage that persists long after hostilities cease. Existing legal frameworks under the Geneva Conventions and Rome Statute fail to adequately address post-war ecological restoration, leaving affected communities without legal recourse or environmental remediation. This gap in international humanitarian law creates a vacuum where neither state nor non-state actors are held accountable for long-term environmental harm..."></textarea>
-  </div>
-  <div style="display:flex;gap:10px;justify-content:flex-end">
-    <div style="display:flex;gap:10px;justify-content:flex-end">
-      <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="nextStep(0)">Skip →</button>
-      <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(0)">Next → Literature Review</button>
-    </div>
-  </div>
-</div>
-
-<!-- ── Step 1: Literature Review ────────────────────────── -->
-<div class="q-panel" id="qp-1">
-  <div class="q-badge">Step 2 of 6</div>
-  <div class="ct" style="margin-bottom:6px">Literature Review</div>
-  <div class="cs" style="margin-bottom:20px">What sources have you reviewed? List them and AI will expand into a full literature review. <strong style="color:#aaa">Optional — AI will find real papers automatically if you skip.</strong></div>
-  <div class="q-hint">💡 Include: Author names and years, key arguments, relevant reports, laws, treaties, court cases, or books. Even brief notes are fine — AI will elaborate.</div>
-  <div class="fg">
-    <label>Key Sources & Their Main Arguments *</label>
-    <textarea id="q-lit" rows="8" placeholder="List the sources you have reviewed and what they say. Examples:&#10;&#10;- Geneva Conventions (1949) & Additional Protocol I (1977) — establish basic environmental protections during armed conflict but lack post-war restoration obligations&#10;- UNEP (2009) From Conflict to Peacebuilding — documents how environmental damage sustains conflict cycles&#10;- Bothe, Bruch & Jensen (2010) — argue existing IHL is inadequate for modern environmental warfare&#10;- Rome Statute Art. 8 — criminalises widespread environmental damage but enforcement is rare&#10;- UN Compensation Commission (Kuwait, 1991) — first successful precedent for war environmental claims..."></textarea>
-  </div>
-  <div style="display:flex;gap:10px;justify-content:space-between">
-    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(1)">← Back</button>
-    <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(1)">Skip →</button>
-    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(1)">Next → Research Gap</button>
-  </div>
-</div>
-
-<!-- ── Step 2: Research Gap ──────────────────────────────── -->
-<div class="q-panel" id="qp-2">
-  <div class="q-badge">Step 3 of 6</div>
-  <div class="ct" style="margin-bottom:6px">Research Gap</div>
-  <div class="cs" style="margin-bottom:20px">What is missing from existing research? AI will use your answer as the gap statement. <strong style="color:#aaa">Optional — AI will identify a gap automatically if you skip.</strong></div>
-  <div class="q-hint">💡 Ask yourself: What do existing studies not cover? What contradictions exist in the literature? What context or population has been ignored? What methodology hasn't been applied?</div>
-  <div class="fg">
-    <label>The Research Gap <span style="color:var(--dim);font-weight:400">(optional)</span></label>
-    <textarea id="q-gap" rows="5" placeholder="Describe what is missing from current research and why your study is needed.&#10;&#10;Example: While significant scholarship exists on environmental protection during armed conflict, there is a critical gap in research on post-war environmental restoration obligations. Existing studies either focus on pre-conflict prevention or general humanitarian law without addressing the specific legal mechanisms required for ecological recovery. Furthermore, no comparative study has examined how different post-conflict nations (Iraq, Kosovo, Lebanon, Ukraine) have implemented or failed to implement environmental restoration under international law..."></textarea>
-  </div>
-  <div style="display:flex;gap:10px;justify-content:space-between">
-    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(2)">← Back</button>
-    <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(2)">Skip →</button>
-    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(2)">Next → Objectives</button>
-  </div>
-</div>
-
-<!-- ── Step 3: Objectives ────────────────────────────────── -->
-<div class="q-panel" id="qp-3">
-  <div class="q-badge">Step 4 of 6</div>
-  <div class="ct" style="margin-bottom:6px">Objectives of the Research</div>
-  <div class="cs" style="margin-bottom:20px">List your research objectives — they will appear verbatim in your paper. <strong style="color:#aaa">Optional — AI will generate objectives aligned to your topic if you skip.</strong></div>
-  <div class="q-hint">💡 Good objectives: Start with "To examine / To analyse / To evaluate / To compare / To propose". Be specific. You need 4–6 objectives. One per line.</div>
-  <div class="fg">
-    <label>Research Objectives <span style="color:var(--dim);font-weight:400">(optional — one per line)</span></label>
-    <textarea id="q-objectives" rows="7" placeholder="To examine the existing international legal frameworks governing environmental restoration in post-war reconstruction&#10;To analyse compensation mechanisms including liability determination, reparations, and restoration funding&#10;To evaluate practical challenges such as political instability, limited resources, and technical capacity gaps&#10;To compare legal approaches from different post-conflict contexts including Iraq, Kosovo, Lebanon, and Ukraine&#10;To propose recommendations for strengthening enforcement mechanisms and legal accountability for wartime environmental harm"></textarea>
-  </div>
-  <div style="display:flex;gap:10px;justify-content:space-between">
-    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(3)">← Back</button>
-    <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(3)">Skip →</button>
-    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(3)">Next → Research Statement</button>
-  </div>
-</div>
-
-<!-- ── Step 4: Research Statement ───────────────────────── -->
-<div class="q-panel" id="qp-4">
-  <div class="q-badge">Step 5 of 6</div>
-  <div class="ct" style="margin-bottom:6px">Research Statement</div>
-  <div class="cs" style="margin-bottom:20px">Your thesis in 2–4 sentences — what this research does, how, and why. <strong style="color:#aaa">Optional — AI will formulate a research statement if you skip.</strong></div>
-  <div class="q-hint">💡 A good research statement: Names the topic, identifies the method (doctrinal/empirical/comparative), and states the significance. Typically 2–4 sentences.</div>
-  <div class="fg">
-    <label>Research Statement <span style="color:var(--dim);font-weight:400">(optional)</span></label>
-    <textarea id="q-statement" rows="5" placeholder="This study investigates the legal frameworks governing environmental restoration in post-war reconstruction, focusing on obligations, compensation mechanisms, and practical implementation challenges. Through a comparative doctrinal analysis of international instruments and empirical case studies from four post-conflict regions, this research identifies critical gaps in existing law and proposes actionable reforms to strengthen ecological restoration as an integral component of sustainable peace-building."></textarea>
-  </div>
-  <div style="display:flex;gap:10px;justify-content:space-between">
-    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(4)">← Back</button>
-    <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(4)">Skip →</button>
-    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(4)">Next → Paper Settings</button>
-  </div>
-</div>
-
-<!-- ── Step 5: Settings + Generate ──────────────────────── -->
-<div class="q-panel" id="qp-5">
-  <div class="q-badge">Step 6 of 6</div>
-  <div class="ct" style="margin-bottom:6px">Paper Settings</div>
-  <div class="cs" style="margin-bottom:20px">Final details for your paper. AI will now use all your inputs to generate a genuine research paper.</div>
-  <div id="n-gen" class="notif"></div>
-  <!-- Summary of inputs -->
-  <div class="q-summary" id="q-summary"></div>
-  <div class="fg"><label>Author Name</label>
-    <input type="text" id="author-in" placeholder="Your full name">
-  </div>
-  <div class="fg"><label>Institution (optional)</label>
-    <input type="text" id="inst-in" placeholder="University / College / Organisation">
-  </div>
-  <div class="fg"><label>Number of Figures: <b id="sl-display">6</b></label>
-    <input type="range" id="sl" min="3" max="15" value="6"
-      oninput="document.getElementById('sl-display').textContent=this.value"
-      style="width:100%;accent-color:#fff">
-  </div>
-  <div style="display:flex;gap:10px;justify-content:space-between">
-    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(5)">← Back</button>
-    <button class="btn btn-p" id="btn-gen" onclick="generate()" style="flex:1">Generate Research Paper</button>
-  </div>
-</div>
-
-</div>
-</div>
-
-<!-- PROGRESS -->
-<div class="screen" id="s-prog">
-  <div style="padding-top:40px">
-    <div class="card" style="max-width:560px">
-      <div class="ct" id="prog-ct">Generating your paper...</div>
-      <div class="cs" id="prog-topic"></div>
-      <div class="stage-box"><span style="font-size:18px">⚡</span><span class="stage-msg" id="stage-msg">Initialising...</span></div>
-      <div class="prog-row"><span></span><span id="prog-pct">0%</span></div>
-      <div class="prog-wrap"><div class="prog-fill" id="prog-fill" style="width:0%"></div></div>
-      <div class="sections-grid" id="sec-grid"></div>
-    </div>
-  </div>
-</div>
-
-<!-- DONE -->
-<div class="screen" id="s-done">
-  <div style="padding-top:48px">
-    <div class="card" style="text-align:center">
-      <div style="font-size:48px;margin-bottom:12px">✅</div>
-      <div class="ct">Paper ready!</div>
-      <div class="cs">Your research paper has been generated successfully</div>
-      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:16px;margin:16px 0;text-align:left">
-        <div style="display:flex;justify-content:space-between;margin-bottom:8px">
-          <span style="color:var(--muted);font-size:13px">Topic</span>
-          <span style="font-size:13px;font-weight:600;max-width:220px;text-align:right" id="d-topic"></span></div>
-        <div style="display:flex;justify-content:space-between;margin-bottom:8px">
-          <span style="color:var(--muted);font-size:13px">Figures</span>
-          <span style="font-size:13px" id="d-figs"></span></div>
-        <div style="display:flex;justify-content:space-between">
-          <span style="color:var(--muted);font-size:13px">Generated</span>
-          <span style="font-size:13px" id="d-time"></span></div>
+  <div class="wrap flex-grow">
+    <div class="hero" style="text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center">
+      <div class="eyebrow">Research Paper Generator</div>
+      <h1 style="margin-bottom:16px">Generate <em>Genuine</em><br>Research Papers</h1>
+      <p class="sub" style="margin-bottom:40px">Real sources. Real citations. AI-written prose. Delivered as a formatted .docx.</p>
+      <div class="card" style="max-width:400px;width:100%;text-align:left">
+        <div class="ct">Sign in to continue</div>
+        <div class="cs">Use your Google account — no password needed</div>
+        <div id="n-login" class="notif"></div>
+        <div id="g-btn-wrap" style="display:flex;justify-content:center;min-height:44px;align-items:center"></div>
+        <!-- Dev login (hidden in prod) -->
+        <div id="dev-auth-wrap" style="margin-top:14px;display:none">
+          <div style="text-align:center;font-size:10px;color:var(--muted);margin-bottom:10px;letter-spacing:1px;text-transform:uppercase">or dev login</div>
+          <div class="fg"><input type="text" id="dev-name" placeholder="Your name (optional)"></div>
+          <div class="fg"><input type="email" id="dev-email" placeholder="Email address"></div>
+          <button class="btn btn-s" onclick="devLogin()">Continue with Email</button>
+        </div>
       </div>
-      <button class="btn btn-dl" id="btn-dl" onclick="download()">⬇ Download Research Paper (.docx)</button>
-      <button class="btn btn-s" onclick="again()" style="margin-top:8px">Generate another paper</button>
-      <button class="btn btn-s" onclick="loadDashboard();show('s-dashboard')" style="margin-top:6px;opacity:.7">← Back to Dashboard</button>
     </div>
   </div>
+  <footer><div class="wrap">
+    <span class="footer-brand">rdxper v4.0</span>
+    <span class="footer-lawyers">An Interactive Lawyers Tool</span>
+    <span class="footer-tag">AI · Research · Law</span>
+  </div></footer>
 </div>
 
-<!-- PROFILE -->
+<!-- ═══ DASHBOARD ═══ -->
+<div class="screen" id="s-dashboard">
+  <div class="wrap flex-grow">
+    <div class="dash-header">
+      <div class="dash-greeting">Welcome back</div>
+      <div class="dash-title" id="dash-name-title">Researcher<span>.</span></div>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:24px 0 8px">
+      <div style="font-size:14px;font-weight:700">Your Research Papers</div>
+      <button class="nav-btn" onclick="loadDashboard()" style="font-size:11px">↻ Refresh</button>
+    </div>
+    <div id="dash-papers-wrap">
+      <div class="dash-empty">
+        <div class="dash-empty-icon">📄</div>
+        <div class="dash-empty-txt">No papers yet</div>
+        <div class="dash-empty-sub">Press <strong style="color:#fff">+</strong> below to generate your first research paper</div>
+      </div>
+    </div>
+    <button class="fab" onclick="startNewPaper()" title="New Research Paper">
+      <svg viewBox="0 0 24 24" fill="none"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </button>
+  </div>
+  <footer><div class="wrap">
+    <span class="footer-brand">rdxper v4.0</span>
+    <span class="footer-lawyers">An Interactive Lawyers Tool</span>
+    <span class="footer-tag">AI · Research · Law</span>
+  </div></footer>
+</div>
+
+<!-- ═══ GENERATE — 6-Step Questionnaire ═══ -->
+<div class="screen" id="s-gen">
+  <div class="wrap flex-grow" style="padding-top:24px;max-width:700px">
+    <button class="btn btn-s" style="width:auto;padding:7px 14px;font-size:12px;margin-bottom:16px" onclick="loadDashboard();show('s-dashboard')">← Dashboard</button>
+    <div class="q-steps" id="q-steps">
+      <div class="q-step active" id="qs-0" onclick="goStep(0)"><span class="q-num">1</span><span class="q-lbl">Problem</span></div>
+      <div class="q-line"></div>
+      <div class="q-step" id="qs-1" onclick="goStep(1)"><span class="q-num">2</span><span class="q-lbl">Literature</span></div>
+      <div class="q-line"></div>
+      <div class="q-step" id="qs-2" onclick="goStep(2)"><span class="q-num">3</span><span class="q-lbl">Gap</span></div>
+      <div class="q-line"></div>
+      <div class="q-step" id="qs-3" onclick="goStep(3)"><span class="q-num">4</span><span class="q-lbl">Objectives</span></div>
+      <div class="q-line"></div>
+      <div class="q-step" id="qs-4" onclick="goStep(4)"><span class="q-num">5</span><span class="q-lbl">Statement</span></div>
+      <div class="q-line"></div>
+      <div class="q-step" id="qs-5" onclick="goStep(5)"><span class="q-num">6</span><span class="q-lbl">Settings</span></div>
+    </div>
+
+    <!-- Step 0: Problem -->
+    <div class="q-panel active" id="qp-0">
+      <div class="q-badge">Step 1 of 6</div>
+      <div class="ct">Identification of the Problem</div>
+      <div class="cs">What specific problem prompted this research? <strong style="color:rgba(255,255,255,.4)">Optional — skip if you prefer AI to write this.</strong></div>
+      <div class="q-hint">💡 Think about: What is wrong or missing? Who is affected? What are the consequences?</div>
+      <div class="fg"><label>Research Topic / Title *</label><input type="text" id="topic-in" placeholder="e.g. Legal Frameworks for Environmental Restoration in Post-War Reconstruction"></div>
+      <div class="fg"><label>Problem Statement <span style="color:var(--muted);font-weight:400">(optional)</span></label><textarea id="q-problem" rows="5" placeholder="Describe the core problem your research addresses. What issue exists? What are its consequences?&#10;&#10;Example: Armed conflicts inflict lasting environmental damage. Existing legal frameworks under the Geneva Conventions fail to address post-war ecological restoration, leaving communities without legal recourse..."></textarea></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(0)">Skip →</button>
+        <button class="btn btn-p" style="width:auto;padding:10px 24px" onclick="nextStep(0)">Next →</button>
+      </div>
+    </div>
+
+    <!-- Step 1: Literature -->
+    <div class="q-panel" id="qp-1">
+      <div class="q-badge">Step 2 of 6</div>
+      <div class="ct">Literature Review</div>
+      <div class="cs">What sources have you reviewed? <strong style="color:rgba(255,255,255,.4)">Optional — AI finds real papers automatically if you skip.</strong></div>
+      <div class="q-hint">💡 Include: Author names and years, key arguments, relevant laws, treaties, or court cases.</div>
+      <div class="fg"><label>Key Sources & Their Main Arguments</label><textarea id="q-lit" rows="7" placeholder="- Geneva Conventions (1949) — establish basic environmental protections during armed conflict&#10;- UNEP (2009) From Conflict to Peacebuilding — documents how environmental damage sustains conflict cycles&#10;- Bothe, Bruch & Jensen (2010) — argue existing IHL is inadequate for modern environmental warfare..."></textarea></div>
+      <div style="display:flex;gap:8px;justify-content:space-between">
+        <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="prevStep(1)">← Back</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-s" style="width:auto;padding:10px 16px" onclick="nextStep(1)">Skip →</button>
+          <button class="btn btn-p" style="width:auto;padding:10px 24px" onclick="nextStep(1)">Next →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 2: Gap -->
+    <div class="q-panel" id="qp-2">
+      <div class="q-badge">Step 3 of 6</div>
+      <div class="ct">Research Gap</div>
+      <div class="cs">What is missing from existing research? <strong style="color:rgba(255,255,255,.4)">Optional — AI will identify a gap automatically.</strong></div>
+      <div class="q-hint">💡 Ask: What do existing studies not cover? What contradictions exist? What methodology hasn't been applied?</div>
+      <div class="fg"><label>The Research Gap <span style="color:var(--muted);font-weight:400">(optional)</span></label><textarea id="q-gap" rows="5" placeholder="While significant scholarship exists on environmental protection during armed conflict, there is a critical gap on post-war restoration obligations. No comparative study has examined how different post-conflict nations have implemented environmental restoration under international law..."></textarea></div>
+      <div style="display:flex;gap:8px;justify-content:space-between">
+        <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="prevStep(2)">← Back</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-s" style="width:auto;padding:10px 16px" onclick="nextStep(2)">Skip →</button>
+          <button class="btn btn-p" style="width:auto;padding:10px 24px" onclick="nextStep(2)">Next →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 3: Objectives -->
+    <div class="q-panel" id="qp-3">
+      <div class="q-badge">Step 4 of 6</div>
+      <div class="ct">Objectives of the Research</div>
+      <div class="cs">List your research objectives — they will appear verbatim in your paper. <strong style="color:rgba(255,255,255,.4)">Optional.</strong></div>
+      <div class="q-hint">💡 Start with "To examine / To analyse / To evaluate / To compare / To propose". One per line.</div>
+      <div class="fg"><label>Research Objectives <span style="color:var(--muted);font-weight:400">(optional — one per line)</span></label><textarea id="q-objectives" rows="6" placeholder="To examine existing international legal frameworks governing environmental restoration&#10;To analyse compensation mechanisms including liability and reparations&#10;To evaluate practical challenges such as political instability and resource constraints&#10;To compare legal approaches across different post-conflict contexts&#10;To propose recommendations for strengthening enforcement mechanisms"></textarea></div>
+      <div style="display:flex;gap:8px;justify-content:space-between">
+        <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="prevStep(3)">← Back</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-s" style="width:auto;padding:10px 16px" onclick="nextStep(3)">Skip →</button>
+          <button class="btn btn-p" style="width:auto;padding:10px 24px" onclick="nextStep(3)">Next →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 4: Statement -->
+    <div class="q-panel" id="qp-4">
+      <div class="q-badge">Step 5 of 6</div>
+      <div class="ct">Research Statement</div>
+      <div class="cs">Your thesis in 2–4 sentences. <strong style="color:rgba(255,255,255,.4)">Optional — AI will formulate one if you skip.</strong></div>
+      <div class="q-hint">💡 Name the topic, identify the method, and state the significance.</div>
+      <div class="fg"><label>Research Statement <span style="color:var(--muted);font-weight:400">(optional)</span></label><textarea id="q-statement" rows="4" placeholder="This study investigates legal frameworks governing environmental restoration in post-war reconstruction, focusing on obligations and compensation mechanisms. Through comparative doctrinal analysis and case studies from four post-conflict regions, this research identifies critical gaps and proposes actionable reforms to strengthen ecological restoration as a component of sustainable peace-building."></textarea></div>
+      <div style="display:flex;gap:8px;justify-content:space-between">
+        <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="prevStep(4)">← Back</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-s" style="width:auto;padding:10px 16px" onclick="nextStep(4)">Skip →</button>
+          <button class="btn btn-p" style="width:auto;padding:10px 24px" onclick="nextStep(4)">Next →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 5: Settings + Summary -->
+    <div class="q-panel" id="qp-5">
+      <div class="q-badge">Step 6 of 6</div>
+      <div class="ct">Paper Settings</div>
+      <div class="cs">Final details before generation.</div>
+      <div id="q-summary" class="q-summary" style="margin-bottom:16px"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="fg"><label>Author Name</label><input type="text" id="author-in" placeholder="Your name"></div>
+        <div class="fg"><label>Institution <span style="color:var(--muted);font-weight:400">(optional)</span></label><input type="text" id="inst-in" placeholder="University / Organisation"></div>
+      </div>
+      <div class="fg">
+        <label>Number of Figures — <span id="sl-display" style="color:#fff">6</span></label>
+        <input type="range" id="sl" min="3" max="15" value="6" style="width:100%;accent-color:#fff;background:transparent;border:none;padding:4px 0" oninput="document.getElementById('sl-display').textContent=this.value">
+      </div>
+      <div id="n-gen" class="notif"></div>
+      <button class="btn btn-p" id="btn-gen" onclick="generate()" style="margin-top:4px">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+        Generate Research Paper
+      </button>
+      <button class="btn btn-s" style="margin-top:8px" onclick="prevStep(5)">← Back</button>
+    </div>
+  </div>
+  <footer><div class="wrap">
+    <span class="footer-brand">rdxper v4.0</span>
+    <span class="footer-lawyers">An Interactive Lawyers Tool</span>
+    <span class="footer-tag">AI · Research · Law</span>
+  </div></footer>
+</div>
+
+<!-- ═══ PROGRESS ═══ -->
+<div class="screen" id="s-prog">
+  <div class="wrap flex-grow" style="padding-top:40px;max-width:600px">
+    <div class="eyebrow" style="text-align:center;margin-bottom:24px">Generating your paper</div>
+    <div id="prog-topic" style="font-size:15px;font-weight:700;text-align:center;margin-bottom:28px;letter-spacing:-.3px;color:rgba(255,255,255,.7)"></div>
+    <div class="prog-row"><span class="mono">Progress</span><span class="mono" id="prog-pct">0%</span></div>
+    <div class="prog-wrap"><div class="prog-fill" id="prog-fill" style="width:0%"></div></div>
+    <div class="stage-box">
+      <div class="spin"></div>
+      <div class="stage-msg" id="stage-msg">Initializing...</div>
+    </div>
+    <div class="sections-grid" id="sec-grid"></div>
+    <p style="font-size:11px;color:var(--muted);text-align:center;margin-top:16px;line-height:1.6">This typically takes 2–5 minutes.<br>Fetching real papers from Semantic Scholar, CrossRef & Wikipedia.</p>
+  </div>
+  <footer><div class="wrap">
+    <span class="footer-brand">rdxper v4.0</span>
+    <span class="footer-lawyers">An Interactive Lawyers Tool</span>
+    <span class="footer-tag">AI · Research · Law</span>
+  </div></footer>
+</div>
+
+<!-- ═══ DONE ═══ -->
+<div class="screen" id="s-done">
+  <div class="wrap flex-grow" style="padding-top:48px;max-width:520px;text-align:center">
+    <div class="done-mark">✓</div>
+    <h1 style="font-size:28px;margin-bottom:8px">Paper Ready</h1>
+    <p class="sub" style="margin:0 auto 28px">Your research paper has been generated successfully.</p>
+    <div class="card" style="text-align:left;margin-bottom:16px">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px;text-transform:uppercase;letter-spacing:.8px">Summary</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="card-sm"><div style="font-size:10px;color:var(--muted);margin-bottom:2px">Topic</div><div id="d-topic" style="font-size:12px;font-weight:700;line-height:1.3"></div></div>
+        <div class="card-sm"><div style="font-size:10px;color:var(--muted);margin-bottom:2px">Figures</div><div id="d-figs" style="font-size:12px;font-weight:700"></div></div>
+        <div class="card-sm" style="grid-column:1/-1"><div style="font-size:10px;color:var(--muted);margin-bottom:2px">Generated at</div><div id="d-time" style="font-size:12px;font-weight:700;font-family:monospace"></div></div>
+      </div>
+    </div>
+    <button class="btn btn-dl" id="btn-dl" onclick="download()" style="margin-bottom:10px">⬇ Download Research Paper (.docx)</button>
+    <button class="btn btn-s" onclick="again()">Generate Another Paper</button>
+  </div>
+  <footer><div class="wrap">
+    <span class="footer-brand">rdxper v4.0</span>
+    <span class="footer-lawyers">An Interactive Lawyers Tool</span>
+    <span class="footer-tag">AI · Research · Law</span>
+  </div></footer>
+</div>
+
+<!-- ═══ PROFILE ═══ -->
 <div class="screen" id="s-profile">
-  <div style="padding-top:28px">
+  <div class="wrap flex-grow" style="padding-top:8px">
+    <button class="btn btn-s" style="width:auto;padding:7px 14px;font-size:12px;margin:16px 0" onclick="show('s-dashboard')">← Dashboard</button>
     <div class="profile-header">
-      <img class="profile-avatar" id="prof-avatar" src=""
-        onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><circle cx=%2232%22 cy=%2232%22 r=%2232%22 fill=%22%23333%22/></svg>'">
+      <img class="profile-avatar" id="prof-avatar" src="" onerror="this.src=''" style="background:var(--s3)">
       <div>
-        <div style="font-size:20px;font-weight:700" id="prof-name">—</div>
-        <div style="font-size:13px;color:var(--muted);margin-top:3px" id="prof-email">—</div>
-        <div style="font-size:11px;color:var(--dim);margin-top:4px">Member since <span id="prof-since">—</span></div>
+        <div style="font-size:17px;font-weight:800;letter-spacing:-.3px" id="prof-name">—</div>
+        <div style="font-size:12px;color:var(--muted2);margin-top:2px" id="prof-email">—</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:4px;font-family:monospace">Member since <span id="prof-since">—</span></div>
       </div>
     </div>
     <div class="stat-grid">
-      <div class="stat-card"><div class="stat-val" id="prof-papers-count">0</div><div class="stat-lbl">Papers Generated</div></div>
+      <div class="stat-card"><div class="stat-val" id="prof-papers">0</div><div class="stat-lbl">Papers Generated</div></div>
       <div class="stat-card"><div class="stat-val" id="prof-spent">₹0</div><div class="stat-lbl">Total Spent</div></div>
-      <div class="stat-card"><div class="stat-val" id="prof-paid-count">0</div><div class="stat-lbl">Papers Downloaded</div></div>
     </div>
     <div class="table-wrap">
-      <div class="table-head">📄 Your Papers</div>
+      <div class="table-head">Recent Papers</div>
       <table><thead><tr><th>Topic</th><th>Date</th><th>Status</th></tr></thead>
-      <tbody id="prof-papers-list"><tr><td colspan="3" class="empty">Loading...</td></tr></tbody></table>
+      <tbody id="prof-papers-list"><tr><td colspan="3" style="text-align:center;color:var(--muted);padding:20px">Loading...</td></tr></tbody></table>
     </div>
-    <button class="btn btn-s" onclick="loadDashboard();show('s-dashboard')" style="max-width:180px">← Back</button>
+    <button class="btn btn-s" style="max-width:200px" onclick="logout()">Sign Out</button>
   </div>
+  <footer><div class="wrap">
+    <span class="footer-brand">rdxper v4.0</span>
+    <span class="footer-lawyers">An Interactive Lawyers Tool</span>
+    <span class="footer-tag">AI · Research · Law</span>
+  </div></footer>
 </div>
 
-<!-- ADMIN -->
+<!-- ═══ ADMIN ═══ -->
 <div class="screen" id="s-admin">
-  <div style="padding-top:28px">
-    <div class="page-title">⚙️ Admin Dashboard</div>
-    <div class="page-sub">All users, papers and payments</div>
+  <div class="wrap flex-grow" style="padding-top:8px">
+    <button class="btn btn-s" style="width:auto;padding:7px 14px;font-size:12px;margin:16px 0" onclick="show('s-dashboard')">← Dashboard</button>
+    <div class="page-title">Admin Panel</div>
+    <div class="page-sub">Platform overview</div>
     <div class="stat-grid">
-      <div class="stat-card"><div class="stat-val" id="adm-users-c">—</div><div class="stat-lbl">Total Users</div></div>
-      <div class="stat-card"><div class="stat-val" id="adm-papers-c">—</div><div class="stat-lbl">Papers Generated</div></div>
-      <div class="stat-card"><div class="stat-val" id="adm-revenue-c">—</div><div class="stat-lbl">Total Revenue</div></div>
-      <div class="stat-card"><div class="stat-val" id="adm-paid-c">—</div><div class="stat-lbl">Paid Downloads</div></div>
+      <div class="stat-card"><div class="stat-val" id="adm-users">—</div><div class="stat-lbl">Total Users</div></div>
+      <div class="stat-card"><div class="stat-val" id="adm-papers">—</div><div class="stat-lbl">Papers Generated</div></div>
+      <div class="stat-card"><div class="stat-val" id="adm-revenue">—</div><div class="stat-lbl">Revenue (₹)</div></div>
+      <div class="stat-card"><div class="stat-val" id="adm-paid">—</div><div class="stat-lbl">Paid Papers</div></div>
     </div>
     <div class="tabs">
-      <button class="tab active" onclick="admTab('users',this)">👥 Users</button>
-      <button class="tab" onclick="admTab('papers',this)">📄 Papers</button>
-      <button class="tab" onclick="admTab('payments',this)">💳 Payments</button>
+      <button class="tab active" onclick="admTab('users',this)">Users</button>
+      <button class="tab" onclick="admTab('papers',this)">Papers</button>
+      <button class="tab" onclick="admTab('payments',this)">Payments</button>
     </div>
     <div id="adm-tab-users">
       <div class="table-wrap"><table><thead><tr><th></th><th>Name</th><th>Email</th><th>Joined</th><th>Last Login</th></tr></thead>
@@ -1953,66 +1980,55 @@ textarea::placeholder{color:var(--dim);font-size:12px}
       <div class="table-wrap"><table><thead><tr><th>User</th><th>Amount</th><th>Payment ID</th><th>Date</th><th>Status</th></tr></thead>
       <tbody id="adm-payments-list"></tbody></table></div>
     </div>
-    <button class="btn btn-s" onclick="loadDashboard();show('s-dashboard')" style="max-width:180px;margin-top:12px">← Back</button>
   </div>
-</div>
-
-<footer></footer>
+  <footer><div class="wrap">
+    <span class="footer-brand">rdxper v4.0</span>
+    <span class="footer-lawyers">An Interactive Lawyers Tool</span>
+    <span class="footer-tag">AI · Research · Law</span>
+  </div></footer>
 </div>
 
 <script>
-const SECS=['keywords','abstract','introduction','objectives','literature_review','methodology','results','discussion','suggestions','limitations','conclusion'];
-let token='',userEmail='',userName='',userPicture='',jobId='',curTopic='',curFigs=6,poll=null;
-const ADMIN_EM='__ADMIN_EMAIL__';
 const G_CLIENT='__GOOGLE_CLIENT_ID__';
+const ADMIN_EM='__ADMIN_EMAIL__';
+let token='',userEmail='',userName='',userPicture='',jobId='',curTopic='',curFigs=6,poll=null;
+const SECS=['keywords','abstract','introduction','objectives','literature_review','methodology','results','discussion','suggestions','limitations','conclusion','charts'];
 
-// Restore session
-(async function(){
+// ── Restore session ───────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded',()=>{
   try{
-    const t=localStorage.getItem('rx_tok'),e=localStorage.getItem('rx_em'),
-          n=localStorage.getItem('rx_nm'),p=localStorage.getItem('rx_pic');
-    if(t&&e){
-      // Validate token is still alive on the server before showing dashboard
-      const r=await fetch('/api/profile',{headers:{'Authorization':'Bearer '+t}});
-      if(r.ok){
-        token=t;userEmail=e;userName=n||'';userPicture=p||'';onLoggedIn();
-      } else {
-        // Token expired or server restarted — clear stale data
-        ['rx_tok','rx_em','rx_nm','rx_pic'].forEach(k=>localStorage.removeItem(k));
-      }
-    }
+    token=localStorage.getItem('rx_tok')||'';
+    userEmail=localStorage.getItem('rx_em')||'';
+    userName=localStorage.getItem('rx_nm')||'';
+    userPicture=localStorage.getItem('rx_pic')||'';
   }catch(e){}
-})();
+  if(token){
+    fetch('/api/profile',{headers:{'Authorization':'Bearer '+token}}).then(r=>{
+      if(r.status===401){forceLogout();initGoogle();return;}
+      return r.json();
+    }).then(d=>{
+      if(d&&d.success){onLoggedIn();}else{forceLogout();initGoogle();}
+    }).catch(()=>initGoogle());
+  }else{initGoogle();}
 
-// Google Sign-In init
-window.addEventListener('load',function(){
-  if(!G_CLIENT){
-    // Dev mode: show simple login form instead of Google button
-    document.getElementById('g-btn-wrap').innerHTML=`
-      <div style="width:100%">
-        <div style="background:rgba(255,200,0,.1);border:1px solid rgba(255,200,0,.3);border-radius:8px;padding:10px 14px;font-size:12px;color:#ffd700;margin-bottom:14px;text-align:center">
-          🛠️ Local / Dev Mode — Google Sign-In not configured
-        </div>
-        <div class="fg" style="margin-bottom:10px">
-          <label style="font-size:12px">Your Name</label>
-          <input type="text" id="dev-name" placeholder="e.g. Rakunatha Khrishanth" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);width:100%;font-size:13px;outline:none">
-        </div>
-        <div class="fg" style="margin-bottom:14px">
-          <label style="font-size:12px">Your Email</label>
-          <input type="email" id="dev-email" placeholder="e.g. you@email.com" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);width:100%;font-size:13px;outline:none">
-        </div>
-        <button class="btn btn-p" onclick="devLogin()" style="width:100%">Continue →</button>
-      </div>`;
-    return;
+  // Show dev auth if no Google client ID
+  if(!G_CLIENT||G_CLIENT===''){
+    const w=document.getElementById('dev-auth-wrap');if(w)w.style.display='block';
   }
+});
+
+function initGoogle(){
+  if(!G_CLIENT||G_CLIENT==='') return;
   function tryInit(){
     if(window.google&&google.accounts){
       google.accounts.id.initialize({client_id:G_CLIENT,callback:handleGoogle,auto_select:false});
-      const gWrap=document.getElementById('g-btn-wrap');const gW=Math.min(376,gWrap.offsetWidth||376);google.accounts.id.renderButton(gWrap,{theme:'outline',size:'large',width:gW,text:'continue_with',shape:'rectangular'});
-    } else { setTimeout(tryInit,300); }
+      const gWrap=document.getElementById('g-btn-wrap');
+      const gW=Math.min(360,gWrap.offsetWidth||360);
+      google.accounts.id.renderButton(gWrap,{theme:'outline',size:'large',width:gW,text:'continue_with',shape:'rectangular'});
+    }else{setTimeout(tryInit,300);}
   }
   tryInit();
-});
+}
 
 async function handleGoogle(resp){
   const n=document.getElementById('n-login');
@@ -2022,26 +2038,23 @@ async function handleGoogle(resp){
     const d=await r.json();
     if(!d.success){n.className='notif error show';n.textContent=d.message||'Sign in failed';return;}
     token=d.token;userEmail=d.email;userName=d.name;userPicture=d.picture;
-    try{localStorage.setItem('rx_tok',token);localStorage.setItem('rx_em',userEmail);
-        localStorage.setItem('rx_nm',userName);localStorage.setItem('rx_pic',userPicture);}catch(e){}
+    try{localStorage.setItem('rx_tok',token);localStorage.setItem('rx_em',userEmail);localStorage.setItem('rx_nm',userName);localStorage.setItem('rx_pic',userPicture);}catch(e){}
     onLoggedIn();
   }catch(e){n.className='notif error show';n.textContent='Connection error. Try again.';}
 }
 
 async function devLogin(){
-  const name  = (document.getElementById('dev-name')||{value:''}).value.trim();
-  const email = (document.getElementById('dev-email')||{value:''}).value.trim();
-  if(!email){ alert('Please enter your email to continue.'); return; }
+  const name=(document.getElementById('dev-name')||{value:''}).value.trim();
+  const email=(document.getElementById('dev-email')||{value:''}).value.trim();
+  if(!email){alert('Please enter your email to continue.');return;}
   const n=document.getElementById('n-login');
-  n.className='notif info show'; n.textContent='Signing in...';
+  n.className='notif info show';n.textContent='Signing in...';
   try{
-    const r=await fetch('/api/auth/dev',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({name:name||email.split('@')[0], email})});
+    const r=await fetch('/api/auth/dev',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name||email.split('@')[0],email})});
     const d=await r.json();
     if(!d.success){n.className='notif error show';n.textContent=d.message||'Sign in failed';return;}
     token=d.token;userEmail=d.email;userName=d.name;userPicture='';
-    try{localStorage.setItem('rx_tok',token);localStorage.setItem('rx_em',userEmail);
-        localStorage.setItem('rx_nm',userName);localStorage.setItem('rx_pic','');}catch(e){}
+    try{localStorage.setItem('rx_tok',token);localStorage.setItem('rx_em',userEmail);localStorage.setItem('rx_nm',userName);localStorage.setItem('rx_pic','');}catch(e){}
     onLoggedIn();
   }catch(e){n.className='notif error show';n.textContent='Connection error. Try again.';}
 }
@@ -2054,8 +2067,7 @@ function onLoggedIn(){
   if(userEmail===ADMIN_EM) document.getElementById('admin-link').style.display='block';
   const aIn=document.getElementById('author-in');
   if(aIn&&!aIn.value) aIn.value=userName||'';
-  loadDashboard();
-  show('s-dashboard');
+  loadDashboard();show('s-dashboard');
 }
 
 async function loadDashboard(){
@@ -2069,18 +2081,14 @@ async function loadDashboard(){
     const papers=d.papers||[];
     const wrap=document.getElementById('dash-papers-wrap');
     if(papers.length===0){
-      wrap.innerHTML=`<div class="dash-empty">
-        <div class="dash-empty-icon">📄</div>
-        <div class="dash-empty-txt">No papers yet</div>
-        <div class="dash-empty-sub">Press <strong style="color:#fff">+</strong> below to generate your first research paper</div>
-      </div>`;
-    } else {
+      wrap.innerHTML=`<div class="dash-empty"><div class="dash-empty-icon">📄</div><div class="dash-empty-txt">No papers yet</div><div class="dash-empty-sub">Press <strong style="color:#fff">+</strong> below to generate your first research paper</div></div>`;
+    }else{
       wrap.innerHTML='<div class="papers-grid">'+papers.map(p=>`
         <div class="paper-card">
           <div class="paper-card-topic">${escHtml(p.topic||'Untitled')}</div>
           <div class="paper-card-meta">
             <span class="paper-card-date">${(p.created_at||'').slice(0,10)}</span>
-            <span class="paper-card-badge ${p.file_path?'badge-done':'badge-pending'}">${p.file_path?'✓ Done':'Pending'}</span>
+            <span class="badge ${p.file_path?'badge-done':'badge-pending'}">${p.file_path?'✓ Done':'Pending'}</span>
           </div>
         </div>`).join('')+'</div>';
     }
@@ -2099,114 +2107,65 @@ function forceLogout(){
 function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
 function startNewPaper(){
-  // Reset questionnaire state then navigate
-  ['topic-in','inst-in','q-problem','q-lit','q-gap','q-objectives','q-statement'].forEach(id=>{
-    const el=document.getElementById(id);if(el) el.value='';
-  });
-  const aIn=document.getElementById('author-in');
-  if(aIn) aIn.value=userName||'';
-  goStep(0);
-  show('s-gen');
+  ['topic-in','inst-in','q-problem','q-lit','q-gap','q-objectives','q-statement'].forEach(id=>{const el=document.getElementById(id);if(el) el.value='';});
+  const aIn=document.getElementById('author-in');if(aIn) aIn.value=userName||'';
+  goStep(0);show('s-gen');
 }
 
-function show(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');window.scrollTo({top:0,behavior:'smooth'});}
+function show(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  window.scrollTo({top:0,behavior:'smooth'});
+}
 function notify(id,msg,type){const e=document.getElementById(id);e.textContent=msg;e.className='notif '+type+' show';if(type!=='error')setTimeout(()=>e.classList.remove('show'),6000);}
+function logout(){token='';userEmail='';userName='';userPicture='';try{['rx_tok','rx_em','rx_nm','rx_pic'].forEach(k=>localStorage.removeItem(k));}catch(e){}document.getElementById('nav-auth').style.display='none';document.getElementById('admin-link').style.display='none';try{google.accounts.id.disableAutoSelect();}catch(e){}show('s-home');}
 
-function logout(){
-  token='';userEmail='';userName='';userPicture='';
-  try{['rx_tok','rx_em','rx_nm','rx_pic'].forEach(k=>localStorage.removeItem(k));}catch(e){}
-  document.getElementById('nav-auth').style.display='none';
-  document.getElementById('admin-link').style.display='none';
-  try{google.accounts.id.disableAutoSelect();}catch(e){}
-  show('s-home');
-}
-
-// ── QUESTIONNAIRE NAVIGATION ────────────────────────────────────────────────
-let currentStep = 0;
-const totalSteps = 6;
-
-function goStep(n){
-  // Only allow going back to completed steps
-  if(n > currentStep) return;
-  currentStep = n;
-  renderStep();
-}
-
+// ── Questionnaire nav ─────────────────────────────────────────────────────────
+let currentStep=0;const totalSteps=6;
+function goStep(n){if(n>currentStep)return;currentStep=n;renderStep();}
 function nextStep(from){
-  // Only validate the topic (required), everything else is optional
-  if(from===0 && !document.getElementById('topic-in').value.trim()){
-    alert('Please enter your research topic — this is the only required field.'); return;
-  }
-  currentStep = from + 1;
-  if(currentStep === 5) buildSummary();
-  renderStep();
+  if(from===0&&!document.getElementById('topic-in').value.trim()){alert('Please enter your research topic — this is the only required field.');return;}
+  currentStep=from+1;if(currentStep===5)buildSummary();renderStep();
 }
-
-function prevStep(from){
-  currentStep = from - 1;
-  renderStep();
-}
-
+function prevStep(from){currentStep=from-1;renderStep();}
 function renderStep(){
   for(let i=0;i<totalSteps;i++){
-    const panel = document.getElementById('qp-'+i);
-    const step  = document.getElementById('qs-'+i);
-    if(!panel||!step) continue;
-    panel.classList.toggle('active', i===currentStep);
+    const panel=document.getElementById('qp-'+i);const step=document.getElementById('qs-'+i);
+    if(!panel||!step)continue;
+    panel.classList.toggle('active',i===currentStep);
     step.classList.remove('active','done');
-    if(i===currentStep) step.classList.add('active');
-    else if(i<currentStep) step.classList.add('done');
-    // Update connector lines
-    const lines = document.querySelectorAll('.q-line');
-    lines.forEach((l,li)=>{ l.classList.toggle('done', li < currentStep); });
+    if(i===currentStep)step.classList.add('active');
+    else if(i<currentStep)step.classList.add('done');
+    const lines=document.querySelectorAll('.q-line');
+    lines.forEach((l,li)=>{l.classList.toggle('done',li<currentStep);});
   }
   window.scrollTo({top:0,behavior:'smooth'});
 }
-
 function buildSummary(){
-  const items = [
-    {label:'Problem Identified', id:'q-problem'},
-    {label:'Literature Reviewed', id:'q-lit'},
-    {label:'Research Gap', id:'q-gap'},
-    {label:'Objectives', id:'q-objectives'},
-    {label:'Research Statement', id:'q-statement'},
-  ];
-  const s = document.getElementById('q-summary');
-  if(!s) return;
-  s.innerHTML = '<div style="font-size:13px;font-weight:700;margin-bottom:12px;color:var(--text)">📋 Your Research Inputs</div>' +
-    items.map(item=>{
-      const val = (document.getElementById(item.id)||{}).value||'';
-      const preview = val.length > 120 ? val.slice(0,120)+'...' : val;
-      return `<div class="q-summary-item">
-        <div class="q-summary-label">${item.label}</div>
-        <div class="q-summary-val">${preview||'<span style="color:var(--dim)">Not filled</span>'}</div>
-      </div>`;
-    }).join('');
+  const items=[{label:'Problem Identified',id:'q-problem'},{label:'Literature Reviewed',id:'q-lit'},{label:'Research Gap',id:'q-gap'},{label:'Objectives',id:'q-objectives'},{label:'Research Statement',id:'q-statement'}];
+  const s=document.getElementById('q-summary');if(!s)return;
+  s.innerHTML='<div style="font-size:11px;font-weight:700;margin-bottom:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:.8px">Your Research Inputs</div>'+
+    items.map(item=>{const val=(document.getElementById(item.id)||{}).value||'';const preview=val.length>100?val.slice(0,100)+'...':val;
+      return `<div class="q-summary-item"><div class="q-summary-label">${item.label}</div><div class="q-summary-val">${preview||'<span style="color:var(--muted)">Not filled</span>'}</div></div>`;}).join('');
 }
 
+// ── Generate ──────────────────────────────────────────────────────────────────
 async function generate(){
-  const topic  = document.getElementById('topic-in').value.trim();
-  const author = document.getElementById('author-in').value.trim();
-  const inst   = document.getElementById('inst-in').value.trim();
-  const nfigs  = parseInt(document.getElementById('sl').value);
-  const qProblem    = document.getElementById('q-problem').value.trim();
-  const qLit        = document.getElementById('q-lit').value.trim();
-  const qGap        = document.getElementById('q-gap').value.trim();
-  const qObjectives = document.getElementById('q-objectives').value.trim();
-  const qStatement  = document.getElementById('q-statement').value.trim();
-
+  const topic=document.getElementById('topic-in').value.trim();
+  const author=document.getElementById('author-in').value.trim();
+  const inst=document.getElementById('inst-in').value.trim();
+  const nfigs=parseInt(document.getElementById('sl').value);
+  const qProblem=document.getElementById('q-problem').value.trim();
+  const qLit=document.getElementById('q-lit').value.trim();
+  const qGap=document.getElementById('q-gap').value.trim();
+  const qObjectives=document.getElementById('q-objectives').value.trim();
+  const qStatement=document.getElementById('q-statement').value.trim();
   if(!topic){notify('n-gen','Please enter a research topic.','error');return;}
-
   const btn=document.getElementById('btn-gen');
-  btn.disabled=true;btn.innerHTML='<span class="spin"></span>Generating...';
+  btn.disabled=true;btn.innerHTML='<span class="spin"></span> Generating...';
   try{
-    const r=await fetch('/api/generate',{method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
-      body:JSON.stringify({
-        topic, author_name:author, institution:inst, num_figures:nfigs,
-        q_problem:qProblem, q_lit:qLit, q_gap:qGap,
-        q_objectives:qObjectives, q_statement:qStatement
-      })});
+    const r=await fetch('/api/generate',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+      body:JSON.stringify({topic,author_name:author,institution:inst,num_figures:nfigs,q_problem:qProblem,q_lit:qLit,q_gap:qGap,q_objectives:qObjectives,q_statement:qStatement})});
     const d=await r.json();
     if(r.status===401){btn.disabled=false;btn.innerHTML='Generate Research Paper';forceLogout();return;}
     if(!d.success){notify('n-gen',d.message||'Failed.','error');btn.disabled=false;btn.innerHTML='Generate Research Paper';return;}
@@ -2220,7 +2179,6 @@ function buildSecGrid(){
   const g=document.getElementById('sec-grid');g.innerHTML='';
   SECS.forEach(s=>{const d=document.createElement('div');d.className='sec-item';d.id='sec-'+s;d.textContent=s.replace('_',' ');g.appendChild(d);});
 }
-
 function updateSecs(pct){
   const idx=Math.floor((Math.max(0,pct-30))/45*SECS.length);
   SECS.forEach((s,i)=>{const el=document.getElementById('sec-'+s);if(!el)return;
@@ -2232,10 +2190,12 @@ function pollStatus(){
     try{
       const r=await fetch('/api/status/'+jobId,{headers:{'Authorization':'Bearer '+token}});
       const d=await r.json();if(!d.success)return;
-      document.getElementById('prog-fill').style.width=d.progress+'%';
-      document.getElementById('prog-pct').textContent=d.progress+'%';
+      if(d.progress!=null){
+        document.getElementById('prog-fill').style.width=d.progress+'%';
+        document.getElementById('prog-pct').textContent=d.progress+'%';
+        updateSecs(d.progress);
+      }
       document.getElementById('stage-msg').textContent=d.message;
-      updateSecs(d.progress);
       if(d.status==='done'){
         clearInterval(poll);
         SECS.forEach(s=>{const e=document.getElementById('sec-'+s);if(e)e.className='sec-item done';});
@@ -2245,7 +2205,7 @@ function pollStatus(){
         show('s-done');
       }else if(d.status==='error'){
         clearInterval(poll);
-        const btn=document.getElementById('btn-gen');btn.disabled=false;btn.innerHTML='✦ Generate Paper (Free AI)';
+        const btn=document.getElementById('btn-gen');btn.disabled=false;btn.innerHTML='Generate Research Paper';
         alert('Generation failed: '+d.message);show('s-gen');
       }
     }catch(e){console.error(e);}
@@ -2253,7 +2213,7 @@ function pollStatus(){
 }
 
 async function download(){
-  const btn=document.getElementById('btn-dl');btn.disabled=true;btn.innerHTML='<span class="spin"></span>Downloading...';
+  const btn=document.getElementById('btn-dl');btn.disabled=true;btn.innerHTML='<span class="spin"></span> Downloading...';
   try{
     const r=await fetch('/api/download/'+jobId,{headers:{'Authorization':'Bearer '+token}});
     if(!r.ok)throw new Error('failed');
@@ -2265,16 +2225,11 @@ async function download(){
 
 function again(){
   jobId='';curTopic='';
-  ['topic-in','inst-in','q-problem','q-lit','q-gap','q-objectives','q-statement'].forEach(id=>{
-    const el=document.getElementById(id);if(el) el.value='';
-  });
+  ['topic-in','inst-in','q-problem','q-lit','q-gap','q-objectives','q-statement'].forEach(id=>{const el=document.getElementById(id);if(el) el.value='';});
   document.getElementById('sl').value=6;document.getElementById('sl-display').textContent='6';
-  const btn=document.getElementById('btn-gen');
-  if(btn){btn.disabled=false;btn.innerHTML='✦ Generate Research Paper';}
+  const btn=document.getElementById('btn-gen');if(btn){btn.disabled=false;btn.innerHTML='Generate Research Paper';}
   document.getElementById('n-gen').classList.remove('show');
-  currentStep=0;renderStep();
-  loadDashboard();
-  show('s-dashboard');
+  currentStep=0;renderStep();loadDashboard();show('s-dashboard');
 }
 
 async function showProfile(){
@@ -2287,17 +2242,11 @@ async function showProfile(){
     document.getElementById('prof-name').textContent=u.name||u.email;
     document.getElementById('prof-email').textContent=u.email;
     document.getElementById('prof-since').textContent=(u.created_at||'').split('T')[0]||u.created_at||'—';
-    document.getElementById('prof-papers-count').textContent=d.papers_count;
-    document.getElementById('prof-spent').textContent='₹'+d.total_spent;
-    document.getElementById('prof-paid-count').textContent=d.papers.filter(p=>p.paid).length;
-    const tb=document.getElementById('prof-papers-list');
-    tb.innerHTML=d.papers.length===0
-      ?'<tr><td colspan="3" class="empty">No papers yet. Generate your first one!</td></tr>'
-      :d.papers.map(p=>`<tr>
-        <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${p.topic||''}">${p.topic||'—'}</td>
-        <td style="white-space:nowrap">${(p.created_at||'').split('T')[0]||'—'}</td>
-        <td>${p.paid?'<span class="badge-paid">✓ Downloaded</span>':'<span class="badge-free">Generated</span>'}</td>
-      </tr>`).join('');
+    document.getElementById('prof-papers').textContent=d.papers_count||0;
+    document.getElementById('prof-spent').textContent='₹'+(d.total_spent||0);
+    const list=document.getElementById('prof-papers-list');
+    list.innerHTML=d.papers.length===0?'<tr><td colspan="3" style="text-align:center;color:var(--muted);padding:20px">No papers yet.</td></tr>':
+      d.papers.map(p=>`<tr><td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(p.topic||'—')}</td><td style="font-family:monospace">${(p.created_at||'').split('T')[0]||'—'}</td><td><span class="badge ${p.file_path?'badge-done':'badge-pending'}">${p.file_path?'Done':'Pending'}</span></td></tr>`).join('');
   }catch(e){console.error(e);}
 }
 
@@ -2305,45 +2254,23 @@ async function showAdmin(){
   show('s-admin');
   try{
     const r=await fetch('/api/admin/stats',{headers:{'Authorization':'Bearer '+token}});
-    const d=await r.json();
-    if(!d.success){alert('Access denied');show('s-gen');return;}
-    document.getElementById('adm-users-c').textContent=d.stats.total_users;
-    document.getElementById('adm-papers-c').textContent=d.stats.total_papers;
-    document.getElementById('adm-revenue-c').textContent='₹'+d.stats.total_revenue;
-    document.getElementById('adm-paid-c').textContent=d.stats.paid_papers;
-    document.getElementById('adm-users-list').innerHTML=d.users.length===0
-      ?'<tr><td colspan="5" class="empty">No users yet.</td></tr>'
-      :d.users.map(u=>`<tr>
-        <td><img class="avatar" src="${u.picture||''}" onerror="this.style.display='none'"></td>
-        <td>${u.name||'—'}</td><td>${u.email}</td>
-        <td>${(u.created_at||'').split('T')[0]||'—'}</td>
-        <td>${(u.last_login||'').split('T')[0]||'—'}</td>
-      </tr>`).join('');
-    document.getElementById('adm-papers-list').innerHTML=d.papers.length===0
-      ?'<tr><td colspan="4" class="empty">No papers yet.</td></tr>'
-      :d.papers.map(p=>`<tr>
-        <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.topic||'—'}</td>
-        <td>${p.email||'—'}</td>
-        <td>${(p.created_at||'').split('T')[0]||'—'}</td>
-        <td>${p.paid?'<span class="badge-paid">✓ Paid</span>':'<span class="badge-pending">Pending</span>'}</td>
-      </tr>`).join('');
-    document.getElementById('adm-payments-list').innerHTML=d.payments.length===0
-      ?'<tr><td colspan="5" class="empty">No payments yet.</td></tr>'
-      :d.payments.map(p=>`<tr>
-        <td>${p.email||'—'}</td>
-        <td style="color:#fff;font-weight:700">₹${p.amount||0}</td>
-        <td style="font-family:monospace;font-size:11px">${(p.razorpay_payment||'—').slice(0,24)}</td>
-        <td>${(p.created_at||'').split('T')[0]||'—'}</td>
-        <td><span class="badge-${p.status==='paid'?'paid':'pending'}">${p.status}</span></td>
-      </tr>`).join('');
+    const d=await r.json();if(!d.success)return;
+    document.getElementById('adm-users').textContent=d.stats.total_users;
+    document.getElementById('adm-papers').textContent=d.stats.total_papers;
+    document.getElementById('adm-revenue').textContent='₹'+d.stats.total_revenue;
+    document.getElementById('adm-paid').textContent=d.stats.paid_papers;
+    document.getElementById('adm-users-list').innerHTML=d.users.length===0?'<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:20px">No users yet.</td></tr>':
+      d.users.map(u=>`<tr><td><img class="avatar" src="${u.picture||''}" onerror="this.style.display='none'"></td><td>${u.name||'—'}</td><td>${u.email}</td><td style="font-family:monospace">${(u.created_at||'').split('T')[0]||'—'}</td><td style="font-family:monospace">${(u.last_login||'').split('T')[0]||'—'}</td></tr>`).join('');
+    document.getElementById('adm-papers-list').innerHTML=d.papers.length===0?'<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:20px">No papers yet.</td></tr>':
+      d.papers.map(p=>`<tr><td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.topic||'—'}</td><td>${p.email||'—'}</td><td style="font-family:monospace">${(p.created_at||'').split('T')[0]||'—'}</td><td>${p.paid?'<span class="badge badge-paid">✓ Paid</span>':'<span class="badge badge-pending">Pending</span>'}</td></tr>`).join('');
+    document.getElementById('adm-payments-list').innerHTML=d.payments.length===0?'<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:20px">No payments yet.</td></tr>':
+      d.payments.map(p=>`<tr><td>${p.email||'—'}</td><td style="font-weight:700">₹${p.amount||0}</td><td style="font-family:monospace;font-size:11px">${(p.razorpay_payment||'—').slice(0,22)}</td><td style="font-family:monospace">${(p.created_at||'').split('T')[0]||'—'}</td><td><span class="badge badge-${p.status==='paid'?'paid':'pending'}">${p.status}</span></td></tr>`).join('');
   }catch(e){console.error(e);}
 }
 
 function admTab(name,el){
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));el.classList.add('active');
-  ['users','papers','payments'].forEach(t=>{
-    const d=document.getElementById('adm-tab-'+t);if(d)d.style.display=t===name?'block':'none';
-  });
+  ['users','papers','payments'].forEach(t=>{const d=document.getElementById('adm-tab-'+t);if(d)d.style.display=t===name?'block':'none';});
 }
 </script>
 </body>
