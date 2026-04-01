@@ -637,7 +637,11 @@ class GeminiWriter:
 
         s1 = ['keywords', 'abstract', 'introduction', 'objectives']
         def prog1(pct, msg):
-            if progress_cb: progress_cb(max(30, min(50, 30 + int((pct-30)/45*20))), msg)
+            if progress_cb:
+                if pct is None:
+                    progress_cb(None, msg)
+                else:
+                    progress_cb(max(30, min(50, 30 + int((pct-30)/45*20))), msg)
         raw1 = ai_generate(p1, system=SYSTEM_PROMPT, temperature=0.7,
                            progress_cb=prog1, tracked_sections=s1)
 
@@ -670,7 +674,11 @@ class GeminiWriter:
 
         s2 = ['literature_review', 'methodology']
         def prog2(pct, msg):
-            if progress_cb: progress_cb(max(52, min(68, 52 + int((pct-30)/45*16))), msg)
+            if progress_cb:
+                if pct is None:
+                    progress_cb(None, msg)
+                else:
+                    progress_cb(max(52, min(68, 52 + int((pct-30)/45*16))), msg)
         raw2 = ai_generate(p2, system=SYSTEM_PROMPT, temperature=0.7,
                            progress_cb=prog2, tracked_sections=s2)
 
@@ -703,7 +711,11 @@ class GeminiWriter:
 
         s3 = ['results', 'discussion', 'suggestions', 'limitations', 'conclusion', 'charts']
         def prog3(pct, msg):
-            if progress_cb: progress_cb(max(70, min(75, 70 + int((pct-30)/45*5))), msg)
+            if progress_cb:
+                if pct is None:
+                    progress_cb(None, msg)
+                else:
+                    progress_cb(max(70, min(75, 70 + int((pct-30)/45*5))), msg)
         raw3 = ai_generate(p3, system=SYSTEM_PROMPT, temperature=0.7,
                            progress_cb=prog3, tracked_sections=s3)
 
@@ -1375,8 +1387,11 @@ class PaperGenerator:
         self.jid  = jid
         self.jobs = jobs_ref
 
-    def prog(self, pct: int, msg: str):
-        self.jobs[self.jid].update({'progress': pct, 'message': msg, 'status': 'running'})
+    def prog(self, pct, msg: str):
+        if pct is not None:
+            self.jobs[self.jid].update({'progress': pct, 'message': msg, 'status': 'running'})
+        else:
+            self.jobs[self.jid].update({'message': msg, 'status': 'running'})
         print(f'[{self.jid[:8]}] {pct}% – {msg}')
 
     def generate(self, topic: str, nfigs: int, author: str, inst: str, email: str, questionnaire: dict = None) -> str:
