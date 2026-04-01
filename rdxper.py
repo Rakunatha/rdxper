@@ -691,12 +691,17 @@ class GeminiWriter:
         s3 = ['results', 'discussion', 'suggestions', 'limitations', 'conclusion', 'charts']
         _results = {}
 
+        # Gemini has 1M TPM free — no staggering needed at all.
+        # Groq has 6k TPM — small stagger reduces rate-limit risk.
+        stagger2 = 0 if provider == "gemini" else 1
+        stagger3 = 0 if provider == "gemini" else 2
+
         def _run2():
             def prog2(pct, msg):
                 if progress_cb:
                     if pct is None: progress_cb(None, msg)
                     else: progress_cb(max(52, min(68, 52 + int((pct-30)/45*16))), msg)
-            time.sleep(1)   # minimal stagger so API sees two distinct requests
+            if stagger2: time.sleep(stagger2)
             if progress_cb: progress_cb(52, f'{pname} writing literature review & methodology...')
             _results['raw2'] = ai_generate(p2, system=SYSTEM_PROMPT, temperature=0.7,
                                            progress_cb=prog2, tracked_sections=s2)
@@ -706,7 +711,7 @@ class GeminiWriter:
                 if progress_cb:
                     if pct is None: progress_cb(None, msg)
                     else: progress_cb(max(55, min(75, 55 + int((pct-30)/45*20))), msg)
-            time.sleep(2)   # minimal stagger so API tokens are spread
+            if stagger3: time.sleep(stagger3)
             if progress_cb: progress_cb(55, f'{pname} writing results, discussion & conclusion...')
             _results['raw3'] = ai_generate(p3, system=SYSTEM_PROMPT, temperature=0.7,
                                            progress_cb=prog3, tracked_sections=s3)
