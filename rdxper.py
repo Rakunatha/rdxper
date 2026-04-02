@@ -5,12 +5,14 @@ Pipeline:
   1. Semantic Scholar API  → real papers (titles, abstracts, citations, DOIs)
   2. CrossRef API          → additional verified journal articles
   3. Wikipedia REST API    → background context & definitions
-  4. OpenRouter (FREE)     → writes ALL prose sections using scraped data as context
+  4. Groq (FREE) / Gemini  → writes ALL prose sections using scraped data as context
   5. python-docx           → assembles formatted .docx with SPSS-style charts
 
-AI Provider:
-  OpenRouter (free tier) — https://openrouter.ai/keys
-  set OPENROUTER_API_KEY=your_key_here
+Free AI Provider Options (in priority order):
+  1. Groq  (FREE - https://console.groq.com/keys)
+     set GROQ_API_KEY=your_key_here
+  2. Google Gemini (free tier - https://aistudio.google.com/app/apikey)
+     set GEMINI_API_KEY=your_key_here
 
 Usage:
   python rdxper.py
@@ -126,7 +128,7 @@ def session_delete(token: str):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  FREE AI CLIENT  (OpenRouter — free tier, auto-fallback across models)
+#  FREE AI CLIENT  (Groq primary, Gemini fallback)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Ordered sections — used to map closing tags → progress %
@@ -152,127 +154,169 @@ SECTION_LABELS = {
 _AI_START = 30
 _AI_END   = 75
 
-# Free models tried in order — moves to next on 429/quota/empty response
-_OPENROUTER_FREE_MODELS = [
-    "deepseek/deepseek-chat-v3-0324:free",
-    "meta-llama/llama-4-maverick:free",
-    "meta-llama/llama-4-scout:free",
-    "google/gemini-2.0-flash-exp:free",
-    "mistralai/mistral-small-3.1-24b-instruct:free",
-    "qwen/qwen3-8b:free",
-]
+
+def _detect_provider():
+    """Auto-detect which free AI provider to use. Gemini is preferred (no TPM cap)."""
+    if os.environ.get("GEMINI_API_KEY", "").strip():
+        return "gemini"
+    if os.environ.get("GROQ_API_KEY", "").strip():
+        return "groq"
+    return None
 
 
-def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
-                progress_cb=None, tracked_sections=None) -> str:
+def _groq_generate(prompt: str, system: str, temperature: float,
+                   progress_cb=None, tracked_sections=None) -> str:
     """
-    Call OpenRouter using its OpenAI-compatible SSE streaming endpoint.
-    Automatically falls back through free models on 429 / quota / empty responses.
-    Requires OPENROUTER_API_KEY environment variable.
-    Get a free key at: https://openrouter.ai/keys
+    Call Groq API (free tier — llama-3.3-70b-versatile).
+    Groq uses OpenAI-compatible REST API with SSE streaming.
     """
-    import http.client, ssl
-
-    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError(
-            "OPENROUTER_API_KEY not set. Get a free key at https://openrouter.ai/keys"
-        )
+    api_key = os.environ.get("GROQ_API_KEY", "").strip()
+    model   = "llama-3.3-70b-versatile"   # free on Groq
 
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
-    watch      = tracked_sections if tracked_sections is not None else SECTION_ORDER
-    last_error = None
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": 32768,
+        "stream": True,
+    }
+    body = json.dumps(payload).encode("utf-8")
 
-    for model in _OPENROUTER_FREE_MODELS:
-        payload = {
-            "model":       model,
-            "messages":    messages,
-            "temperature": temperature,
-            "max_tokens":  8192,
-            "stream":      True,
-        }
-        body = json.dumps(payload).encode("utf-8")
-        hdrs = {
-            "Content-Type":  "application/json",
-            "Authorization": f"Bearer {api_key}",
-            "HTTP-Referer":  "https://rdxper.app",
-            "X-Title":       "rdxper",
-        }
+    # Use http.client directly — urllib's default User-Agent triggers
+    # Cloudflare's bot detection on Groq (error 1010 / 403)
+    import http.client, ssl
+    ctx  = ssl.create_default_context()
+    conn = http.client.HTTPSConnection("api.groq.com", timeout=120, context=ctx)
 
-        ctx  = ssl.create_default_context()
-        conn = http.client.HTTPSConnection("openrouter.ai", timeout=180, context=ctx)
-        accumulated   = ""
-        sections_done = []
+    hdrs = {
+        "Content-Type":   "application/json",
+        "Authorization":  f"Bearer {api_key}",
+        "User-Agent":     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/124.0.0.0 Safari/537.36",
+        "Accept":         "text/event-stream",
+        "Accept-Language":"en-US,en;q=0.9",
+    }
 
-        try:
-            conn.request("POST", "/api/v1/chat/completions", body=body, headers=hdrs)
-            resp = conn.getresponse()
+    accumulated   = ""
+    sections_done = []
+    watch         = tracked_sections if tracked_sections is not None else SECTION_ORDER
 
-            if resp.status in (429, 402, 503):
-                err = resp.read().decode("utf-8", errors="replace")
-                print(f"[OpenRouter] {resp.status} on {model}, trying next... {err[:120]}")
-                last_error = f"HTTP {resp.status} on {model}: {err[:200]}"
-                conn.close()
+    try:
+        conn.request("POST", "/openai/v1/chat/completions", body=body, headers=hdrs)
+        resp = conn.getresponse()
+
+        if resp.status != 200:
+            err = resp.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Groq HTTP {resp.status}: {err[:400]}")
+
+        for raw_line in resp:
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if not line.startswith("data:"):
+                continue
+            data_str = line[5:].strip()
+            if data_str == "[DONE]":
+                break
+            try:
+                chunk  = json.loads(data_str)
+                token  = chunk["choices"][0]["delta"].get("content", "")
+                accumulated += token
+
+                for tag in watch:
+                    if tag not in sections_done and f"</{tag}>" in accumulated:
+                        sections_done.append(tag)
+                        pct = _AI_START + int(len(sections_done) / len(watch) * (_AI_END - _AI_START))
+                        next_idx = watch.index(tag) + 1
+                        msg = SECTION_LABELS.get(watch[next_idx], "Finishing up...") if next_idx < len(watch) else "Finishing up..."
+                        if progress_cb:
+                            progress_cb(pct, f'✓ {tag.replace("_"," ").title()} done — {msg}')
+
+            except (json.JSONDecodeError, IndexError, KeyError):
                 continue
 
-            if resp.status != 200:
-                err = resp.read().decode("utf-8", errors="replace")
-                conn.close()
-                raise RuntimeError(f"OpenRouter HTTP {resp.status}: {err[:400]}")
+    except RuntimeError:
+        raise
+    except Exception as e:
+        raise RuntimeError(f"Groq request failed: {e}")
+    finally:
+        conn.close()
 
-            for raw_line in resp:
-                line = raw_line.decode("utf-8", errors="replace").strip()
-                if not line.startswith("data:"):
-                    continue
-                data_str = line[5:].strip()
-                if data_str == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data_str)
-                    token = chunk["choices"][0]["delta"].get("content", "") or ""
-                    accumulated += token
-                    for tag in watch:
-                        if tag not in sections_done and f"</{tag}>" in accumulated:
-                            sections_done.append(tag)
-                            pct = _AI_START + int(len(sections_done) / len(watch) * (_AI_END - _AI_START))
-                            nxt = watch.index(tag) + 1
-                            msg = SECTION_LABELS.get(watch[nxt], "Finishing up...") if nxt < len(watch) else "Finishing up..."
-                            if progress_cb:
-                                progress_cb(pct, f'✓ {tag.replace("_"," ").title()} done — {msg}')
-                except (json.JSONDecodeError, IndexError, KeyError):
-                    continue
+    if not accumulated:
+        raise RuntimeError("Groq returned empty response.")
+    return accumulated.strip()
 
-        except RuntimeError:
-            raise
-        except Exception as e:
-            last_error = str(e)
-            print(f"[OpenRouter] Error on {model}: {e}")
-            continue
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
 
-        if not accumulated.strip():
-            last_error = f"Empty response from {model}"
-            print(f"[OpenRouter] Empty response from {model}, trying next...")
-            continue
+def _gemini_generate(prompt: str, system: str, temperature: float,
+                     progress_cb=None, tracked_sections=None) -> str:
+    """Call Gemini 2.0 Flash via simple non-streaming POST (free tier, no TPM cap)."""
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set.")
 
-        print(f"[OpenRouter] ✓ Used model: {model}")
-        return accumulated.strip()
+    model = "gemini-2.0-flash"
+    url   = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
 
-    raise RuntimeError(
-        f"All OpenRouter free models failed or hit quota. Last error: {last_error}. "
-        "Check your key at https://openrouter.ai/keys"
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": temperature,
+            "maxOutputTokens": 8192,
+            "candidateCount": 1,
+        },
+    }
+    if system:
+        payload["systemInstruction"] = {"parts": [{"text": system}]}
+
+    body = json.dumps(payload).encode("utf-8")
+    req  = urllib.request.Request(
+        url, data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST"
     )
 
+    try:
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as e:
+        err = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Gemini HTTP {e.code}: {err[:600]}")
+    except Exception as e:
+        raise RuntimeError(f"Gemini request failed: {e}")
 
-# Backward-compat alias used elsewhere in the file
+    try:
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError, TypeError) as e:
+        raise RuntimeError(f"Gemini unexpected response structure: {e} | raw: {str(data)[:300]}")
+
+    if not text:
+        raise RuntimeError("Gemini returned empty text.")
+    return text.strip()
+
+
+def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
+                progress_cb=None, tracked_sections=None) -> str:
+    """
+    Generate text using the best available free AI provider.
+    Priority: Gemini (free tier, no TPM cap) → Groq (free, 12k TPM limit)
+    """
+    provider = _detect_provider()
+    if provider == "groq":
+        return _groq_generate(prompt, system, temperature, progress_cb, tracked_sections)
+    elif provider == "gemini":
+        return _gemini_generate(prompt, system, temperature, progress_cb, tracked_sections)
+    else:
+        raise RuntimeError(
+            "No AI API key found. Set GEMINI_API_KEY (free at https://aistudio.google.com/app/apikey) "
+            "or GROQ_API_KEY (free at https://console.groq.com/keys)"
+        )
+
+
+# Keep gemini_stream as alias for backward compatibility
 def gemini_stream(prompt, system="", temperature=0.7, progress_cb=None, tracked_sections=None):
     return ai_generate(prompt, system, temperature, progress_cb, tracked_sections)
 
@@ -2446,10 +2490,10 @@ def generate_paper():
 
     data   = request.json
 
-    # Verify OpenRouter key is configured
-    if not os.environ.get("OPENROUTER_API_KEY", "").strip():
+    # Now check we have a provider
+    if not _detect_provider():
         return jsonify({'success': False,
-                        'message': 'OPENROUTER_API_KEY is not set. Get a free key at https://openrouter.ai/keys'}), 400
+                        'message': 'Please provide your Gemini API key. Get one free at https://aistudio.google.com/app/apikey'}), 400
 
     topic  = data.get('topic', '').strip()
     nfigs  = max(3, min(15, int(data.get('num_figures', 6))))
@@ -2566,22 +2610,29 @@ def download_paper(jid):
 if __name__ == '__main__':
     os.makedirs('generated', exist_ok=True)
 
-    or_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
-    key_str = "✓ OpenRouter — ready!" if or_key else "✗ NOT SET — see below"
+    provider = _detect_provider()
+    pname_str = f"✓ {('Gemini 2.0 Flash' if provider == 'gemini' else 'Groq (Llama 3.3 70B)')} — ready!" if provider else "✗ NOT SET — see below"
     print('\n' + '='*60)
     print('  rdxper v4.0  —  Free AI Research Paper Generator')
-    print('  Powered by OpenRouter (free tier)')
+    print('  Supports Groq (free) and Gemini (free tier)')
     print('  Open browser:  http://127.0.0.1:8080')
-    print(f'  OPENROUTER_API_KEY: {key_str}')
+    print(f'  AI Provider: {pname_str}')
     print('='*60 + '\n')
-    if not or_key:
-        print('  ┌─ GET YOUR FREE API KEY ──────────────────────────────────┐')
+    if not provider:
+        print('  ┌─ GET A FREE API KEY ─────────────────────────────────────┐')
         print('  │                                                          │')
-        print('  │  OpenRouter — free, no credit card needed:              │')
-        print('  │    1. Visit https://openrouter.ai/keys                  │')
-        print('  │    2. Sign up → Create API Key                          │')
-        print('  │    3. Windows:  set OPENROUTER_API_KEY=your_key_here    │')
-        print('  │       Mac/Linux: export OPENROUTER_API_KEY=your_key     │')
+        print('  │  OPTION 1 — Groq (completely free, recommended):        │')
+        print('  │    1. Visit https://console.groq.com/keys               │')
+        print('  │    2. Sign up → Create API Key (no credit card needed)  │')
+        print('  │    3. Windows:  set GROQ_API_KEY=your_key_here          │')
+        print('  │       Mac/Linux: export GROQ_API_KEY=your_key_here      │')
+        print('  │    4. Run python rdxper.py again                        │')
+        print('  │                                                          │')
+        print('  │  OPTION 2 — Google Gemini (free tier):                  │')
+        print('  │    1. Visit https://aistudio.google.com/app/apikey      │')
+        print('  │    2. Sign in with Google → Get API Key                 │')
+        print('  │    3. Windows:  set GEMINI_API_KEY=your_key_here        │')
+        print('  │       Mac/Linux: export GEMINI_API_KEY=your_key_here    │')
         print('  │    4. Run python rdxper.py again                        │')
         print('  │                                                          │')
         print('  └──────────────────────────────────────────────────────────┘')
