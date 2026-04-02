@@ -1373,7 +1373,6 @@ HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>rdxper</title>
-<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Segoe UI',Arial,sans-serif;background:#ffffff;color:#111111;min-height:100vh}
@@ -1599,7 +1598,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
   </div>
   <div class="card">
     <div class="ct">Sign in to continue</div>
-    <div class="cs">Use your Google account — no password needed</div>
+    <div class="cs">Enter your name and email to get started</div>
     <div id="n-login" class="notif"></div>
     <div id="g-btn-wrap" style="display:flex;justify-content:center;min-height:44px;align-items:center"></div>
   </div>
@@ -1897,141 +1896,57 @@ const G_CLIENT='__GOOGLE_CLIENT_ID__';
   }catch(e){}
 })();
 
-// Google Sign-In init
-// G_CLIENT is invalid if it still contains the placeholder or is empty
-const G_CLIENT_VALID = G_CLIENT && G_CLIENT !== '__GOOGLE_CLIENT_ID__' && G_CLIENT.trim() !== '';
-
-function showOtpLogin(){
+// Simple sign-in — name + email, no password, no OTP
+window.addEventListener('load', function(){
   document.getElementById('g-btn-wrap').innerHTML=`
     <div style="width:100%">
-      <div id="otp-step1">
-        <div class="fg" style="margin-bottom:14px">
-          <label style="font-size:13px;font-weight:600">Email Address</label>
-          <input type="email" id="otp-email" placeholder="you@email.com"
-            style="background:#f9f9f9;border:1.5px solid #d0d0d0;border-radius:8px;padding:10px 14px;color:#111;width:100%;font-size:14px;outline:none"
-            onkeydown="if(event.key==='Enter')sendOtp()">
-        </div>
-        <button class="btn btn-p" onclick="sendOtp()" id="btn-otp-send" style="margin-bottom:0">Send OTP →</button>
+      <div class="fg" style="margin-bottom:10px">
+        <label style="font-size:13px;font-weight:600">Your Name</label>
+        <input type="text" id="si-name" placeholder="e.g. Rakunatha Khrishanth"
+          style="background:#f9f9f9;border:1.5px solid #d0d0d0;border-radius:8px;padding:10px 14px;color:#111;width:100%;font-size:14px;outline:none"
+          onkeydown="if(event.key==='Enter')document.getElementById('si-email').focus()">
       </div>
-      <div id="otp-step2" style="display:none">
-        <div style="font-size:13px;color:#555;margin-bottom:12px">Enter the 6-digit code sent to <b id="otp-to"></b></div>
-        <div class="fg" style="margin-bottom:14px">
-          <input type="text" id="otp-code" placeholder="000000" maxlength="6"
-            style="background:#f9f9f9;border:1.5px solid #d0d0d0;border-radius:8px;padding:10px 14px;color:#111;width:100%;font-size:22px;letter-spacing:8px;text-align:center;outline:none;font-weight:700"
-            onkeydown="if(event.key==='Enter')verifyOtp()">
-        </div>
-        <button class="btn btn-p" onclick="verifyOtp()" id="btn-otp-verify" style="margin-bottom:8px">Verify & Sign In</button>
-        <button class="btn btn-s" onclick="document.getElementById('otp-step1').style.display='';document.getElementById('otp-step2').style.display='none'" style="margin-bottom:0;font-size:13px">← Change email</button>
+      <div class="fg" style="margin-bottom:18px">
+        <label style="font-size:13px;font-weight:600">Email Address</label>
+        <input type="email" id="si-email" placeholder="you@email.com"
+          style="background:#f9f9f9;border:1.5px solid #d0d0d0;border-radius:8px;padding:10px 14px;color:#111;width:100%;font-size:14px;outline:none"
+          onkeydown="if(event.key==='Enter')simpleSignIn()">
       </div>
+      <button class="btn btn-p" id="btn-signin" onclick="simpleSignIn()" style="margin-bottom:0">Sign In →</button>
     </div>`;
-}
-
-async function sendOtp(){
-  const email=(document.getElementById('otp-email')||{value:''}).value.trim();
-  if(!email){alert('Please enter your email.');return;}
-  const btn=document.getElementById('btn-otp-send');
-  btn.disabled=true;btn.textContent='Sending...';
-  const n=document.getElementById('n-login');
-  try{
-    const r=await fetch('/api/send-otp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
-    const d=await r.json();
-    if(!d.success){n.className='notif error show';n.textContent=d.message||'Failed to send OTP';btn.disabled=false;btn.textContent='Send OTP →';return;}
-    n.className='notif success show';n.textContent='OTP sent! Check your email (or see server console).';
-    document.getElementById('otp-to').textContent=email;
-    document.getElementById('otp-step1').style.display='none';
-    document.getElementById('otp-step2').style.display='';
-  }catch(e){n.className='notif error show';n.textContent='Connection error.';btn.disabled=false;btn.textContent='Send OTP →';}
-}
-
-async function verifyOtp(){
-  const email=(document.getElementById('otp-email')||{value:''}).value.trim();
-  const otp=(document.getElementById('otp-code')||{value:''}).value.trim();
-  if(!otp){alert('Please enter the OTP.');return;}
-  const btn=document.getElementById('btn-otp-verify');
-  btn.disabled=true;btn.textContent='Verifying...';
-  const n=document.getElementById('n-login');
-  try{
-    const r=await fetch('/api/verify-otp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,otp})});
-    const d=await r.json();
-    if(!d.success){n.className='notif error show';n.textContent=d.message||'Wrong OTP';btn.disabled=false;btn.textContent='Verify & Sign In';return;}
-    token=d.token;userEmail=d.email;userName=d.email.split('@')[0];userPicture='';
-    try{localStorage.setItem('rx_tok',token);localStorage.setItem('rx_em',userEmail);
-        localStorage.setItem('rx_nm',userName);localStorage.setItem('rx_pic','');}catch(e){}
-    onLoggedIn();
-  }catch(e){n.className='notif error show';n.textContent='Connection error.';btn.disabled=false;btn.textContent='Verify & Sign In';}
-}
-
-window.addEventListener('load',function(){
-  if(!G_CLIENT_VALID){
-    // No Google Client ID configured — show OTP login
-    showOtpLogin();
-    return;
-  }
-  let gInitAttempts=0;
-  function tryInit(){
-    gInitAttempts++;
-    if(window.google&&google.accounts&&google.accounts.id){
-      try{
-        google.accounts.id.initialize({client_id:G_CLIENT,callback:handleGoogle,auto_select:false});
-        const gWrap=document.getElementById('g-btn-wrap');
-        const gW=Math.min(376,gWrap.offsetWidth||376);
-        google.accounts.id.renderButton(gWrap,{theme:'outline',size:'large',width:gW,text:'continue_with',shape:'rectangular'});
-        // Add OTP option below Google button
-        const sep=document.createElement('div');
-        sep.style.cssText='text-align:center;color:#999;font-size:12px;margin:14px 0 10px';
-        sep.textContent='— or sign in with email OTP —';
-        gWrap.appendChild(sep);
-        const otpBtn=document.createElement('button');
-        otpBtn.className='btn btn-s';otpBtn.style.cssText='margin-bottom:0;font-size:13px';
-        otpBtn.textContent='Use Email OTP instead';
-        otpBtn.onclick=function(){gWrap.innerHTML='';showOtpLogin();};
-        gWrap.appendChild(otpBtn);
-      }catch(err){
-        console.warn('[rdxper] Google Sign-In render failed:',err);
-        showOtpLogin();
-      }
-    } else if(gInitAttempts < 30){
-      setTimeout(tryInit,300);
-    } else {
-      // Google library never loaded (network issue, blocker, etc.) — fallback to OTP
-      console.warn('[rdxper] Google GSI library not loaded after 9s — falling back to OTP login.');
-      showOtpLogin();
-    }
-  }
-  tryInit();
 });
 
-async function handleGoogle(resp){
-  const n=document.getElementById('n-login');
-  n.className='notif info show';n.textContent='Signing in...';
+async function simpleSignIn(){
+  const name  = (document.getElementById('si-name')||{value:''}).value.trim();
+  const email = (document.getElementById('si-email')||{value:''}).value.trim();
+  const n = document.getElementById('n-login');
+  if(!email || !email.includes('@')){
+    n.className='notif error show'; n.textContent='Please enter a valid email address.'; return;
+  }
+  const btn = document.getElementById('btn-signin');
+  btn.disabled=true; btn.textContent='Signing in...';
   try{
-    const r=await fetch('/api/auth/google',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id_token:resp.credential})});
-    const d=await r.json();
-    if(!d.success){n.className='notif error show';n.textContent=d.message||'Sign in failed';return;}
-    token=d.token;userEmail=d.email;userName=d.name;userPicture=d.picture;
-    try{localStorage.setItem('rx_tok',token);localStorage.setItem('rx_em',userEmail);
-        localStorage.setItem('rx_nm',userName);localStorage.setItem('rx_pic',userPicture);}catch(e){}
+    const r = await fetch('/api/auth/dev',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name: name||email.split('@')[0], email})});
+    const d = await r.json();
+    if(!d.success){
+      n.className='notif error show'; n.textContent=d.message||'Sign in failed.';
+      btn.disabled=false; btn.textContent='Sign In →'; return;
+    }
+    token=d.token; userEmail=d.email; userName=d.name; userPicture='';
+    try{
+      localStorage.setItem('rx_tok',token); localStorage.setItem('rx_em',userEmail);
+      localStorage.setItem('rx_nm',userName); localStorage.setItem('rx_pic','');
+    }catch(e){}
     onLoggedIn();
-  }catch(e){n.className='notif error show';n.textContent='Connection error. Try again.';}
+  }catch(e){
+    n.className='notif error show'; n.textContent='Connection error. Try again.';
+    btn.disabled=false; btn.textContent='Sign In →';
+  }
 }
 
-async function devLogin(){
-  const name  = (document.getElementById('dev-name')||{value:''}).value.trim();
-  const email = (document.getElementById('dev-email')||{value:''}).value.trim();
-  if(!email){ alert('Please enter your email to continue.'); return; }
-  const n=document.getElementById('n-login');
-  n.className='notif info show'; n.textContent='Signing in...';
-  try{
-    const r=await fetch('/api/auth/dev',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({name:name||email.split('@')[0], email})});
-    const d=await r.json();
-    if(!d.success){n.className='notif error show';n.textContent=d.message||'Sign in failed';return;}
-    token=d.token;userEmail=d.email;userName=d.name;userPicture='';
-    try{localStorage.setItem('rx_tok',token);localStorage.setItem('rx_em',userEmail);
-        localStorage.setItem('rx_nm',userName);localStorage.setItem('rx_pic','');}catch(e){}
-    onLoggedIn();
-  }catch(e){n.className='notif error show';n.textContent='Connection error. Try again.';}
-}
+
 
 function onLoggedIn(){
   document.getElementById('nav-auth').style.display='flex';
@@ -2079,7 +1994,6 @@ function forceLogout(){
   try{['rx_tok','rx_em','rx_nm','rx_pic'].forEach(k=>localStorage.removeItem(k));}catch(e){}
   document.getElementById('nav-auth').style.display='none';
   document.getElementById('admin-link').style.display='none';
-  try{google.accounts.id.disableAutoSelect();}catch(e){}
   show('s-home');
 }
 
@@ -2104,7 +2018,6 @@ function logout(){
   try{['rx_tok','rx_em','rx_nm','rx_pic'].forEach(k=>localStorage.removeItem(k));}catch(e){}
   document.getElementById('nav-auth').style.display='none';
   document.getElementById('admin-link').style.display='none';
-  try{google.accounts.id.disableAutoSelect();}catch(e){}
   show('s-home');
 }
 
