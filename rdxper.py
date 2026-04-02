@@ -126,7 +126,7 @@ def session_delete(token: str):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  FREE AI CLIENT  (OpenRouter — free tier models)
+#  FREE AI CLIENT  (OpenRouter — free tier, auto-fallback across models)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Ordered sections — used to map closing tags → progress %
@@ -152,7 +152,7 @@ SECTION_LABELS = {
 _AI_START = 30
 _AI_END   = 75
 
-# Free models on OpenRouter (tried in order on 429 / quota errors)
+# Free models tried in order — moves to next on 429/quota/empty response
 _OPENROUTER_FREE_MODELS = [
     "deepseek/deepseek-chat-v3-0324:free",
     "meta-llama/llama-4-maverick:free",
@@ -167,8 +167,8 @@ def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
                 progress_cb=None, tracked_sections=None) -> str:
     """
     Call OpenRouter using its OpenAI-compatible SSE streaming endpoint.
-    Automatically falls back through free models on 429 / quota errors.
-    Set OPENROUTER_API_KEY in your environment variables.
+    Automatically falls back through free models on 429 / quota / empty responses.
+    Requires OPENROUTER_API_KEY environment variable.
     Get a free key at: https://openrouter.ai/keys
     """
     import http.client, ssl
@@ -184,8 +184,8 @@ def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
-    watch         = tracked_sections if tracked_sections is not None else SECTION_ORDER
-    last_error    = None
+    watch      = tracked_sections if tracked_sections is not None else SECTION_ORDER
+    last_error = None
 
     for model in _OPENROUTER_FREE_MODELS:
         payload = {
@@ -196,7 +196,6 @@ def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
             "stream":      True,
         }
         body = json.dumps(payload).encode("utf-8")
-
         hdrs = {
             "Content-Type":  "application/json",
             "Authorization": f"Bearer {api_key}",
@@ -206,7 +205,6 @@ def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
 
         ctx  = ssl.create_default_context()
         conn = http.client.HTTPSConnection("openrouter.ai", timeout=180, context=ctx)
-
         accumulated   = ""
         sections_done = []
 
@@ -237,13 +235,12 @@ def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
                     chunk = json.loads(data_str)
                     token = chunk["choices"][0]["delta"].get("content", "") or ""
                     accumulated += token
-
                     for tag in watch:
                         if tag not in sections_done and f"</{tag}>" in accumulated:
                             sections_done.append(tag)
-                            pct     = _AI_START + int(len(sections_done) / len(watch) * (_AI_END - _AI_START))
-                            nxt     = watch.index(tag) + 1
-                            msg     = SECTION_LABELS.get(watch[nxt], "Finishing up...") if nxt < len(watch) else "Finishing up..."
+                            pct = _AI_START + int(len(sections_done) / len(watch) * (_AI_END - _AI_START))
+                            nxt = watch.index(tag) + 1
+                            msg = SECTION_LABELS.get(watch[nxt], "Finishing up...") if nxt < len(watch) else "Finishing up..."
                             if progress_cb:
                                 progress_cb(pct, f'✓ {tag.replace("_"," ").title()} done — {msg}')
                 except (json.JSONDecodeError, IndexError, KeyError):
@@ -1763,11 +1760,6 @@ textarea::placeholder{color:#bbb;font-size:12px}
   <div class="fg"><label>Institution (optional)</label>
     <input type="text" id="inst-in" placeholder="University / College / Organisation">
   </div>
-  <div class="fg">
-    <label>Gemini API Key <span style="color:var(--accent)">*</span> <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--accent);font-size:11px;text-decoration:none">Get free key ↗</a></label>
-    <input type="password" id="gemini-key-in" placeholder="Paste your Gemini API key (AIza...)" autocomplete="off">
-    <div style="font-size:11px;color:var(--dim);margin-top:4px">Free at Google AI Studio — no credit card needed. Key stays in your browser only.</div>
-  </div>
   <div class="fg"><label>Number of Figures: <b id="sl-display">6</b></label>
     <input type="range" id="sl" min="3" max="15" value="6"
       oninput="document.getElementById('sl-display').textContent=this.value"
@@ -1976,8 +1968,6 @@ function onLoggedIn(){
   if(userEmail===ADMIN_EM) document.getElementById('admin-link').style.display='block';
   const aIn=document.getElementById('author-in');
   if(aIn&&!aIn.value) aIn.value=userName||'';
-  // Pre-fill saved Gemini key
-  try{const saved=localStorage.getItem('rx_gkey');if(saved){const gIn=document.getElementById('gemini-key-in');if(gIn)gIn.value=saved;}}catch(e){}
   loadDashboard();
   show('s-dashboard');
 }
@@ -2118,13 +2108,8 @@ async function generate(){
   const qGap        = document.getElementById('q-gap').value.trim();
   const qObjectives = document.getElementById('q-objectives').value.trim();
   const qStatement  = document.getElementById('q-statement').value.trim();
-  const geminiKey   = (document.getElementById('gemini-key-in')||{value:''}).value.trim();
 
   if(!topic){notify('n-gen','Please enter a research topic.','error');return;}
-  if(!geminiKey){notify('n-gen','Please enter your Gemini API key. Get one free at aistudio.google.com/app/apikey','error');return;}
-
-  // Save key for next time
-  try{localStorage.setItem('rx_gkey', geminiKey);}catch(e){}
 
   const btn=document.getElementById('btn-gen');
   btn.disabled=true;btn.innerHTML='<span class="spin"></span>Generating...';
@@ -2134,8 +2119,7 @@ async function generate(){
       body:JSON.stringify({
         topic, author_name:author, institution:inst, num_figures:nfigs,
         q_problem:qProblem, q_lit:qLit, q_gap:qGap,
-        q_objectives:qObjectives, q_statement:qStatement,
-        gemini_key:geminiKey
+        q_objectives:qObjectives, q_statement:qStatement
       })});
     const d=await r.json();
     if(r.status===401){btn.disabled=false;btn.innerHTML='Generate Research Paper';forceLogout();return;}
@@ -2198,8 +2182,6 @@ function again(){
   ['topic-in','inst-in','q-problem','q-lit','q-gap','q-objectives','q-statement'].forEach(id=>{
     const el=document.getElementById(id);if(el) el.value='';
   });
-  // Keep gemini key pre-filled
-  try{const saved=localStorage.getItem('rx_gkey');if(saved){const el=document.getElementById('gemini-key-in');if(el)el.value=saved;}}catch(e){}
   document.getElementById('sl').value=6;document.getElementById('sl-display').textContent='6';
   const btn=document.getElementById('btn-gen');
   if(btn){btn.disabled=false;btn.innerHTML='✦ Generate Research Paper';}
@@ -2595,7 +2577,7 @@ if __name__ == '__main__':
     if not or_key:
         print('  ┌─ GET YOUR FREE API KEY ──────────────────────────────────┐')
         print('  │                                                          │')
-        print('  │  OpenRouter (completely free, no credit card needed):   │')
+        print('  │  OpenRouter — free, no credit card needed:              │')
         print('  │    1. Visit https://openrouter.ai/keys                  │')
         print('  │    2. Sign up → Create API Key                          │')
         print('  │    3. Windows:  set OPENROUTER_API_KEY=your_key_here    │')
