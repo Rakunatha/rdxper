@@ -1926,7 +1926,7 @@ async function simpleSignIn(){
   const btn = document.getElementById('btn-signin');
   btn.disabled=true; btn.textContent='Signing in...';
   try{
-    const r = await fetch('/api/auth/dev',{method:'POST',
+    const r = await fetch('/api/auth/login',{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({name: name||email.split('@')[0], email})});
     const d = await r.json();
@@ -2279,16 +2279,15 @@ def _verify_google_token(id_token_str):
         return None
 
 @app.route("/api/auth/dev", methods=["POST"])
-def dev_auth():
-    """Local dev login — only works when GOOGLE_CLIENT_ID is not set."""
-    if os.environ.get("GOOGLE_CLIENT_ID"):
-        return jsonify({"success": False, "message": "Dev auth disabled in production"}), 403
+@app.route("/api/auth/login", methods=["POST"])
+def simple_login():
+    """Simple name + email login — works in all environments."""
     data    = request.json or {}
     email   = data.get("email", "").strip().lower()
-    name    = data.get("name", email.split("@")[0]).strip()
+    name    = data.get("name", "").strip() or email.split("@")[0]
     if not email or "@" not in email:
         return jsonify({"success": False, "message": "Valid email required"}), 400
-    user_id = "dev_" + email.replace("@","_").replace(".","_")
+    user_id = "u_" + email.replace("@","_").replace(".","_")
     with get_db() as db:
         user = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
         if user:
