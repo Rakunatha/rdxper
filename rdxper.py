@@ -1804,11 +1804,6 @@ textarea::placeholder{color:#bbb;font-size:12px}
   <div class="fg"><label>Institution (optional)</label>
     <input type="text" id="inst-in" placeholder="University / College / Organisation">
   </div>
-  <div class="fg">
-    <label>Gemini API Key <span style="color:var(--accent)">*</span> <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--accent);font-size:11px;text-decoration:none">Get free key ↗</a></label>
-    <input type="password" id="gemini-key-in" placeholder="Paste your Gemini API key (AIza...)" autocomplete="off">
-    <div style="font-size:11px;color:var(--dim);margin-top:4px">Free at Google AI Studio — no credit card needed. Key stays in your browser only.</div>
-  </div>
   <div class="fg"><label>Number of Figures: <b id="sl-display">6</b></label>
     <input type="range" id="sl" min="3" max="15" value="6"
       oninput="document.getElementById('sl-display').textContent=this.value"
@@ -2017,8 +2012,6 @@ function onLoggedIn(){
   if(userEmail===ADMIN_EM) document.getElementById('admin-link').style.display='block';
   const aIn=document.getElementById('author-in');
   if(aIn&&!aIn.value) aIn.value=userName||'';
-  // Pre-fill saved Gemini key
-  try{const saved=localStorage.getItem('rx_gkey');if(saved){const gIn=document.getElementById('gemini-key-in');if(gIn)gIn.value=saved;}}catch(e){}
   loadDashboard();
   show('s-dashboard');
 }
@@ -2159,13 +2152,8 @@ async function generate(){
   const qGap        = document.getElementById('q-gap').value.trim();
   const qObjectives = document.getElementById('q-objectives').value.trim();
   const qStatement  = document.getElementById('q-statement').value.trim();
-  const geminiKey   = (document.getElementById('gemini-key-in')||{value:''}).value.trim();
 
   if(!topic){notify('n-gen','Please enter a research topic.','error');return;}
-  if(!geminiKey){notify('n-gen','Please enter your Gemini API key. Get one free at aistudio.google.com/app/apikey','error');return;}
-
-  // Save key for next time
-  try{localStorage.setItem('rx_gkey', geminiKey);}catch(e){}
 
   const btn=document.getElementById('btn-gen');
   btn.disabled=true;btn.innerHTML='<span class="spin"></span>Generating...';
@@ -2175,8 +2163,7 @@ async function generate(){
       body:JSON.stringify({
         topic, author_name:author, institution:inst, num_figures:nfigs,
         q_problem:qProblem, q_lit:qLit, q_gap:qGap,
-        q_objectives:qObjectives, q_statement:qStatement,
-        gemini_key:geminiKey
+        q_objectives:qObjectives, q_statement:qStatement
       })});
     const d=await r.json();
     if(r.status===401){btn.disabled=false;btn.innerHTML='Generate Research Paper';forceLogout();return;}
@@ -2239,8 +2226,6 @@ function again(){
   ['topic-in','inst-in','q-problem','q-lit','q-gap','q-objectives','q-statement'].forEach(id=>{
     const el=document.getElementById(id);if(el) el.value='';
   });
-  // Keep gemini key pre-filled
-  try{const saved=localStorage.getItem('rx_gkey');if(saved){const el=document.getElementById('gemini-key-in');if(el)el.value=saved;}}catch(e){}
   document.getElementById('sl').value=6;document.getElementById('sl-display').textContent='6';
   const btn=document.getElementById('btn-gen');
   if(btn){btn.disabled=false;btn.innerHTML='✦ Generate Research Paper';}
@@ -2504,11 +2489,6 @@ def generate_paper():
         return jsonify({'success': False, 'message': 'Unauthorized'}), 401
 
     data   = request.json
-
-    # Accept Gemini key from UI — inject into env so _detect_provider() finds it
-    gemini_key_from_ui = (data or {}).get('gemini_key', '').strip()
-    if gemini_key_from_ui:
-        os.environ['GEMINI_API_KEY'] = gemini_key_from_ui
 
     # Now check we have a provider
     if not _detect_provider():
