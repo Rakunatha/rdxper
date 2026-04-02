@@ -153,13 +153,16 @@ _AI_START = 30
 _AI_END   = 75
 
 # Free models on OpenRouter — tried in order, skipped on 429/quota/empty
+# Updated April 2026 — verified slugs from openrouter.ai/models
 _OPENROUTER_FREE_MODELS = [
-    "deepseek/deepseek-chat-v3-0324:free",
-    "meta-llama/llama-4-maverick:free",
-    "meta-llama/llama-4-scout:free",
-    "google/gemini-2.0-flash-exp:free",
-    "mistralai/mistral-small-3.1-24b-instruct:free",
-    "qwen/qwen3-8b:free",
+    "openrouter/free",                              # Auto-router: picks best available free model
+    "deepseek/deepseek-chat-v3.1:free",             # DeepSeek V3.1 — top general model
+    "deepseek/deepseek-r1:free",                    # DeepSeek R1 — strong reasoning
+    "meta-llama/llama-4-maverick:free",             # Llama 4 Maverick
+    "qwen/qwen3-235b-a22b:free",                    # Qwen3 235B MoE
+    "mistralai/mistral-small-3.1-24b-instruct:free",# Mistral Small 3.1
+    "meta-llama/llama-3.3-70b-instruct:free",       # Llama 3.3 70B
+    "google/gemma-3-27b-it:free",                   # Gemma 3 27B
 ]
 
 
