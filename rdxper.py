@@ -133,7 +133,7 @@ def session_delete(token: str):
 SECTION_ORDER = [
     'keywords', 'abstract', 'introduction', 'objectives',
     'literature_review', 'methodology', 'results',
-    'discussion', 'suggestions', 'limitations', 'conclusion', 'charts',
+    'discussion', 'limitations', 'suggestions', 'conclusion', 'charts',
 ]
 SECTION_LABELS = {
     'keywords':          'Writing keywords...',
@@ -142,10 +142,10 @@ SECTION_LABELS = {
     'objectives':        'Writing objectives...',
     'literature_review': 'Writing literature review...',
     'methodology':       'Writing methodology...',
-    'results':           'Writing results...',
+    'results':           'Writing results & analysis...',
     'discussion':        'Writing discussion...',
-    'suggestions':       'Writing suggestions...',
     'limitations':       'Writing limitations...',
+    'suggestions':       'Writing suggestions...',
     'conclusion':        'Writing conclusion...',
     'charts':            'Designing chart specifications...',
 }
@@ -465,32 +465,31 @@ class GeminiWriter:
 
     def generate_all(self, progress_cb=None) -> dict:
         """
-        4 lean Groq calls — each well under 4 000 input tokens.
-        Call A : keywords + abstract + objectives          (~800 tok prompt)
-        Call B : introduction (6 subheadings)             (~900 tok prompt)
-        Call C : literature review (26 entries)           (~800 tok prompt)
-        Call D : methodology + results + discussion +
-                 suggestions + limitations + conclusion +
-                 charts                                    (~900 tok prompt)
+        4 AI calls matching the sample paper's exact structure:
+        Call A : keywords + abstract + objectives
+        Call B : introduction (6 named subheadings, ~1200-1500w)
+        Call C : literature review (26 numbered entries, bold format)
+        Call D : methodology + results (FIGURE paragraphs) + discussion +
+                 limitations + suggestions + conclusion + charts
         """
         top      = sorted(self.papers, key=lambda x: x.get("citations", 0), reverse=True)
         top_cite = f"{top[0]['authors']} ({top[0]['year']})" if top else "prior studies"
         n, nr    = len(self.papers), self.n_respondents
         q        = self.questionnaire
 
-        # ── Tiny shared header (topic + top 4 papers only) ───────────────────
+        # ── Shared header (topic + top 4 papers + wiki) ──────────────────────
         digest_lines = []
         for i, p in enumerate(self.papers[:4], 1):
             digest_lines.append(f"{i}. {p['authors']} ({p['year']}). \"{p['title']}\".")
-        wiki_snip = self.wiki.get("summary", "")[:80] if self.wiki.get("summary") else ""
+        wiki_snip = self.wiki.get("summary", "")[:120] if self.wiki.get("summary") else ""
         hdr = f"TOPIC: {self.topic} | N={nr} respondents | Top paper: {top_cite}"
         if wiki_snip:
             hdr += f" | Context: {wiki_snip}"
         hdr += "\n" + "\n".join(digest_lines) + "\n\n"
 
         # Researcher inputs (only non-empty fields)
-        q_prob = f"Problem: {q['problem']}\n" if q.get('problem') else ""
-        q_obj  = f"Objectives (copy verbatim):\n{q['objectives']}\n" if q.get('objectives') else ""
+        q_prob = f"Problem statement: {q['problem']}\n" if q.get('problem') else ""
+        q_obj  = f"Objectives (reproduce verbatim):\n{q['objectives']}\n" if q.get('objectives') else ""
         q_stmt = f"Research statement: {q['statement']}\n" if q.get('statement') else ""
         q_gap  = f"Research gap: {q['gap']}\n" if q.get('gap') else ""
         q_lit  = f"Key literature noted by researcher: {q['lit'][:300]}\n" if q.get('lit') else ""
@@ -498,111 +497,141 @@ class GeminiWriter:
         sections = {}
 
         # ── CALL A: keywords + abstract + objectives ──────────────────────────
-        if progress_cb: progress_cb(30, "Gemini writing keywords, abstract & objectives...")
+        if progress_cb: progress_cb(30, "Writing keywords, abstract & objectives...")
         pA = (hdr + q_prob + q_obj + q_stmt +
-              "Write using XML tags. Scholarly prose, no markdown bullets.\n\n"
+              "Write using XML tags only. Scholarly prose, no markdown bullets outside objectives.\n\n"
               "<keywords>6-8 comma-separated academic keywords for this topic.</keywords>\n"
-              f"<abstract>280-320 words. Use these EXACT bold inline labels in order:\n"
-              f"[2 context sentences about {self.topic}]\n"
-              f"The **Aim** of the study is to [1-2 specific aims].\n"
-              f"The **Objective** is to [main research objective].\n"
-              f"The **sample size** of the study is {nr}.\n"
-              f"The **Findings** of the study were that [3-4 findings with %].\n"
-              f"In **Conclusion** [1-2 sentences on implications].\n"
-              "Write as one flowing paragraph — no subheadings.</abstract>\n"
+              f"<abstract>280-320 words written as ONE flowing paragraph. "
+              f"Begin with 2 sentences giving context about {self.topic}. "
+              f"Then use these EXACT bold inline labels embedded in the prose:\n"
+              f"'The **Aim** of the study is to [specific aim].'\n"
+              f"'The **Objective** is to [main objective].'\n"
+              f"'The **sample size** of the study is {nr}.'\n"
+              f"'The **Findings** of the study were that [3-4 key findings with % values].'\n"
+              f"'In **Conclusion** [1-2 sentences on policy implications].'\n"
+              "No subheadings or line breaks — continuous paragraph.</abstract>\n"
               "<objectives>"
-              + ("Copy these VERBATIM, one per line starting '● To ...':\n" + q['objectives'] if q.get('objectives') else
-                 "Write exactly 3 objectives, each starting '● To [verb] ...'")
+              + ("Reproduce VERBATIM, each on its own line, each starting '● To ...':\n" + q['objectives'] if q.get('objectives') else
+                 f"Write exactly 3 specific objectives for {self.topic}, each on its own line starting '● To [active verb] ...'")
               + "</objectives>")
         raw_A = ai_generate(pA, system=SYSTEM_PROMPT, temperature=0.7)
         for tag in ('keywords', 'abstract', 'objectives'):
             m = re.search(rf'<{tag}>(.*?)</{tag}>', raw_A, re.DOTALL)
             sections[tag] = m.group(1).strip() if m else ''
-        if progress_cb: progress_cb(36, "Abstract done. Gemini writing introduction...")
+        if progress_cb: progress_cb(36, "Abstract done. Writing introduction...")
 
-        # ── CALL B: introduction ──────────────────────────────────────────────
+        # ── CALL B: introduction (6 named subheadings matching sample paper) ───
         pB = (hdr + q_prob + q_gap + q_stmt +
-              "Write a formal academic INTRODUCTION using XML tags. Flowing prose only.\n\n"
-              f"<introduction>Exactly 1200-1500 words with these bold subheadings:\n"
-              f"**Background of the Topic** (200w): Historical context of {self.topic}, stakeholders, recent changes.\n"
-              f"**Evolution of the Topic** (200w): Development from early form to present — name specific events, policies, years.\n"
-              f"**Government Initiatives** (180w): Name specific acts, schemes, government bodies relevant to {self.topic} with measurable impacts.\n"
-              f"**Factors Affecting the Topic** (180w): 5-6 key variables (infrastructure, socio-economic, cultural, policy). " +
-              (f"Include this gap: {q['gap'][:150]}" if q.get('gap') else "") + "\n"
-              f"**Current Trends** (180w): Technologies, platforms, legal reforms, emerging innovations in {self.topic}.\n"
-              f"**Comparison Across States** (150w): Compare 4 named Indian states or regions.\n"
-              f"**Aim of the Study** (80w): 'The aim of this study is to...' " +
-              (f"Based on: {q['statement'][:100]}" if q.get('statement') else "") +
-              "\nNo bullet points anywhere.</introduction>")
+              "Write a formal academic INTRODUCTION section using XML tags. Flowing prose only — no bullet points.\n\n"
+              f"<introduction>Write 1200-1500 words total with these EXACT bold subheadings in order "
+              f"(each subheading on its own line, bold, followed immediately by prose):\n\n"
+              f"**Background of the Topic** (180-220 words): "
+              f"Historical context and significance of {self.topic}; key stakeholders; recent changes and relevance today.\n\n"
+              f"**The Evolution of {self.topic.split()[0] if self.topic else 'the Topic'}** (180-220 words): "
+              f"Trace development from early/pre-digital era to present; name specific events, policies, and years.\n\n"
+              f"**Government Initiatives** (160-200 words): "
+              f"Name specific acts, schemes, and government bodies directly relevant to {self.topic}; include measurable impacts where known.\n\n"
+              f"**Factors affecting {self.topic.split()[0] if self.topic else 'the Topic'}** (160-200 words): "
+              f"Discuss 5-6 interlinked factors (infrastructure, socio-economic, cultural, policy, technological). "
+              + (f"Address this research gap: {q['gap'][:150]}. " if q.get('gap') else "") + "\n\n"
+              f"**Recent developments** (160-200 words): "
+              f"Technologies, platforms, legal reforms, and emerging innovations shaping {self.topic} today.\n\n"
+              f"**A comparison of states** (120-160 words): "
+              f"Compare 4 named Indian states or regions in how they address {self.topic}, noting disparities.\n\n"
+              f"End with one short paragraph (60-80 words) starting: 'The aim of this study is to...' "
+              + (f"Based on: {q['statement'][:120]}" if q.get('statement') else "") +
+              "\nDo NOT add any other subheadings or bullet points.</introduction>")
         raw_B = ai_generate(pB, system=SYSTEM_PROMPT, temperature=0.7)
         m = re.search(r'<introduction>(.*?)</introduction>', raw_B, re.DOTALL)
         sections['introduction'] = m.group(1).strip() if m else ''
-        if progress_cb: progress_cb(44, "Introduction done. Gemini writing literature review...")
+        if progress_cb: progress_cb(44, "Introduction done. Writing literature review...")
 
-        # ── CALL C: literature review (26 entries) ────────────────────────────
+        # ── CALL C: literature review (26 entries, exact sample format) ─────
         pC = (f"TOPIC: {self.topic}\n"
               + (f"Researcher's key sources: {q['lit'][:400]}\n" if q.get('lit') else "")
               + "Write a LITERATURE REVIEW using XML tags.\n\n"
-              f"<literature_review>Write EXACTLY 26 numbered entries (1-26). "
-              f"Every entry MUST follow this EXACT format:\n"
-              f"[N]. **Author Fullname (Year) aims** to [aim of study]. "
-              f"The **methodology** [research method and sample]. "
-              f"**Findings** [2-3 results with data/percentages]. "
-              f"The **conclusion** [recommendation or conclusion].\n\n"
-              f"EXAMPLE: '1. **Laura L. Jansma (2000) aims** to provide a theoretical framework on workplace harassment. "
+              f"<literature_review>Write EXACTLY 26 numbered entries (1 through 26). "
+              f"Each entry MUST strictly follow this format (no deviation):\n\n"
+              f"[N]. **Full Author Name (Year) aims** to [state the study's aim in a clause]. "
+              f"The **methodology** [describe the research method and sample size/type]. "
+              f"**Findings** [state 2-3 key findings, include data/percentages where plausible]. "
+              f"The **conclusion** [state the recommendation or conclusion of the study].\n\n"
+              f"EXAMPLE (follow exactly):\n"
+              f"1. **Laura L. Jansma (2000) aims** to provide a theoretical and empirical framework integrating legal, "
+              f"organizational, and academic research to combat workplace harassment. "
               f"The **methodology** involves a review of six key research areas. "
               f"**Findings** indicate harassment is multidimensional and influenced by power relations. "
-              f"The **conclusion** asserts strategies must reflect this complexity for effective prevention.'\n\n"
-              f"Rules: entries cover {self.topic} and related fields, years 2000-2024, diverse authors/countries. "
-              f"No subheadings between entries. Number all 26.</literature_review>")
+              f"The **conclusion** asserts strategies must reflect this complexity for effective prevention.\n\n"
+              f"RULES: All 26 entries must be about {self.topic} and closely related fields. "
+              f"Use a mix of years from 2000-2024. Use diverse international authors. "
+              f"Each entry must be 3-5 sentences. No subheadings between entries. Number every entry 1-26.</literature_review>")
         raw_C = ai_generate(pC, system=SYSTEM_PROMPT, temperature=0.7)
         m = re.search(r'<literature_review>(.*?)</literature_review>', raw_C, re.DOTALL)
         sections['literature_review'] = m.group(1).strip() if m else ''
-        if progress_cb: progress_cb(56, "Literature review done. Gemini writing methodology & analysis...")
+        if progress_cb: progress_cb(56, "Literature review done. Writing methodology & analysis...")
 
-        # ── CALL D: methodology + discussion + conclusion + charts ────────────
+        # ── CALL D: methodology + results + discussion + limitations + suggestions + conclusion + charts ─
         pD = (hdr +
-              "Write the remaining sections using XML tags. Scholarly prose only.\n\n"
-              f"<methodology>500-600 words, 6 flowing paragraphs (no bullets):\n"
-              f"1. 'The current study is based on descriptive and empirical research.' — explain why this suits {self.topic}.\n"
-              f"2. 'A convenience sampling method is used.' — state {nr} respondents, location, who qualified.\n"
-              f"3. 'Data collected through field visits with a structured questionnaire.' — describe design, Likert scale, validation.\n"
-              f"4. 'Secondary sources such as journals, reports also considered.' — name source types for {self.topic}.\n"
-              f"5. 'Data analysed using SPSS version 21.' — name tests: chi-square, ANOVA, Pearson correlation.\n"
-              f"6. Independent variables: age, gender, education, location, occupation. Dependent variable: [outcome for {self.topic}].</methodology>\n"
-              f"<results>Write {self._nfigs} paragraphs — one per Figure. "
-              f"Each MUST start 'FIGURE [N] In the data analysis [says/shows/reveals] that the majority of the respondents says [key finding about {self.topic}]. "
-              f"[1-2 sentences with % values for demographic subgroups: educational qualification/age/gender/area]. "
-              f"[1 sentence of policy/social context].' Each paragraph 60-80 words.</results>\n"
-              f"<discussion>400-500 words. One paragraph per figure referencing FIGURE N. "
-              f"Each: 'FIGURE [N] In the data analysis the majority of the respondents says...' then elaborate, "
-              f"add context for {self.topic}, cite 1 literature source. Prose only.</discussion>\n"
-              f"<suggestions>200-250 words. 5-6 actionable recommendations for {self.topic}. Prose, no bullets.</suggestions>\n"
-              f"<limitations>150-200 words. 2 paragraphs on sample, scope, self-report bias, future research.</limitations>\n"
-              f"<conclusion>600-700 words. Paragraphs: key findings summary with %, objectives achieved, "
-              f"implications for {self.topic}, 4-5 policy reforms, limitations, future directions. No bullets.</conclusion>\n"
-              f"<charts>{self._nfigs} lines. Format: TYPE|TITLE|CATS (bar/pie) or TYPE|TITLE|GROUPS;SERIES (grouped/stacked). "
-              f"TYPE=bar/pie/grouped/stacked. Titles reference {self.topic[:30]} and a demographic. "
-              f"Example: grouped|Awareness by Age Group|18-30,31-50,51+;Aware,Unaware,Neutral</charts>")
+              "Write the remaining paper sections using XML tags. Scholarly prose only — no bullet points.\n\n"
+              f"<methodology>Write 4-6 prose paragraphs (no numbering, no bullets). "
+              f"Must open with: 'The research method which is followed here is empirical research.' "
+              f"Then cover: why this method suits {self.topic}; sampling — 'A total of {nr} samples have been collected'; "
+              f"data collection via structured questionnaire with Likert scale; "
+              f"secondary sources (journals, reports, government data) consulted for {self.topic}; "
+              f"SPSS version 21 used for analysis — name specific tests (chi-square, ANOVA, Pearson correlation); "
+              f"independent variables: age, gender, education, location, occupation; "
+              f"dependent variable: [relevant outcome for {self.topic}].</methodology>\n\n"
+              f"<results>Write EXACTLY {self._nfigs} short paragraphs separated by blank lines — one per Figure, in order. "
+              f"Each paragraph MUST open with: 'FIGURE [N] : Response of [demographic group] [percentage]%, "
+              f"[next group] [percentage]%, ...' then 1-2 sentences describing key findings for that figure. "
+              f"Keep each paragraph to 40-60 words. Include realistic-looking percentage breakdowns by "
+              f"educational qualification, age, gender, or area as appropriate to the chart topic.</results>\n\n"
+              f"<discussion>Write {self._nfigs} paragraphs separated by blank lines — one per Figure. "
+              f"Each paragraph MUST open with: 'FIGURE [N] In the data analysis says that majority of the respondents says "
+              f"[key finding about {self.topic}].' Then elaborate (60-80 words): connect finding to broader context of "
+              f"{self.topic}, note subgroup differences, cite one related concept or author if relevant. "
+              f"Prose only, no headings within.</discussion>\n\n"
+              f"<limitations>Write 2 paragraphs (150-200 words total). "
+              f"First paragraph: study limitations — sample characteristics, geographic scope, convenience sampling bias, "
+              f"self-report limitations specific to {self.topic}. "
+              f"Second paragraph: scope limitations and directions for future research.</limitations>\n\n"
+              f"<suggestions>Write 5-6 actionable recommendations for {self.topic} in flowing prose paragraphs "
+              f"(200-250 words total). Address policy makers, technology providers, communities, and researchers. "
+              f"No bullet points.</suggestions>\n\n"
+              f"<conclusion>Write 5-7 prose paragraphs (600-700 words). Cover in order: "
+              f"(1) restate study purpose and topic significance; "
+              f"(2) summary of key findings with % values from the {nr}-respondent sample; "
+              f"(3) how findings meet the stated objectives; "
+              f"(4) implications and 4-5 specific policy recommendations for {self.topic}; "
+              f"(5) study limitations briefly; "
+              f"(6) future research directions. No bullets.</conclusion>\n\n"
+              f"<charts>{self._nfigs} lines, one per figure. Format: TYPE|TITLE|CATS or TYPE|TITLE|GROUPS;SERIES. "
+              f"TYPE must be one of: bar, pie, grouped, stacked. "
+              f"Titles must relate to {self.topic[:35]} and a demographic variable (age, gender, education, occupation, area). "
+              f"Mix chart types. EXAMPLES:\n"
+              f"grouped|Awareness of {self.topic[:25]} by Age Group|18-30,31-45,46-60,60+;Aware,Unaware,Neutral\n"
+              f"bar|Level of Concern about {self.topic[:20]} by Education|Below 10th,10th-12th,UG,PG,PhD\n"
+              f"pie|Gender Distribution of Respondents|Female,Male,Non-binary,Prefer not to say\n"
+              f"stacked|Trust in Prevention Frameworks by Occupation|Students,Employed,Self-employed,Retired;High,Moderate,Low</charts>")
         raw_D = ai_generate(pD, system=SYSTEM_PROMPT, temperature=0.7)
-        for tag in ('methodology', 'results', 'discussion', 'suggestions', 'limitations', 'conclusion', 'charts'):
+        for tag in ('methodology', 'results', 'discussion', 'limitations', 'suggestions', 'conclusion', 'charts'):
             m = re.search(rf'<{tag}>(.*?)</{tag}>', raw_D, re.DOTALL)
             sections[tag] = m.group(1).strip() if m else ''
         if progress_cb: progress_cb(74, "All sections written. Assembling Word document...")
 
         # ── Fallbacks ─────────────────────────────────────────────────────────
         fallbacks = {
-            'keywords':          f'{self.topic}, empirical study, policy, digital media, awareness',
-            'abstract':          f'This study examines {self.topic} with {nr} respondents. The **Aim** is to assess awareness. The **sample size** of the study is {nr}. The **Findings** indicate growing awareness. In **Conclusion** stronger frameworks are needed.',
-            'introduction':      f'**Background of the Topic**\n{self.topic} is a critical area of study requiring attention.\n\n**Evolution of the Topic**\nThe field has evolved significantly over recent decades.\n\n**Aim of the Study**\nThe aim of this study is to examine {self.topic}.',
-            'objectives':        '● To evaluate the role of technology in addressing the issue.\n● To identify key vulnerabilities and challenges.\n● To assess the impact of awareness campaigns.',
-            'literature_review': '\n'.join([f'{i}. **Author {i} ({2000+i}) aims** to examine aspects of {self.topic}. The **methodology** involved a survey of 200 participants. **Findings** reveal significant patterns. The **conclusion** calls for improved frameworks.' for i in range(1, 27)]),
-            'methodology':       f'The current study is based on descriptive and empirical research. A convenience sampling method was used with {nr} respondents. Data was collected through structured questionnaires and analysed using SPSS version 21.',
-            'results':           '\n\n'.join([f'FIGURE {i} In the data analysis says that the majority of respondents agree on this aspect of {self.topic}. Educational qualification groups showed 34%, 28%, 22%, 16% respectively.' for i in range(1, self._nfigs+1)]),
-            'discussion':        '\n\n'.join([f'FIGURE {i} In the data analysis the majority of respondents indicated awareness of {self.topic}.' for i in range(1, self._nfigs+1)]),
-            'suggestions':       f'Policymakers should strengthen frameworks for {self.topic}. Investment in technology-based solutions is recommended. Community awareness must be prioritised.',
-            'limitations':       'The study is limited by its sample size and geographic scope. Future research should employ longitudinal designs across multiple regions.',
-            'conclusion':        f'This study has examined {self.topic} through empirical research with {nr} respondents. The findings indicate significant patterns across demographic groups. Stronger policy frameworks and technology integration are recommended.',
+            'keywords':          f'{self.topic}, empirical study, policy, digital media, awareness, India',
+            'abstract':          f'This study examines {self.topic} with a sample of {nr} respondents drawn from diverse demographic backgrounds. The **Aim** of the study is to assess awareness and identify factors influencing outcomes in {self.topic}. The **Objective** is to determine the role of technology and policy in addressing this issue. The **sample size** of the study is {nr}. The **Findings** of the study were that the majority of respondents demonstrated moderate to high awareness, with 68% citing educational qualification as a key influencing factor and 54% supporting enhanced technological interventions. In **Conclusion** stronger policy frameworks and technology-driven approaches are required to address {self.topic} effectively.',
+            'introduction':      f'**Background of the Topic**\n{self.topic} is a critical area of study requiring urgent scholarly and policy attention in the contemporary context.\n\n**The Evolution**\nThe field has evolved significantly over recent decades from early offline approaches to sophisticated digital and legislative interventions.\n\n**Government Initiatives**\nSeveral national and state-level frameworks have been introduced to address {self.topic}, including dedicated coordination bodies and digital platforms.\n\n**Factors affecting**\nKey factors include digital infrastructure availability, socio-economic conditions, cultural attitudes, and regulatory gaps specific to {self.topic}.\n\n**Recent developments**\nRecent years have witnessed rapid growth in technology-based solutions including artificial intelligence, data analytics, and awareness campaigns relevant to {self.topic}.\n\n**A comparison of states**\nStates such as Maharashtra, Tamil Nadu, Delhi, and Kerala demonstrate varying levels of policy implementation and outcomes in relation to {self.topic}.\n\nThe aim of this study is to examine {self.topic} through empirical research in order to generate policy-relevant insights.',
+            'objectives':        f'● To evaluate the potential of technology in preventing and addressing {self.topic}.\n● To identify vulnerabilities and challenges in the existing frameworks governing {self.topic}.\n● To assess the impact of awareness campaigns and digital platforms in educating the public about {self.topic}.',
+            'literature_review': '\n\n'.join([f'{i}. **Author {i} ({2000+i}) aims** to examine key dimensions of {self.topic} within a relevant societal and policy context. The **methodology** involved a structured survey administered to approximately 200 participants drawn from diverse demographic groups. **Findings** reveal that 65% of respondents demonstrated awareness of the issue while 42% identified significant systemic gaps requiring intervention. The **conclusion** calls for improved policy frameworks and sustained investment in prevention and awareness initiatives.' for i in range(1, 27)]),
+            'methodology':       f'The research method which is followed here is empirical research. Descriptive and empirical research is particularly suited to investigating {self.topic} because it enables systematic data collection and quantitative analysis of real-world attitudes and behaviours. A total of {nr} samples have been collected through convenience sampling, comprising respondents across multiple demographic categories. Data were gathered through structured questionnaires administered during field visits, incorporating a five-point Likert scale to measure attitudes and perceptions. Secondary sources including peer-reviewed journals, government reports, and statistical databases were also consulted. Data analysis was performed using SPSS version 21 with chi-square, ANOVA, and Pearson correlation tests. Independent variables comprise age, gender, educational qualification, geographic area, and occupation; the dependent variable is awareness and attitude towards {self.topic}.',
+            'results':           '\n\n'.join([f'FIGURE {i} : Response of age 18-30 years {round(10+i*2.1,1)}%, 31-40 years {round(18+i*1.3,1)}%, 41-50 years {round(14+i*0.9,1)}%, 51 and above {round(8+i*0.7,1)}% are given their responses towards {self.topic}. The majority of respondents in the 31-40 age group indicated strong awareness. Educational qualification emerged as a significant moderating factor in shaping these responses.' for i in range(1, self._nfigs+1)]),
+            'discussion':        '\n\n'.join([f'FIGURE {i} In the data analysis says that majority of the respondents says that awareness of {self.topic} is most pronounced among respondents with higher educational qualifications and those in the 31-40 age bracket. This finding aligns with existing scholarship on the relationship between education level and civic awareness of sensitive social issues. The data underscores the importance of targeted educational and digital outreach strategies to reach under-informed demographic segments.' for i in range(1, self._nfigs+1)]),
+            'limitations':       f'The body of literature reviewed highlights several limitations that merit consideration. This study relies on a convenience sample of {nr} respondents, which, while adequate for exploratory analysis, limits the generalisability of findings across all population groups relevant to {self.topic}. Self-report biases and social desirability effects may have influenced responses on sensitive dimensions of the topic.\n\nThe geographic scope of the study is concentrated and may not adequately represent rural and remote populations who experience {self.topic} differently from urban respondents. Future research should employ longitudinal methodologies with larger, more geographically diverse samples across multiple Indian states to validate and extend the current findings.',
+            'suggestions':       f'Policymakers should prioritise strengthening the legislative and regulatory frameworks governing {self.topic} and ensure that existing laws are rigorously enforced at both central and state levels. Investment in technology-based solutions, including AI-driven monitoring and reporting systems, should be accelerated. Community awareness programmes must be expanded with particular emphasis on reaching underserved and rural populations. Educational institutions should integrate age-appropriate curricula to build long-term awareness from an early stage. Researchers and practitioners should collaborate to develop evidence-based intervention models suitable for adoption by state governments. Civil society organisations must be adequately funded and legally empowered to support affected individuals and advocate for systemic reform.',
+            'conclusion':        f'This study has undertaken an empirical examination of {self.topic} through research with {nr} respondents drawn from diverse demographic backgrounds. The findings indicate significant variation in awareness and attitudes across educational, age, gender, and occupational groups, with the majority demonstrating moderate to high levels of awareness. Graduate-level respondents and those in the 31-40 age group showed the strongest engagement with the issue, while rural respondents and those with lower educational attainment indicated comparatively lower awareness. These findings substantially fulfil the stated objectives of the study, confirming the relevance of education and technology-based interventions. Policymakers should prioritise legislative reform, digital infrastructure investment, and sustained community outreach as the three pillars of an integrated response to {self.topic}. The study is subject to limitations in sample size and geographic coverage, which future longitudinal and multi-state research should address to build a more comprehensive evidence base.',
             'charts':            '',
         }
         for k, fb in fallbacks.items():
@@ -898,16 +927,24 @@ def _add_table(doc, caption: str, rows: list, hcol: str = '1F3864'):
 
 class DocBuilder:
     def __init__(self, topic, author, inst, email, writer: GeminiWriter,
-                 sections: dict, specs: list, charts: list, papers: list):
-        self.topic    = topic
-        self.author   = author
-        self.inst     = inst
-        self.email    = email
-        self.writer   = writer
-        self.sections = sections   # pre-generated text from Gemini
-        self.specs    = specs
-        self.charts   = charts
-        self.papers   = papers
+                 sections: dict, specs: list, charts: list, papers: list,
+                 co_author: str = '', co_author_title: str = '',
+                 co_author_inst: str = '', co_author_email: str = '',
+                 co_author_phone: str = ''):
+        self.topic            = topic
+        self.author           = author
+        self.inst             = inst
+        self.email            = email
+        self.co_author        = co_author
+        self.co_author_title  = co_author_title
+        self.co_author_inst   = co_author_inst
+        self.co_author_email  = co_author_email
+        self.co_author_phone  = co_author_phone
+        self.writer           = writer
+        self.sections         = sections
+        self.specs            = specs
+        self.charts           = charts
+        self.papers           = papers
 
     def build(self) -> Document:
         doc = Document()
@@ -989,15 +1026,23 @@ class DocBuilder:
         if self.inst:
             p_text(self.inst, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
         if self.email:
-            p_text(f'MOBILE NO: (Contact details provided separately)',
-                   bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
             p_text(f'EMAIL: {self.email}', bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
 
         p_blank()
         p_blank()
 
-        # CO AUTHOR block — all required fields
-        p_text('CO AUTHOR', bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, sp_b=12, sp_a=12)
+        # CO-AUTHOR block — matches sample paper exactly
+        p_text('CO-AUTHOR', bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, sp_b=12, sp_a=12)
+        if self.co_author:
+            p_text(self.co_author, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
+        if self.co_author_title:
+            p_text(self.co_author_title, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
+        if self.co_author_inst:
+            p_text(self.co_author_inst, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
+        if self.co_author_email:
+            p_text(f'Email Id - {self.co_author_email}', bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
+        if self.co_author_phone:
+            p_text(f'Phone number: {self.co_author_phone}', bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
 
         p_blank()
         p_blank()
@@ -1005,7 +1050,10 @@ class DocBuilder:
         # ── PAGE 2: Title repeat + Authors right-aligned ───────────────────────
         p_text(self.topic.upper(), bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
         p_blank()
-        p_text(f'AUTHOR: {self.author}', bold=True,
+        author_line = self.author
+        if self.co_author:
+            author_line += f'\n{self.co_author}'
+        p_text(author_line, bold=True,
                align=WD_ALIGN_PARAGRAPH.RIGHT, sp_b=12, sp_a=12)
 
         # ── ABSTRACT ──────────────────────────────────────────────────────────
@@ -1224,15 +1272,32 @@ class DocBuilder:
             r_i.bold = True; r_i.font.size = Pt(12); r_i.font.name = TNR
 
         # ── RESULT ────────────────────────────────────────────────────────────
-        # Sample paper has no separate RESULT heading — results are embedded in DISCUSSION
-        # Skip standalone RESULT section; content flows into DISCUSSION below
+        sec_head('RESULT', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        import re as _re_res
+        for para in self.sections.get('results', '').split('\n\n'):
+            para = para.strip()
+            if not para:
+                continue
+            # Bold "FIGURE N :" label at start matching sample format
+            m_fig = _re_res.match(r'^(FIGURE\s+\d+\s*:?)(.*)', para, _re_res.IGNORECASE | _re_res.DOTALL)
+            if m_fig:
+                fig_label = m_fig.group(1).upper().rstrip(':').strip() + ' :'
+                rest_text = m_fig.group(2)
+                p = doc.add_paragraph()
+                p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+                p.paragraph_format.space_before = Pt(12)
+                p.paragraph_format.space_after  = Pt(0)
+                r1 = p.add_run(fig_label)
+                r1.bold = True; r1.font.size = Pt(12); r1.font.name = TNR
+                r2 = p.add_run(rest_text)
+                r2.bold = False; r2.font.size = Pt(12); r2.font.name = TNR
+            else:
+                body(para, sp_b=12, sp_a=0, bold=False, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
         # ── DISCUSSION ────────────────────────────────────────────────────────
         sec_head('DISCUSSION', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
         import re as _re_disc
-        # Merge both results and discussion sections for the DISCUSSION block
-        disc_full = (self.sections.get('results', '') + '\n\n' + self.sections.get('discussion', '')).strip()
-        for para in disc_full.split('\n\n'):
+        for para in self.sections.get('discussion', '').split('\n\n'):
             para = para.strip()
             if not para:
                 continue
@@ -1252,17 +1317,17 @@ class DocBuilder:
             else:
                 body(para, sp_b=12, sp_a=0, bold=False, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
-        # ── SUGGESTION ────────────────────────────────────────────────────────
-        sec_head('SUGGESTION', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
-        for para in self.sections.get('suggestions', '').split('\n\n'):
+        # ── LIMITATIONS ───────────────────────────────────────────────────────
+        sec_head('LIMITATIONS', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        for para in self.sections.get('limitations', '').split('\n\n'):
             para = para.strip()
             if para:
                 body(para, sp_b=12, sp_a=12, bold=False,
                      align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
-        # ── LIMITATION ────────────────────────────────────────────────────────
-        sec_head('LIMITATION', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
-        for para in self.sections.get('limitations', '').split('\n\n'):
+        # ── SUGGESTIONS ───────────────────────────────────────────────────────
+        sec_head('SUGGESTIONS', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        for para in self.sections.get('suggestions', '').split('\n\n'):
             para = para.strip()
             if para:
                 body(para, sp_b=12, sp_a=12, bold=False,
@@ -1310,9 +1375,11 @@ class PaperGenerator:
         self.jobs[self.jid].update({'progress': pct, 'message': msg, 'status': 'running'})
         print(f'[{self.jid[:8]}] {pct}% – {msg}')
 
-    def generate(self, topic: str, nfigs: int, author: str, inst: str, email: str, questionnaire: dict = None) -> str:
+    def generate(self, topic: str, nfigs: int, author: str, inst: str, email: str,
+                 questionnaire: dict = None, co_author_info: dict = None) -> str:
         os.makedirs('generated', exist_ok=True)
         self.prog(5, 'Initializing...')
+        ca = co_author_info or {}
 
         # ── Step 1: Web scraping — 3 sources in parallel ─────────────────────
         self.prog(8, 'Scraping Semantic Scholar, CrossRef & Wikipedia...')
@@ -1334,16 +1401,16 @@ class PaperGenerator:
         scraped = {'papers': all_papers, 'wiki': wiki}
         print(f"[Scraper] {len(ss)} SS + {len(cr)} CrossRef, wiki={'yes' if wiki.get('summary') else 'no'}")
 
-        # ── Step 2: Single streaming Gemini call writes the whole paper ────────
-        self.prog(30, 'Gemini connected — writing keywords...')
+        # ── Step 2: AI writes all sections ───────────────────────────────────
+        self.prog(30, 'AI connected — writing keywords...')
         writer        = GeminiWriter(topic, scraped, questionnaire=questionnaire or {})
         writer._nfigs = nfigs
         sections      = writer.generate_all(progress_cb=self.prog)
-        self.prog(76, 'Gemini finished. Parsing sections...')
+        self.prog(76, 'AI finished. Parsing sections...')
 
         sections['references'] = writer.references()
 
-        # ── Step 3: Parse chart specs from Gemini's <charts> block ───────────
+        # ── Step 3: Parse chart specs from AI's <charts> block ───────────────
         self.prog(78, 'Parsing chart specs...')
         specs = writer.parse_chart_specs(nfigs)
         if not specs:
@@ -1355,8 +1422,15 @@ class PaperGenerator:
 
         # ── Step 5: Build DOCX ───────────────────────────────────────────────
         self.prog(90, 'Assembling Word document...')
-        builder = DocBuilder(topic, author, inst, email, writer, sections, specs, charts, all_papers)
-        doc     = builder.build()
+        builder = DocBuilder(
+            topic, author, inst, email, writer, sections, specs, charts, all_papers,
+            co_author       = ca.get('name', ''),
+            co_author_title = ca.get('title', ''),
+            co_author_inst  = ca.get('inst', ''),
+            co_author_email = ca.get('email', ''),
+            co_author_phone = ca.get('phone', ''),
+        )
+        doc = builder.build()
 
         self.prog(97, 'Saving...')
         safe = re.sub(r'[^\w\-]', '_', topic[:40])
@@ -1755,13 +1829,33 @@ textarea::placeholder{color:#bbb;font-size:12px}
   <div id="n-gen" class="notif"></div>
   <!-- Summary of inputs -->
   <div class="q-summary" id="q-summary"></div>
+
+  <div style="font-weight:700;font-size:13px;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;margin-top:4px;color:#444">Author Details</div>
   <div class="fg"><label>Author Name</label>
     <input type="text" id="author-in" placeholder="Your full name">
   </div>
   <div class="fg"><label>Institution (optional)</label>
     <input type="text" id="inst-in" placeholder="University / College / Organisation">
   </div>
-  <div class="fg"><label>Number of Figures: <b id="sl-display">6</b></label>
+
+  <div style="font-weight:700;font-size:13px;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;margin-top:16px;color:#444">Co-Author Details (optional)</div>
+  <div class="fg"><label>Co-Author Name</label>
+    <input type="text" id="co-author-name" placeholder="Co-author full name">
+  </div>
+  <div class="fg"><label>Co-Author Title / Designation</label>
+    <input type="text" id="co-author-title" placeholder="e.g. Assistant Professor, Research Scholar">
+  </div>
+  <div class="fg"><label>Co-Author Institution</label>
+    <input type="text" id="co-author-inst" placeholder="University / College / Organisation">
+  </div>
+  <div class="fg"><label>Co-Author Email</label>
+    <input type="email" id="co-author-email" placeholder="co-author@example.com">
+  </div>
+  <div class="fg"><label>Co-Author Phone (optional)</label>
+    <input type="text" id="co-author-phone" placeholder="Contact number">
+  </div>
+
+  <div class="fg" style="margin-top:12px"><label>Number of Figures: <b id="sl-display">6</b></label>
     <input type="range" id="sl" min="3" max="15" value="6"
       oninput="document.getElementById('sl-display').textContent=this.value"
       style="width:100%;accent-color:var(--accent)">
@@ -2004,7 +2098,8 @@ function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(
 
 function startNewPaper(){
   // Reset questionnaire state then navigate
-  ['topic-in','inst-in','q-problem','q-lit','q-gap','q-objectives','q-statement'].forEach(id=>{
+  ['topic-in','inst-in','q-problem','q-lit','q-gap','q-objectives','q-statement',
+   'co-author-name','co-author-title','co-author-inst','co-author-email','co-author-phone'].forEach(id=>{
     const el=document.getElementById(id);if(el) el.value='';
   });
   const aIn=document.getElementById('author-in');
@@ -2097,6 +2192,11 @@ async function generate(){
   const qGap        = document.getElementById('q-gap').value.trim();
   const qObjectives = document.getElementById('q-objectives').value.trim();
   const qStatement  = document.getElementById('q-statement').value.trim();
+  const coName      = document.getElementById('co-author-name').value.trim();
+  const coTitle     = document.getElementById('co-author-title').value.trim();
+  const coInst      = document.getElementById('co-author-inst').value.trim();
+  const coEmail     = document.getElementById('co-author-email').value.trim();
+  const coPhone     = document.getElementById('co-author-phone').value.trim();
   if(!topic){notify('n-gen','Please enter a research topic.','error');return;}
 
   const btn=document.getElementById('btn-gen');
@@ -2107,7 +2207,9 @@ async function generate(){
       body:JSON.stringify({
         topic, author_name:author, institution:inst, num_figures:nfigs,
         q_problem:qProblem, q_lit:qLit, q_gap:qGap,
-        q_objectives:qObjectives, q_statement:qStatement
+        q_objectives:qObjectives, q_statement:qStatement,
+        co_author_name:coName, co_author_title:coTitle,
+        co_author_inst:coInst, co_author_email:coEmail, co_author_phone:coPhone
       })});
     const d=await r.json();
     if(r.status===401){btn.disabled=false;btn.innerHTML='Generate Research Paper';forceLogout();return;}
@@ -2167,7 +2269,8 @@ async function download(){
 
 function again(){
   jobId='';curTopic='';
-  ['topic-in','inst-in','q-problem','q-lit','q-gap','q-objectives','q-statement'].forEach(id=>{
+  ['topic-in','inst-in','q-problem','q-lit','q-gap','q-objectives','q-statement',
+   'co-author-name','co-author-title','co-author-inst','co-author-email','co-author-phone'].forEach(id=>{
     const el=document.getElementById(id);if(el) el.value='';
   });
   document.getElementById('sl').value=6;document.getElementById('sl-display').textContent='6';
@@ -2443,6 +2546,13 @@ def generate_paper():
     inst   = data.get('institution', '').strip()
     email  = sess['email']
 
+    # Co-author fields
+    co_author       = data.get('co_author_name', '').strip()
+    co_author_title = data.get('co_author_title', '').strip()
+    co_author_inst  = data.get('co_author_inst', '').strip()
+    co_author_email = data.get('co_author_email', '').strip()
+    co_author_phone = data.get('co_author_phone', '').strip()
+
     # Questionnaire fields
     q_problem    = data.get('q_problem', '').strip()
     q_lit        = data.get('q_lit', '').strip()
@@ -2473,10 +2583,18 @@ def generate_paper():
         'statement':  q_statement,
     }
 
+    co_author_info = {
+        'name':  co_author,
+        'title': co_author_title,
+        'inst':  co_author_inst,
+        'email': co_author_email,
+        'phone': co_author_phone,
+    }
+
     def _run():
         try:
             g    = PaperGenerator(jid, jobs)
-            path = g.generate(topic, nfigs, author, inst, email, questionnaire)
+            path = g.generate(topic, nfigs, author, inst, email, questionnaire, co_author_info)
             jobs[jid].update({'status': 'done', 'progress': 100,
                               'message': 'Research paper ready!', 'file_path': path})
             with get_db() as db:
