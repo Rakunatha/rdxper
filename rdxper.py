@@ -544,32 +544,43 @@ class GeminiWriter:
         # ── CALL C: literature review (26 entries, REAL authors only, aligned APA refs) ─
         pC = (f"TOPIC: {self.topic}\n"
               + (f"Researcher's key sources: {q['lit'][:400]}\n" if q.get('lit') else "")
-              + "Write a LITERATURE REVIEW and REFERENCES using XML tags. "
+              + "Write a LITERATURE REVIEW and REFERENCES using XML tags.\n"
               "CRITICAL RULE: Use ONLY real, verifiable, published academic works that genuinely exist. "
               "Never fabricate authors, titles, journals, or DOIs.\n\n"
-              f"<literature_review>Write EXACTLY 26 numbered entries (1 through 26). "
-              f"Every entry MUST be a REAL, published work — an actual peer-reviewed journal article, book, or official report. "
-              f"Draw from well-established scholarly literature in {self.topic} and directly related fields (policy, law, psychology, sociology, technology, public health as relevant). "
-              f"Do NOT invent citations. If unsure whether a specific paper exists, cite the author's well-known book or a landmark study in the field instead.\n\n"
-              f"Each entry MUST follow this EXACT format with ALL four parts present:\n"
-              f"[N]. Author Surname, First Initial. (Year). Title of work. Journal Name, volume(issue), pages. — [2-3 sentence academic summary: (1) what the study aimed to investigate, (2) methodology used, (3) key findings and conclusions as they relate to {self.topic}]\n\n"
-              f"EXAMPLE (follow this format exactly):\n"
-              f"1. Finkelhor, D. (1994). Current information on the scope and nature of child sexual abuse. The Future of Children, 4(2), 31–53. — This landmark study aimed to synthesise prevalence estimates of child sexual abuse from national surveys across the United States. Using a systematic review methodology, the author analysed victimisation surveys and clinical studies. Findings revealed that 20–25% of women and 5–15% of men reported childhood sexual abuse, concluding that standardised definitions and improved reporting infrastructure are urgently needed.\n\n"
-              f"DIVERSITY REQUIREMENTS: "
-              f"(a) Minimum 20 entries must be peer-reviewed journal articles with volume, issue, and page numbers. "
-              f"(b) Up to 6 entries may be books or official reports. "
-              f"(c) Span publication years from 1990 to 2024. "
-              f"(d) Include diverse international authors from at least 4 different countries. "
-              f"(e) Number every entry sequentially 1 through 26. "
-              f"(f) No subheadings, no blank lines between entries — just the 26 numbered entries.\n"
-              f"All 26 entries must be substantively relevant to {self.topic} or its directly related scholarly domains.</literature_review>\n\n"
-              f"<references>Generate the APA 7th edition reference list for EXACTLY the same 26 works cited above, in the SAME order (numbered 1-26). "
-              f"Each reference must be the full APA citation of the work summarised in the corresponding literature review entry. "
-              f"FORMAT: [N]. Author, A. A., & Author, B. B. (Year). Title of article. Journal Title, volume(issue), page–page. https://doi.org/xxxxx\n"
-              f"For books: [N]. Author, A. A. (Year). Title of book. Publisher.\n"
-              f"For reports: [N]. Organisation. (Year). Title of report. Publisher/URL.\n"
-              f"CRITICAL: Entry N in references must correspond exactly to entry N in the literature review above. Same author, same year, same title. "
-              f"Do not fabricate DOIs — only include a DOI if you are certain it exists for that specific paper.</references>")
+              f"<literature_review>Write EXACTLY 26 entries, one per paragraph, separated by a blank line.\n"
+              f"Every entry MUST be a REAL published work — a peer-reviewed journal article, book, or official report.\n"
+              f"Draw from well-established scholarly literature in {self.topic} and directly related fields "
+              f"(policy, law, psychology, sociology, technology, public health as relevant).\n\n"
+              f"EXACT FORMAT FOR EVERY ENTRY — follow this precisely:\n"
+              f"Author Last Name(s) and/or Organisation (Year) [rest of entry as ONE flowing paragraph with NO line breaks]\n\n"
+              f"The paragraph after 'Author (Year)' must cover ALL of the following in continuous prose:\n"
+              f"  • The full title and publication venue (journal/book/publisher)\n"
+              f"  • The AIM of the work — what it set out to investigate or achieve\n"
+              f"  • The METHODOLOGY — how data was collected or analysis was conducted\n"
+              f"  • The FINDINGS — key results, statistics, or outcomes\n"
+              f"  • The CONCLUSION — what was concluded and its relevance to {self.topic}\n\n"
+              f"EXAMPLES (copy this style exactly — author+year on same line as prose, everything in ONE paragraph):\n\n"
+              f"United Nations (2022) The draft principles on protection of the environment in relation to armed conflicts, published by the United Nations, recall the urgent need to reinforce and advance the conservation, restoration, and sustainable use of the environment. The aim of these draft principles is to enhance the protection of the environment in relation to both international and non-international armed conflicts. The methodology proposed involves States taking effective legislative, administrative, judicial, and other measures. Findings highlight the pervasive and severe impact of armed conflicts, reinforcing the necessity for a robust international legal framework. The principles conclude that integrated legal obligations across all phases of conflict are essential for ecological and humanitarian protection.\n\n"
+              f"Bothe, Bruch, Diamond, and Jensen (2010) evaluate the adequacy of existing international law to protect the environment during armed conflict and its aftermath. Through comprehensive doctrinal review, they identify gaps in thresholds, enforcement, and remedies. They find that post-conflict restoration is impeded by evidentiary hurdles and weak accountability. The article concludes with proposals to bridge legal silos and bolster compensation for ecological services loss — lessons directly applicable to {self.topic}.\n\n"
+              f"RULES:\n"
+              f"  1. Start EVERY entry with: Author Surname(s) or Organisation name, then (Year) — no number prefix, no bullet\n"
+              f"  2. Everything after 'Author (Year)' is ONE continuous paragraph — NO sub-labels like 'Aim:', 'Method:', 'Findings:'\n"
+              f"  3. Use only REAL works — if uncertain about a specific paper, cite the author's well-known book or landmark study\n"
+              f"  4. Minimum 20 entries must be peer-reviewed journal articles; up to 6 may be books or official reports\n"
+              f"  5. Span publication years from 1990 to 2024; use diverse international authors\n"
+              f"  6. Separate entries with a blank line; no numbering; no headings between entries\n"
+              f"  7. Do NOT use em-dashes (—) to split citation from summary — write everything as flowing prose\n"
+              f"  8. All 26 entries must be substantively relevant to {self.topic} or its closely related scholarly domains\n"
+              f"  9. Aim for 80–150 words per entry\n"
+              f"  10. Write EXACTLY 26 entries total</literature_review>\n\n"
+              f"<references>Generate the APA 7th edition reference list for EXACTLY the same 26 works cited above, "
+              f"numbered 1 through 26 in the same order.\n"
+              f"FORMAT:\n"
+              f"  Journal article: [N]. Author, A. A., & Author, B. B. (Year). Title of article. Journal Title, volume(issue), page–page.\n"
+              f"  Book: [N]. Author, A. A. (Year). Title of book. Publisher.\n"
+              f"  Report/Organisation: [N]. Organisation Name. (Year). Title of report. Publisher.\n"
+              f"CRITICAL: Entry N in references must match entry N in literature review — same author, year, and title. "
+              f"Do NOT fabricate DOIs — omit the DOI field if you are not certain it exists.</references>")
         raw_C = ai_generate(pC, system=SYSTEM_PROMPT, temperature=0.7)
         m = re.search(r'<literature_review>(.*?)</literature_review>', raw_C, re.DOTALL)
         sections['literature_review'] = m.group(1).strip() if m else ''
@@ -651,15 +662,17 @@ class GeminiWriter:
             'introduction':      f'**Background of the Topic**\n{self.topic} is a critical area of study requiring urgent scholarly and policy attention in the contemporary context.\n\n**The Evolution**\nThe field has evolved significantly over recent decades from early offline approaches to sophisticated digital and legislative interventions.\n\n**Government Initiatives**\nSeveral national and state-level frameworks have been introduced to address {self.topic}, including dedicated coordination bodies and digital platforms.\n\n**Factors affecting**\nKey factors include digital infrastructure availability, socio-economic conditions, cultural attitudes, and regulatory gaps specific to {self.topic}.\n\n**Recent developments**\nRecent years have witnessed rapid growth in technology-based solutions including artificial intelligence, data analytics, and awareness campaigns relevant to {self.topic}.\n\n**A comparison of states**\nStates such as Maharashtra, Tamil Nadu, Delhi, and Kerala demonstrate varying levels of policy implementation and outcomes in relation to {self.topic}.\n\nThe aim of this study is to examine {self.topic} through empirical research in order to generate policy-relevant insights.',
             'objectives':        f'● To evaluate the potential of technology in preventing and addressing {self.topic}.\n● To identify vulnerabilities and challenges in the existing frameworks governing {self.topic}.\n● To assess the impact of awareness campaigns and digital platforms in educating the public about {self.topic}.\n● To recommend evidence-based policy interventions and best practices for effectively addressing {self.topic}.',
             'literature_review': '\n\n'.join([
-                f'{i}. Researcher{i}, A. B., & Scholar{i}, C. D. ({2000 + i}). '
-                f'Dimensions of {self.topic}: An empirical examination of awareness and policy outcomes. '
-                f'Journal of Social Policy and Applied Research, {10+i}({i%4+1}), {50+i*3}–{70+i*3}. '
-                f'— This study investigated the key dimensions of {self.topic} within a contemporary policy and social context, '
-                f'drawing on structured survey data from {180+i*5} participants across diverse demographic groups. '
-                f'Using descriptive statistics and chi-square tests, the researchers found that {60+i}% of respondents demonstrated '
-                f'awareness of the issue while {38+i}% identified systemic gaps in existing frameworks. '
-                f'The authors concluded that improved policy frameworks and sustained investment in community awareness initiatives '
-                f'are essential for effectively addressing {self.topic}.'
+                f'Researcher{i} and Scholar{i} ({2000 + i}) conducted an empirical investigation into the '
+                f'dimensions of {self.topic} within a contemporary policy and social context, published in the '
+                f'Journal of Social Policy and Applied Research, volume {10+i}, issue {i%4+1}, '
+                f'pages {50+i*3}–{70+i*3}. The study drew on structured survey data from {180+i*5} participants '
+                f'across diverse demographic groups including varied age, gender, educational, and occupational backgrounds. '
+                f'The research methodology combined descriptive statistics and chi-square analysis to assess awareness '
+                f'levels and attitudes among respondents. The findings revealed that {60+i}% of participants demonstrated '
+                f'awareness of the central dimensions of {self.topic}, while {38+i}% identified systemic gaps in '
+                f'existing legal and institutional frameworks. The authors concluded that improved policy frameworks '
+                f'and sustained investment in community awareness and education initiatives are essential for '
+                f'effectively addressing the challenges posed by {self.topic} in diverse socio-economic contexts.'
                 for i in range(1, 27)
             ]),
             'methodology':       f'The research method which is followed here is empirical research. Descriptive and empirical research is particularly suited to investigating {self.topic} because it enables systematic data collection and quantitative analysis of real-world attitudes and behaviours. A total of {nr} samples have been collected through convenience sampling, comprising respondents across multiple demographic categories. Data were gathered through structured questionnaires administered during field visits, incorporating a five-point Likert scale to measure attitudes and perceptions. Secondary sources including peer-reviewed journals, government reports, and statistical databases were also consulted. Data analysis was performed using SPSS version 21 with chi-square, ANOVA, and Pearson correlation tests. Independent variables comprise age, gender, educational qualification, geographic area, and occupation; the dependent variable is awareness and attitude towards {self.topic}.',
@@ -1159,29 +1172,35 @@ class DocBuilder:
         lit_paras = [l.strip() for l in self.sections['literature_review'].split('\n\n') if l.strip()]
         import re as _re2
         for i, para in enumerate(lit_paras):
+            # Strip any leading number prefix like "1. " or "1) " the AI may have added
+            para = _re2.sub(r'^\d+[\.\)]\s*', '', para).strip()
+            # Strip markdown bold markers
+            para = _re2.sub(r'\*\*([^*]+)\*\*', r'\1', para)
+            if not para:
+                continue
+
             p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
             pf = p.paragraph_format
-            pf.space_before      = Pt(12) if i == 0 else Pt(6)
-            pf.space_after       = Pt(6)
-            pf.first_line_indent = Inches(-0.25)
-            pf.left_indent       = Inches(0.5)
-            # New format: "N. Author, I. (Year). Title. Journal. — Summary text"
-            # Bold the citation part (before the em-dash separator), normal for summary
-            dash_split = _re2.split(r'\s*[—–-]{1,3}\s*', para, maxsplit=1)
-            if len(dash_split) == 2:
-                citation_part = dash_split[0].strip()
-                summary_part  = dash_split[1].strip()
-                r_cite = p.add_run(citation_part)
-                r_cite.bold = True; r_cite.font.size = Pt(12); r_cite.font.name = TNR
-                r_sep  = p.add_run(' — ')
-                r_sep.bold = False; r_sep.font.size = Pt(12); r_sep.font.name = TNR
-                r_sum  = p.add_run(summary_part)
-                r_sum.bold = False; r_sum.font.size = Pt(12); r_sum.font.name = TNR
+            pf.space_before = Pt(10) if i == 0 else Pt(8)
+            pf.space_after  = Pt(4)
+            # No hanging indent — full justified block like sample document
+
+            # Format: "Author(s) (Year)" is bold, everything after is normal prose.
+            # Pattern matches: "Word Word (YYYY)" or "Word, Word, and Word (YYYY)" etc.
+            m_author = _re2.match(
+                r'^([A-Z][^\(]{1,120}\(\d{4}[a-z]?\))\s*', para
+            )
+            if m_author:
+                author_year = m_author.group(1).rstrip()
+                rest_text   = para[m_author.end():]
+                r_au = p.add_run(author_year + ' ')
+                r_au.bold = True; r_au.font.size = Pt(12); r_au.font.name = TNR
+                r_body = p.add_run(rest_text)
+                r_body.bold = False; r_body.font.size = Pt(12); r_body.font.name = TNR
             else:
-                # Fallback: strip any markdown bold and render plain
-                clean_para = _re2.sub(r'\*\*([^*]+)\*\*', r'\1', para)
-                r = p.add_run(clean_para)
+                # Fallback: render entire paragraph as plain text
+                r = p.add_run(para)
                 r.bold = False; r.font.size = Pt(12); r.font.name = TNR
 
         # ── METHODOLOGY ───────────────────────────────────────────────────────
