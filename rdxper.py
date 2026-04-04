@@ -1239,18 +1239,47 @@ class DocBuilder:
             #                                [LEGEND text  | LEGEND text ]
             tbl = doc.add_table(rows=3, cols=len(row_pair))
             tbl.style = 'Table Grid'
-            # Remove all borders from this layout table
-            from docx.oxml.ns import qn as _qn
-            from docx.oxml import OxmlElement as _OE
-            def _no_borders(tbl_el):
-                tblPr = tbl_el._tbl.get_or_add_tblPr()
-                tblBorders = _OE('w:tblBorders')
-                for side in ('top','left','bottom','right','insideH','insideV'):
-                    b = _OE(f'w:{side}')
-                    b.set(_qn('w:val'), 'none')
-                    tblBorders.append(b)
-                tblPr.append(tblBorders)
-            _no_borders(tbl)
+            # Remove all borders from this layout table using direct XML manipulation
+            tbl_xml = tbl._tbl
+            # Get or create tblPr
+            tblPr = tbl_xml.find(qn('w:tblPr'))
+            if tblPr is None:
+                tblPr = OxmlElement('w:tblPr')
+                tbl_xml.insert(0, tblPr)
+            # Remove existing tblBorders if present
+            existing_borders = tblPr.find(qn('w:tblBorders'))
+            if existing_borders is not None:
+                tblPr.remove(existing_borders)
+            # Add new tblBorders with all sides set to none
+            tblBorders = OxmlElement('w:tblBorders')
+            for side in ('top', 'left', 'bottom', 'right', 'insideH', 'insideV'):
+                b = OxmlElement(f'w:{side}')
+                b.set(qn('w:val'), 'none')
+                b.set(qn('w:sz'), '0')
+                b.set(qn('w:space'), '0')
+                b.set(qn('w:color'), 'auto')
+                tblBorders.append(b)
+            tblPr.append(tblBorders)
+            # Also clear borders on every cell
+            for row in tbl.rows:
+                for cell in row.cells:
+                    tc = cell._tc
+                    tcPr = tc.find(qn('w:tcPr'))
+                    if tcPr is None:
+                        tcPr = OxmlElement('w:tcPr')
+                        tc.insert(0, tcPr)
+                    existing_cb = tcPr.find(qn('w:tcBorders'))
+                    if existing_cb is not None:
+                        tcPr.remove(existing_cb)
+                    tcBorders = OxmlElement('w:tcBorders')
+                    for side in ('top', 'left', 'bottom', 'right', 'insideH', 'insideV'):
+                        b = OxmlElement(f'w:{side}')
+                        b.set(qn('w:val'), 'none')
+                        b.set(qn('w:sz'), '0')
+                        b.set(qn('w:space'), '0')
+                        b.set(qn('w:color'), 'auto')
+                        tcBorders.append(b)
+                    tcPr.append(tcBorders)
 
             for col_idx, (fig_num, spec, buf) in enumerate(row_pair):
                 buf.seek(0)
