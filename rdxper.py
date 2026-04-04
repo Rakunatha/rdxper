@@ -171,8 +171,8 @@ _OPENROUTER_FREE_MODELS = [
 def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
                 progress_cb=None, tracked_sections=None) -> str:
     """
-    Call OpenRouter (OpenAI-compatible SSE streaming).
-    Auto-falls back through free models on 429 / quota / empty responses.
+    Call OpenRouter (non-streaming JSON — simpler and more reliable than SSE).
+    Auto-falls back through free models on 404 / 429 / quota / empty responses.
     Requires OPENROUTER_API_KEY env var — get a free key at https://openrouter.ai/keys
     """
     import http.client, ssl
@@ -188,7 +188,6 @@ def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
-    watch      = tracked_sections if tracked_sections is not None else SECTION_ORDER
     last_error = None
 
     for model in _OPENROUTER_FREE_MODELS:
@@ -196,8 +195,8 @@ def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
             "model":       model,
             "messages":    messages,
             "temperature": temperature,
-            "max_tokens":  8192,
-            "stream":      True,
+            "max_tokens":  4096,   # free-tier models cap here; 8192 causes silent empty responses
+            "stream":      False,  # non-streaming: one clean JSON blob, no SSE parsing bugs
         }
         body = json.dumps(payload).encode("utf-8")
         hdrs = {
@@ -207,71 +206,62 @@ def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
             "X-Title":       "rdxper",
         }
 
-        ctx  = ssl.create_default_context()
-        conn = http.client.HTTPSConnection("openrouter.ai", timeout=180, context=ctx)
-        accumulated   = ""
-        sections_done = []
-
         try:
+            ctx  = ssl.create_default_context()
+            conn = http.client.HTTPSConnection("openrouter.ai", timeout=120, context=ctx)
             conn.request("POST", "/api/v1/chat/completions", body=body, headers=hdrs)
             resp = conn.getresponse()
-
-            if resp.status in (404, 429, 402, 503, 400):
-                err = resp.read().decode("utf-8", errors="replace")
-                print(f"[OpenRouter] {resp.status} on {model} (skipping) → {err[:200]}")
-                last_error = f"HTTP {resp.status} on {model}: {err[:200]}"
-                conn.close()
-                continue
-
-            if resp.status != 200:
-                err = resp.read().decode("utf-8", errors="replace")
-                conn.close()
-                raise RuntimeError(f"OpenRouter HTTP {resp.status}: {err[:400]}")
-
-            for raw_line in resp:
-                line = raw_line.decode("utf-8", errors="replace").strip()
-                if not line.startswith("data:"):
-                    continue
-                data_str = line[5:].strip()
-                if data_str == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data_str)
-                    token = chunk["choices"][0]["delta"].get("content", "") or ""
-                    accumulated += token
-                    for tag in watch:
-                        if tag not in sections_done and f"</{tag}>" in accumulated:
-                            sections_done.append(tag)
-                            pct = _AI_START + int(len(sections_done) / len(watch) * (_AI_END - _AI_START))
-                            nxt = watch.index(tag) + 1
-                            msg = SECTION_LABELS.get(watch[nxt], "Finishing up...") if nxt < len(watch) else "Finishing up..."
-                            if progress_cb:
-                                progress_cb(pct, f'✓ {tag.replace("_"," ").title()} done — {msg}')
-                except (json.JSONDecodeError, IndexError, KeyError):
-                    continue
-
-        except RuntimeError:
-            raise
+            raw  = resp.read().decode("utf-8", errors="replace")
+            conn.close()
         except Exception as e:
-            last_error = str(e)
-            print(f"[OpenRouter] Error on {model}: {e}")
-            continue
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-        if not accumulated.strip():
-            last_error = f"Empty response from {model}"
-            print(f"[OpenRouter] Empty response from {model}, trying next...")
+            last_error = f"Connection error on {model}: {e}"
+            print(f"[OpenRouter] {last_error}")
+            time.sleep(2)
             continue
 
-        print(f"[OpenRouter] ✓ Used model: {model}")
-        return accumulated.strip()
+        # Skippable HTTP errors — try the next model
+        if resp.status in (400, 402, 404, 429, 503):
+            last_error = f"HTTP {resp.status} on {model}: {raw[:300]}"
+            print(f"[OpenRouter] {resp.status} on {model} (skipping) → {raw[:200]}")
+            time.sleep(1)
+            continue
+
+        if resp.status != 200:
+            # Unexpected status — raise immediately so the job shows a useful error
+            raise RuntimeError(f"OpenRouter HTTP {resp.status}: {raw[:400]}")
+
+        # Parse the non-streaming JSON response
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            last_error = f"JSON parse error on {model}: {e} | raw={raw[:200]}"
+            print(f"[OpenRouter] {last_error}")
+            continue
+
+        # Check for an application-level error embedded in a 200 response
+        if "error" in data:
+            last_error = f"Model error on {model}: {data['error']}"
+            print(f"[OpenRouter] {last_error}")
+            time.sleep(1)
+            continue
+
+        try:
+            text = data["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError):
+            last_error = f"Unexpected response shape from {model}: {str(data)[:200]}"
+            print(f"[OpenRouter] {last_error}")
+            continue
+
+        if not text.strip():
+            last_error = f"Empty content from {model}"
+            print(f"[OpenRouter] {last_error}, trying next...")
+            continue
+
+        print(f"[OpenRouter] ✓ Used model: {model} ({len(text)} chars)")
+        return text.strip()
 
     raise RuntimeError(
-        f"All OpenRouter free models failed or hit quota. Last error: {last_error}. "
+        f"All OpenRouter free models failed. Last error: {last_error}. "
         "Check your key at https://openrouter.ai/keys"
     )
 
@@ -622,10 +612,13 @@ class GeminiWriter:
         def _call_A():
             return 'A', ai_generate(pA, system=SYSTEM_PROMPT, temperature=0.7)
         def _call_B():
+            time.sleep(1.5)
             return 'B', ai_generate(pB, system=SYSTEM_PROMPT, temperature=0.7)
         def _call_C():
+            time.sleep(3)
             return 'C', ai_generate(pC, system=SYSTEM_PROMPT, temperature=0.7)
         def _call_D():
+            time.sleep(4.5)
             return 'D', ai_generate(pD, system=SYSTEM_PROMPT, temperature=0.7)
 
         raw_results = {}
