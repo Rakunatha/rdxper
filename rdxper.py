@@ -152,41 +152,44 @@ SECTION_LABELS = {
 _AI_START = 30
 _AI_END   = 75
 
-# Free models on OpenRouter — tried in order, skipped on 404/429/quota/empty
-# Updated April 2026 — verified slugs from openrouter.ai/models
+# Free models on OpenRouter — tried in order, with exponential backoff on 429
+# Updated April 2026 — verified working slugs
 _OPENROUTER_FREE_MODELS = [
-    "meta-llama/llama-4-maverick:free",             # Llama 4 Maverick — reliable, large context
-    "meta-llama/llama-4-scout:free",                # Llama 4 Scout — fast fallback
-    "deepseek/deepseek-r1:free",                    # DeepSeek R1 — strong reasoning
-    "deepseek/deepseek-chat:free",                  # DeepSeek Chat (stable slug)
-    "qwen/qwen3-235b-a22b:free",                    # Qwen3 235B MoE
-    "qwen/qwen3-30b-a3b:free",                      # Qwen3 30B — lighter fallback
+    "google/gemini-2.0-flash-exp:free",             # Gemini 2.0 Flash — fast, large context
+    "meta-llama/llama-4-maverick:free",             # Llama 4 Maverick
+    "meta-llama/llama-4-scout:free",                # Llama 4 Scout
+    "deepseek/deepseek-r1:free",                    # DeepSeek R1
+    "deepseek/deepseek-chat:free",                  # DeepSeek Chat
+    "qwen/qwen3-235b-a22b:free",                    # Qwen3 235B
     "mistralai/mistral-small-3.1-24b-instruct:free",# Mistral Small 3.1
-    "meta-llama/llama-3.3-70b-instruct:free",       # Llama 3.3 70B — proven workhorse
+    "meta-llama/llama-3.3-70b-instruct:free",       # Llama 3.3 70B
     "google/gemma-3-27b-it:free",                   # Gemma 3 27B
-    "openrouter/free",                              # Last resort auto-router
 ]
 
 
 def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
                 progress_cb=None, tracked_sections=None) -> str:
     """
-    Call OpenRouter (non-streaming JSON — simpler and more reliable than SSE).
-    Auto-falls back through free models on 404 / 429 / quota / empty responses.
-    Requires OPENROUTER_API_KEY env var — get a free key at https://openrouter.ai/keys
+    Call OpenRouter with requests library + exponential backoff.
+    Tries each free model in order; retries up to 2x on 429 before skipping.
     """
-    import http.client, ssl
+    import requests as _req
 
     api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     if not api_key:
-        raise RuntimeError(
-            "OPENROUTER_API_KEY not set. Get a free key at https://openrouter.ai/keys"
-        )
+        raise RuntimeError("OPENROUTER_API_KEY not set. Get a free key at https://openrouter.ai/keys")
 
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type":  "application/json",
+        "HTTP-Referer":  "https://rdxper.app",
+        "X-Title":       "rdxper",
+    }
 
     last_error = None
 
@@ -195,70 +198,86 @@ def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
             "model":       model,
             "messages":    messages,
             "temperature": temperature,
-            "max_tokens":  4096,   # free-tier models cap here; 8192 causes silent empty responses
-            "stream":      False,  # non-streaming: one clean JSON blob, no SSE parsing bugs
-        }
-        body = json.dumps(payload).encode("utf-8")
-        hdrs = {
-            "Content-Type":  "application/json",
-            "Authorization": f"Bearer {api_key}",
-            "HTTP-Referer":  "https://rdxper.app",
-            "X-Title":       "rdxper",
+            "max_tokens":  4096,
+            "stream":      False,
         }
 
-        try:
-            ctx  = ssl.create_default_context()
-            conn = http.client.HTTPSConnection("openrouter.ai", timeout=120, context=ctx)
-            conn.request("POST", "/api/v1/chat/completions", body=body, headers=hdrs)
-            resp = conn.getresponse()
-            raw  = resp.read().decode("utf-8", errors="replace")
-            conn.close()
-        except Exception as e:
-            last_error = f"Connection error on {model}: {e}"
-            print(f"[OpenRouter] {last_error}")
-            time.sleep(2)
-            continue
+        # Retry up to 2 times on 429 with exponential backoff before giving up on this model
+        for attempt in range(3):
+            try:
+                resp = _req.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=90,
+                )
+            except _req.exceptions.Timeout:
+                last_error = f"Timeout on {model}"
+                print(f"[OpenRouter] Timeout on {model}, trying next...")
+                break
+            except _req.exceptions.RequestException as e:
+                last_error = f"Request error on {model}: {e}"
+                print(f"[OpenRouter] {last_error}")
+                break
 
-        # Skippable HTTP errors — try the next model
-        if resp.status in (400, 402, 404, 429, 503):
-            last_error = f"HTTP {resp.status} on {model}: {raw[:300]}"
-            print(f"[OpenRouter] {resp.status} on {model} (skipping) → {raw[:200]}")
-            time.sleep(1)
-            continue
+            status = resp.status_code
 
-        if resp.status != 200:
-            # Unexpected status — raise immediately so the job shows a useful error
-            raise RuntimeError(f"OpenRouter HTTP {resp.status}: {raw[:400]}")
+            if status == 429:
+                wait = 2 ** (attempt + 2)  # 4s, 8s, 16s
+                last_error = f"429 rate-limited on {model} (attempt {attempt+1})"
+                print(f"[OpenRouter] 429 on {model}, waiting {wait}s...")
+                time.sleep(wait)
+                continue  # retry same model
 
-        # Parse the non-streaming JSON response
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as e:
-            last_error = f"JSON parse error on {model}: {e} | raw={raw[:200]}"
-            print(f"[OpenRouter] {last_error}")
-            continue
+            if status in (400, 402, 404, 503):
+                body = resp.text[:300]
+                last_error = f"HTTP {status} on {model}: {body}"
+                print(f"[OpenRouter] {status} on {model} (skipping): {body[:120]}")
+                break  # skip to next model
 
-        # Check for an application-level error embedded in a 200 response
-        if "error" in data:
-            last_error = f"Model error on {model}: {data['error']}"
-            print(f"[OpenRouter] {last_error}")
-            time.sleep(1)
-            continue
+            if status != 200:
+                last_error = f"HTTP {status} on {model}: {resp.text[:300]}"
+                print(f"[OpenRouter] Unexpected {status} on {model}: {resp.text[:120]}")
+                break
 
-        try:
-            text = data["choices"][0]["message"]["content"] or ""
-        except (KeyError, IndexError, TypeError):
-            last_error = f"Unexpected response shape from {model}: {str(data)[:200]}"
-            print(f"[OpenRouter] {last_error}")
-            continue
+            # Parse successful JSON response
+            try:
+                data = resp.json()
+            except Exception as e:
+                last_error = f"JSON parse error on {model}: {e}"
+                print(f"[OpenRouter] {last_error}")
+                break
 
-        if not text.strip():
-            last_error = f"Empty content from {model}"
-            print(f"[OpenRouter] {last_error}, trying next...")
-            continue
+            if "error" in data:
+                err = data["error"]
+                last_error = f"API error on {model}: {err}"
+                print(f"[OpenRouter] {last_error}")
+                # If it's a rate/quota error embedded in 200, back off and retry
+                err_str = str(err).lower()
+                if "rate" in err_str or "quota" in err_str or "limit" in err_str:
+                    wait = 2 ** (attempt + 2)
+                    print(f"[OpenRouter] Quota error, waiting {wait}s...")
+                    time.sleep(wait)
+                    continue
+                break
 
-        print(f"[OpenRouter] ✓ Used model: {model} ({len(text)} chars)")
-        return text.strip()
+            try:
+                text = (data["choices"][0]["message"]["content"] or "").strip()
+            except (KeyError, IndexError, TypeError) as e:
+                last_error = f"Unexpected shape from {model}: {e}"
+                print(f"[OpenRouter] {last_error}")
+                break
+
+            if not text:
+                last_error = f"Empty content from {model}"
+                print(f"[OpenRouter] {last_error}")
+                break
+
+            print(f"[OpenRouter] ✓ {model} ({len(text)} chars)")
+            return text
+
+        # Small pause between models to be friendly to rate limits
+        time.sleep(1)
 
     raise RuntimeError(
         f"All OpenRouter free models failed. Last error: {last_error}. "
@@ -491,8 +510,7 @@ class GeminiWriter:
         # ── PARALLEL AI CALLS A, B, C, D ─────────────────────────────────────
         # All four calls share only pre-built hdr/q context — fully independent,
         # so we fire them concurrently for a ~3× speed improvement.
-        if progress_cb: progress_cb(30, "Writing all sections in parallel...")
-
+        
         pA = (hdr + q_prob + q_obj + q_stmt +
               "Write using XML tags only. Scholarly prose, no markdown bullets outside objectives.\n\n"
               "<keywords>6-8 comma-separated academic keywords for this topic. Do NOT use bold markers.</keywords>\n"
@@ -610,32 +628,18 @@ class GeminiWriter:
               f"pie|Gender Distribution of Respondents|Female,Male,Non-binary,Prefer not to say\n"
               f"stacked|Trust in Prevention Frameworks by Occupation|Students,Employed,Self-employed,Retired;High,Moderate,Low</charts>")
 
-        def _call_A():
-            return 'A', ai_generate(pA, system=SYSTEM_PROMPT, temperature=0.7)
-        def _call_B():
-            time.sleep(1.5)
-            return 'B', ai_generate(pB, system=SYSTEM_PROMPT, temperature=0.7)
-        def _call_C():
-            time.sleep(3)
-            return 'C', ai_generate(pC, system=SYSTEM_PROMPT, temperature=0.7)
-        def _call_D():
-            time.sleep(4.5)
-            return 'D', ai_generate(pD, system=SYSTEM_PROMPT, temperature=0.7)
+        # Sequential calls — avoids hammering rate limits with simultaneous requests
+        if progress_cb: progress_cb(32, "Writing keywords, abstract & objectives...")
+        raw_A = ai_generate(pA, system=SYSTEM_PROMPT, temperature=0.7)
 
-        raw_results = {}
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            futures = {pool.submit(fn): fn.__name__ for fn in (_call_A, _call_B, _call_C, _call_D)}
-            done_count = 0
-            for fut in as_completed(futures):
-                label, raw = fut.result()   # propagates exceptions naturally
-                raw_results[label] = raw
-                done_count += 1
-                pct = 30 + int(done_count / 4 * 44)   # 30 → 74 %
-                msgs = {1: "First section ready...", 2: "Half-way through sections...",
-                        3: "Nearly done writing...", 4: "All sections written. Assembling document..."}
-                if progress_cb: progress_cb(pct, msgs.get(done_count, "Writing sections..."))
+        if progress_cb: progress_cb(44, "Writing introduction...")
+        raw_B = ai_generate(pB, system=SYSTEM_PROMPT, temperature=0.7)
 
-        raw_A, raw_B, raw_C, raw_D = raw_results['A'], raw_results['B'], raw_results['C'], raw_results['D']
+        if progress_cb: progress_cb(56, "Writing literature review...")
+        raw_C = ai_generate(pC, system=SYSTEM_PROMPT, temperature=0.7)
+
+        if progress_cb: progress_cb(66, "Writing methodology, results & conclusion...")
+        raw_D = ai_generate(pD, system=SYSTEM_PROMPT, temperature=0.7)
 
         # Parse Call A
         for tag in ('keywords', 'abstract', 'objectives'):
