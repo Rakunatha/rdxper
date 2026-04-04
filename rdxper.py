@@ -5,12 +5,12 @@ Pipeline:
   1. Semantic Scholar API  → real papers (titles, abstracts, citations, DOIs)
   2. CrossRef API          → additional verified journal articles
   3. Wikipedia REST API    → background context & definitions
-  4. OpenRouter (FREE)     → writes ALL prose sections using scraped data as context
+  4. Groq API (FREE)       → writes ALL prose sections using scraped data as context
   5. python-docx           → assembles formatted .docx with SPSS-style charts
 
 AI Provider:
-  OpenRouter (free tier) — https://openrouter.ai/keys
-  set OPENROUTER_API_KEY=your_key_here
+  Groq (free tier) — https://console.groq.com
+  set GROQ_API_KEY=your_key_here
 
 Usage:
   python rdxper.py
@@ -126,7 +126,7 @@ def session_delete(token: str):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  FREE AI CLIENT  (OpenRouter — auto-fallback across free models)
+#  AI CLIENT  (Groq — fast free inference)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Ordered sections — used to map closing tags → progress %
@@ -152,32 +152,30 @@ SECTION_LABELS = {
 _AI_START = 30
 _AI_END   = 75
 
-# Free models on OpenRouter — tried in order, with exponential backoff on 429
-# Updated April 2026 — verified working slugs
-_OPENROUTER_FREE_MODELS = [
-    "google/gemini-2.0-flash-exp:free",             # Gemini 2.0 Flash — fast, large context
-    "meta-llama/llama-4-maverick:free",             # Llama 4 Maverick
-    "meta-llama/llama-4-scout:free",                # Llama 4 Scout
-    "deepseek/deepseek-r1:free",                    # DeepSeek R1
-    "deepseek/deepseek-chat:free",                  # DeepSeek Chat
-    "qwen/qwen3-235b-a22b:free",                    # Qwen3 235B
-    "mistralai/mistral-small-3.1-24b-instruct:free",# Mistral Small 3.1
-    "meta-llama/llama-3.3-70b-instruct:free",       # Llama 3.3 70B
-    "google/gemma-3-27b-it:free",                   # Gemma 3 27B
+# Groq free models — tried in order, with exponential backoff on 429
+# See https://console.groq.com/docs/models for current list
+_GROQ_MODELS = [
+    "llama-3.3-70b-versatile",      # Best quality, large context
+    "llama-3.1-70b-versatile",      # Strong fallback
+    "deepseek-r1-distill-llama-70b",# DeepSeek R1 on Groq
+    "llama-3.2-90b-vision-preview", # 90B — high quality
+    "llama-3.1-8b-instant",         # Fast lightweight fallback
+    "gemma2-9b-it",                 # Gemma 2 fallback
+    "mixtral-8x7b-32768",           # Mixtral — large context window
 ]
 
 
 def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
                 progress_cb=None, tracked_sections=None) -> str:
     """
-    Call OpenRouter with requests library + exponential backoff.
-    Tries each free model in order; retries up to 2x on 429 before skipping.
+    Call Groq API with requests library + exponential backoff on 429.
+    Tries each model in order; retries up to 3x on rate limit before skipping.
     """
     import requests as _req
 
-    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    api_key = os.environ.get("GROQ_API_KEY", "").strip()
     if not api_key:
-        raise RuntimeError("OPENROUTER_API_KEY not set. Get a free key at https://openrouter.ai/keys")
+        raise RuntimeError("GROQ_API_KEY not set. Get a free key at https://console.groq.com")
 
     messages = []
     if system:
@@ -187,13 +185,11 @@ def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type":  "application/json",
-        "HTTP-Referer":  "https://rdxper.app",
-        "X-Title":       "rdxper",
     }
 
     last_error = None
 
-    for model in _OPENROUTER_FREE_MODELS:
+    for model in _GROQ_MODELS:
         payload = {
             "model":       model,
             "messages":    messages,
@@ -206,18 +202,18 @@ def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
         for attempt in range(3):
             try:
                 resp = _req.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
+                    "https://api.groq.com/openai/v1/chat/completions",
                     headers=headers,
                     json=payload,
                     timeout=90,
                 )
             except _req.exceptions.Timeout:
                 last_error = f"Timeout on {model}"
-                print(f"[OpenRouter] Timeout on {model}, trying next...")
+                print(f"[Groq] Timeout on {model}, trying next...")
                 break
             except _req.exceptions.RequestException as e:
                 last_error = f"Request error on {model}: {e}"
-                print(f"[OpenRouter] {last_error}")
+                print(f"[Groq] {last_error}")
                 break
 
             status = resp.status_code
@@ -225,19 +221,19 @@ def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
             if status == 429:
                 wait = 2 ** (attempt + 2)  # 4s, 8s, 16s
                 last_error = f"429 rate-limited on {model} (attempt {attempt+1})"
-                print(f"[OpenRouter] 429 on {model}, waiting {wait}s...")
+                print(f"[Groq] 429 on {model}, waiting {wait}s...")
                 time.sleep(wait)
                 continue  # retry same model
 
             if status in (400, 402, 404, 503):
                 body = resp.text[:300]
                 last_error = f"HTTP {status} on {model}: {body}"
-                print(f"[OpenRouter] {status} on {model} (skipping): {body[:120]}")
+                print(f"[Groq] {status} on {model} (skipping): {body[:120]}")
                 break  # skip to next model
 
             if status != 200:
                 last_error = f"HTTP {status} on {model}: {resp.text[:300]}"
-                print(f"[OpenRouter] Unexpected {status} on {model}: {resp.text[:120]}")
+                print(f"[Groq] Unexpected {status} on {model}: {resp.text[:120]}")
                 break
 
             # Parse successful JSON response
@@ -245,18 +241,18 @@ def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
                 data = resp.json()
             except Exception as e:
                 last_error = f"JSON parse error on {model}: {e}"
-                print(f"[OpenRouter] {last_error}")
+                print(f"[Groq] {last_error}")
                 break
 
             if "error" in data:
                 err = data["error"]
                 last_error = f"API error on {model}: {err}"
-                print(f"[OpenRouter] {last_error}")
+                print(f"[Groq] {last_error}")
                 # If it's a rate/quota error embedded in 200, back off and retry
                 err_str = str(err).lower()
                 if "rate" in err_str or "quota" in err_str or "limit" in err_str:
                     wait = 2 ** (attempt + 2)
-                    print(f"[OpenRouter] Quota error, waiting {wait}s...")
+                    print(f"[Groq] Quota error, waiting {wait}s...")
                     time.sleep(wait)
                     continue
                 break
@@ -265,27 +261,27 @@ def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
                 text = (data["choices"][0]["message"]["content"] or "").strip()
             except (KeyError, IndexError, TypeError) as e:
                 last_error = f"Unexpected shape from {model}: {e}"
-                print(f"[OpenRouter] {last_error}")
+                print(f"[Groq] {last_error}")
                 break
 
             if not text:
                 last_error = f"Empty content from {model}"
-                print(f"[OpenRouter] {last_error}")
+                print(f"[Groq] {last_error}")
                 break
 
-            print(f"[OpenRouter] ✓ {model} ({len(text)} chars)")
+            print(f"[Groq] ✓ {model} ({len(text)} chars)")
             return text
 
         # Small pause between models to be friendly to rate limits
         time.sleep(1)
 
     raise RuntimeError(
-        f"All OpenRouter free models failed. Last error: {last_error}. "
-        "Check your key at https://openrouter.ai/keys"
+        f"All Groq models failed. Last error: {last_error}. "
+        "Check your key at https://console.groq.com"
     )
 
 
-# Backward-compat alias used elsewhere in the file
+# Backward-compat alias
 def gemini_stream(prompt, system="", temperature=0.7, progress_cb=None, tracked_sections=None):
     return ai_generate(prompt, system, temperature, progress_cb, tracked_sections)
 
@@ -2794,9 +2790,9 @@ def generate_paper():
 
     data   = request.json
 
-    if not os.environ.get("OPENROUTER_API_KEY", "").strip():
+    if not os.environ.get("GROQ_API_KEY", "").strip():
         return jsonify({'success': False,
-                        'message': 'OPENROUTER_API_KEY not set. Get a free key at https://openrouter.ai/keys'}), 400
+                        'message': 'GROQ_API_KEY not set. Get a free key at https://console.groq.com'}), 400
 
     topic  = data.get('topic', '').strip()
     nfigs  = max(3, min(20, int(data.get('num_figures', 6))))
@@ -2928,22 +2924,22 @@ def download_paper(jid):
 if __name__ == '__main__':
     os.makedirs('generated', exist_ok=True)
 
-    or_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
-    key_str = "✓ OpenRouter — ready!" if or_key else "✗ NOT SET — see below"
+    or_key = os.environ.get("GROQ_API_KEY", "").strip()
+    key_str = "✓ Groq — ready!" if or_key else "✗ NOT SET — see below"
     print('\n' + '='*60)
     print('  rdxper v4.0  —  Free AI Research Paper Generator')
-    print('  Powered by OpenRouter (free tier)')
+    print('  Powered by Groq (free tier)')
     print('  Open browser:  http://127.0.0.1:8080')
-    print(f'  OPENROUTER_API_KEY: {key_str}')
+    print(f'  GROQ_API_KEY: {key_str}')
     print('='*60 + '\n')
     if not or_key:
-        print('  ┌─ GET YOUR FREE API KEY ──────────────────────────────────┐')
+        print('  ┌─ GET YOUR FREE GROQ API KEY ─────────────────────────────┐')
         print('  │                                                          │')
-        print('  │  OpenRouter — free, no credit card needed:              │')
-        print('  │    1. Visit https://openrouter.ai/keys                  │')
-        print('  │    2. Sign up → Create API Key                          │')
-        print('  │    3. Windows:  set OPENROUTER_API_KEY=your_key_here    │')
-        print('  │       Mac/Linux: export OPENROUTER_API_KEY=your_key     │')
+        print('  │  Groq — free, no credit card needed:                    │')
+        print('  │    1. Visit https://console.groq.com                    │')
+        print('  │    2. Sign up → API Keys → Create API Key               │')
+        print('  │    3. Windows:  set GROQ_API_KEY=your_key_here          │')
+        print('  │       Mac/Linux: export GROQ_API_KEY=your_key           │')
         print('  │    4. Run python rdxper.py again                        │')
         print('  │                                                          │')
         print('  └──────────────────────────────────────────────────────────┘')
