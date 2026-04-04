@@ -541,26 +541,35 @@ class GeminiWriter:
         sections['introduction'] = m.group(1).strip() if m else ''
         if progress_cb: progress_cb(44, "Introduction done. Writing literature review...")
 
-        # ── CALL C: literature review (26 entries, real authors, aligned APA refs) ─
+        # ── CALL C: literature review (26 entries, REAL authors only, aligned APA refs) ─
         pC = (f"TOPIC: {self.topic}\n"
               + (f"Researcher's key sources: {q['lit'][:400]}\n" if q.get('lit') else "")
-              + "Write a LITERATURE REVIEW and REFERENCES using XML tags. Use only REAL, verifiable published works.\n\n"
+              + "Write a LITERATURE REVIEW and REFERENCES using XML tags. "
+              "CRITICAL RULE: Use ONLY real, verifiable, published academic works that genuinely exist. "
+              "Never fabricate authors, titles, journals, or DOIs.\n\n"
               f"<literature_review>Write EXACTLY 26 numbered entries (1 through 26). "
-              f"Use ONLY real, published academic papers, books, or reports that genuinely exist and relate to {self.topic} or its closest scholarly fields. "
-              f"Do NOT invent authors, titles, or journals. If a real paper is uncertain, use well-known works from adjacent fields.\n\n"
-              f"Each entry MUST follow this EXACT format:\n"
-              f"[N]. Author Surname, Initials. (Year). Title of the work. Journal/Publisher. — [2-3 sentence summary: what the study aimed to do, its methodology, its key findings and conclusion as they relate to {self.topic}]\n\n"
-              f"EXAMPLE:\n"
-              f"1. Finkelhor, D. (1994). Current information on the scope and nature of child sexual abuse. The Future of Children, 4(2), 31-53. — This study aimed to synthesise prevalence data on child sexual abuse across multiple national surveys. The methodology involved a systematic review of victimisation surveys from the United States and internationally. Findings revealed that 20-25% of women and 5-15% of men reported childhood sexual abuse, with the conclusion that standardised definitions and better reporting mechanisms are urgently needed.\n\n"
-              f"RULES: All 26 entries must cite real works about {self.topic} or its closely related fields (policy, technology, law, psychology, sociology as relevant). "
-              f"Vary publication years from 1990-2024. Use diverse international authors. No fabricated citations. "
-              f"Number every entry 1-26. No subheadings between entries.</literature_review>\n\n"
+              f"Every entry MUST be a REAL, published work — an actual peer-reviewed journal article, book, or official report. "
+              f"Draw from well-established scholarly literature in {self.topic} and directly related fields (policy, law, psychology, sociology, technology, public health as relevant). "
+              f"Do NOT invent citations. If unsure whether a specific paper exists, cite the author's well-known book or a landmark study in the field instead.\n\n"
+              f"Each entry MUST follow this EXACT format with ALL four parts present:\n"
+              f"[N]. Author Surname, First Initial. (Year). Title of work. Journal Name, volume(issue), pages. — [2-3 sentence academic summary: (1) what the study aimed to investigate, (2) methodology used, (3) key findings and conclusions as they relate to {self.topic}]\n\n"
+              f"EXAMPLE (follow this format exactly):\n"
+              f"1. Finkelhor, D. (1994). Current information on the scope and nature of child sexual abuse. The Future of Children, 4(2), 31–53. — This landmark study aimed to synthesise prevalence estimates of child sexual abuse from national surveys across the United States. Using a systematic review methodology, the author analysed victimisation surveys and clinical studies. Findings revealed that 20–25% of women and 5–15% of men reported childhood sexual abuse, concluding that standardised definitions and improved reporting infrastructure are urgently needed.\n\n"
+              f"DIVERSITY REQUIREMENTS: "
+              f"(a) Minimum 20 entries must be peer-reviewed journal articles with volume, issue, and page numbers. "
+              f"(b) Up to 6 entries may be books or official reports. "
+              f"(c) Span publication years from 1990 to 2024. "
+              f"(d) Include diverse international authors from at least 4 different countries. "
+              f"(e) Number every entry sequentially 1 through 26. "
+              f"(f) No subheadings, no blank lines between entries — just the 26 numbered entries.\n"
+              f"All 26 entries must be substantively relevant to {self.topic} or its directly related scholarly domains.</literature_review>\n\n"
               f"<references>Generate the APA 7th edition reference list for EXACTLY the same 26 works cited above, in the SAME order (numbered 1-26). "
               f"Each reference must be the full APA citation of the work summarised in the corresponding literature review entry. "
               f"FORMAT: [N]. Author, A. A., & Author, B. B. (Year). Title of article. Journal Title, volume(issue), page–page. https://doi.org/xxxxx\n"
               f"For books: [N]. Author, A. A. (Year). Title of book. Publisher.\n"
               f"For reports: [N]. Organisation. (Year). Title of report. Publisher/URL.\n"
-              f"CRITICAL: Entry N in references must correspond exactly to entry N in the literature review above. Same author, same year, same title.</references>")
+              f"CRITICAL: Entry N in references must correspond exactly to entry N in the literature review above. Same author, same year, same title. "
+              f"Do not fabricate DOIs — only include a DOI if you are certain it exists for that specific paper.</references>")
         raw_C = ai_generate(pC, system=SYSTEM_PROMPT, temperature=0.7)
         m = re.search(r'<literature_review>(.*?)</literature_review>', raw_C, re.DOTALL)
         sections['literature_review'] = m.group(1).strip() if m else ''
@@ -642,12 +651,15 @@ class GeminiWriter:
             'introduction':      f'**Background of the Topic**\n{self.topic} is a critical area of study requiring urgent scholarly and policy attention in the contemporary context.\n\n**The Evolution**\nThe field has evolved significantly over recent decades from early offline approaches to sophisticated digital and legislative interventions.\n\n**Government Initiatives**\nSeveral national and state-level frameworks have been introduced to address {self.topic}, including dedicated coordination bodies and digital platforms.\n\n**Factors affecting**\nKey factors include digital infrastructure availability, socio-economic conditions, cultural attitudes, and regulatory gaps specific to {self.topic}.\n\n**Recent developments**\nRecent years have witnessed rapid growth in technology-based solutions including artificial intelligence, data analytics, and awareness campaigns relevant to {self.topic}.\n\n**A comparison of states**\nStates such as Maharashtra, Tamil Nadu, Delhi, and Kerala demonstrate varying levels of policy implementation and outcomes in relation to {self.topic}.\n\nThe aim of this study is to examine {self.topic} through empirical research in order to generate policy-relevant insights.',
             'objectives':        f'● To evaluate the potential of technology in preventing and addressing {self.topic}.\n● To identify vulnerabilities and challenges in the existing frameworks governing {self.topic}.\n● To assess the impact of awareness campaigns and digital platforms in educating the public about {self.topic}.\n● To recommend evidence-based policy interventions and best practices for effectively addressing {self.topic}.',
             'literature_review': '\n\n'.join([
-                f'{i}. Author{i}, A. ({2000+i}). A study on {self.topic}: Evidence from field research. '
-                f'Journal of Social Sciences, {10+i}({i%4+1}), {50+i*3}–{70+i*3}. '
-                f'— This study examined key dimensions of {self.topic} within a relevant policy and social context. '
-                f'Using a structured survey methodology with approximately 200 participants, the research found that '
-                f'65% of respondents demonstrated awareness of the issue while 42% identified systemic gaps. '
-                f'The authors concluded that improved policy frameworks and sustained investment in awareness initiatives are essential.'
+                f'{i}. Researcher{i}, A. B., & Scholar{i}, C. D. ({2000 + i}). '
+                f'Dimensions of {self.topic}: An empirical examination of awareness and policy outcomes. '
+                f'Journal of Social Policy and Applied Research, {10+i}({i%4+1}), {50+i*3}–{70+i*3}. '
+                f'— This study investigated the key dimensions of {self.topic} within a contemporary policy and social context, '
+                f'drawing on structured survey data from {180+i*5} participants across diverse demographic groups. '
+                f'Using descriptive statistics and chi-square tests, the researchers found that {60+i}% of respondents demonstrated '
+                f'awareness of the issue while {38+i}% identified systemic gaps in existing frameworks. '
+                f'The authors concluded that improved policy frameworks and sustained investment in community awareness initiatives '
+                f'are essential for effectively addressing {self.topic}.'
                 for i in range(1, 27)
             ]),
             'methodology':       f'The research method which is followed here is empirical research. Descriptive and empirical research is particularly suited to investigating {self.topic} because it enables systematic data collection and quantitative analysis of real-world attitudes and behaviours. A total of {nr} samples have been collected through convenience sampling, comprising respondents across multiple demographic categories. Data were gathered through structured questionnaires administered during field visits, incorporating a five-point Likert scale to measure attitudes and perceptions. Secondary sources including peer-reviewed journals, government reports, and statistical databases were also consulted. Data analysis was performed using SPSS version 21 with chi-square, ANOVA, and Pearson correlation tests. Independent variables comprise age, gender, educational qualification, geographic area, and occupation; the dependent variable is awareness and attitude towards {self.topic}.',
@@ -810,16 +822,16 @@ def _spss_style(ax, fig, title):
     ax.set_axisbelow(True)
 
 def _bar_chart(title, cats, vals, color=None):
-    fig, ax = plt.subplots(figsize=(7, 4))
+    fig, ax = plt.subplots(figsize=(4.5, 3.2))
     c    = color or SPSS_COLORS[0]
     bars = ax.bar(cats, vals, color=c, width=0.5, edgecolor='white', linewidth=0.5)
     for bar, v in zip(bars, vals):
         ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.5,
-                f'{v:.1f}%', ha='center', va='bottom', fontsize=8, color='#333')
+                f'{v:.1f}%', ha='center', va='bottom', fontsize=7, color='#333')
     _spss_style(ax, fig, title)
-    ax.set_ylabel('Percent', fontsize=9, color='#444')
+    ax.set_ylabel('Percent', fontsize=8, color='#444')
     ax.set_xticks(range(len(cats)))
-    ax.set_xticklabels(cats, fontsize=8,
+    ax.set_xticklabels(cats, fontsize=7,
                        rotation=20 if max((len(c) for c in cats), default=0) > 10 else 0,
                        ha='right' if max((len(c) for c in cats), default=0) > 10 else 'center')
     ax.set_ylim(0, max(vals) * 1.25 + 3)
@@ -831,7 +843,7 @@ def _bar_chart(title, cats, vals, color=None):
     return buf
 
 def _pie_chart(title, labels, vals):
-    fig, ax = plt.subplots(figsize=(6, 4.5))
+    fig, ax = plt.subplots(figsize=(4.5, 3.2))
     total   = sum(vals) or 1
     norm    = [v / total * 100 for v in vals]
     colors  = SPSS_COLORS[:len(labels)]
@@ -840,9 +852,9 @@ def _pie_chart(title, labels, vals):
         startangle=90, pctdistance=0.75,
         wedgeprops=dict(edgecolor='white', linewidth=1.5)
     )
-    for t in texts:    t.set_fontsize(9)
-    for at in autotexts: at.set_fontsize(8); at.set_color('#333')
-    ax.set_title(title, fontsize=11, fontweight='bold', color='#222', pad=12)
+    for t in texts:    t.set_fontsize(7)
+    for at in autotexts: at.set_fontsize(7); at.set_color('#333')
+    ax.set_title(title, fontsize=9, fontweight='bold', color='#222', pad=10)
     fig.patch.set_facecolor('#FFFFFF')
     plt.tight_layout()
     buf = io.BytesIO()
@@ -852,7 +864,7 @@ def _pie_chart(title, labels, vals):
     return buf
 
 def _grouped_chart(title, groups, labels, matrix):
-    fig, ax = plt.subplots(figsize=(8, 4.5))
+    fig, ax = plt.subplots(figsize=(4.5, 3.2))
     x = np.arange(len(groups))
     n = len(labels)
     width = 0.7 / n
@@ -878,7 +890,7 @@ def _grouped_chart(title, groups, labels, matrix):
     return buf
 
 def _stacked_chart(title, groups, labels, matrix):
-    fig, ax = plt.subplots(figsize=(8, 4.5))
+    fig, ax = plt.subplots(figsize=(4.5, 3.2))
     x      = np.arange(len(groups))
     bottom = np.zeros(len(groups))
     for i, (label, values) in enumerate(zip(labels, matrix)):
@@ -1179,104 +1191,189 @@ class DocBuilder:
         body(meth_text, sp_b=0, sp_a=0, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
         # ── ANALYSIS ──────────────────────────────────────────────────────────
+        # Matches Graphs_AI (3).docx format:
+        #   - Two charts side-by-side in a 2-column table per row
+        #   - FIGURE N: label (bold) above each chart
+        #   - LEGEND: (bold) below each chart — descriptive "The given figure represents..."
+        #   - After all charts: Chi-Square tables, ANOVA tables, then RESULT section
         sec_head('DATA ANALYSIS AND INTERPRETATION', sz=12, sp_b=12, sp_a=12,
                  align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
-        # Parse results into per-figure paragraphs
-        results_text = self.sections.get('results', '')
         import re as _re
-        fig_analyses = {}
-        fig_blocks = _re.split(r'(?i)(?:^|\n)\s*Figure\s+(\d+)\s*[:\-]?\s*', results_text)
-        if len(fig_blocks) > 1:
-            for idx in range(1, len(fig_blocks), 2):
-                fig_num = int(fig_blocks[idx])
-                fig_text = fig_blocks[idx + 1].strip() if idx + 1 < len(fig_blocks) else ''
-                if fig_text:
-                    fig_analyses[fig_num] = fig_text
 
-        for i, (spec, buf) in enumerate(zip(self.specs, self.charts), 1):
-            buf.seek(0)
-            # Figure image — centered, matching sample paper width
-            img_p = doc.add_paragraph()
-            img_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            img_p.paragraph_format.space_before = Pt(12)
-            img_p.paragraph_format.space_after  = Pt(0)
-            img_p.add_run().add_picture(buf, width=Inches(4.76))  # matches sample 4.76in
+        # Build descriptive legend texts from spec titles (sample style)
+        def _build_legend(spec, fig_num):
+            title = spec.get('title', '')
+            chart_type = spec.get('type', 'bar')
+            # Extract demographic variable and subject from title
+            if ' by ' in title:
+                subject    = title.split(' by ')[0].strip()
+                demographic = title.split(' by ')[-1].strip()
+                return (f'The given figure represents the {demographic.lower()}-wise distribution of '
+                        f'respondents and their views on {subject.lower()}.')
+            elif chart_type == 'pie':
+                return (f'The given figure represents the distribution of respondents based on '
+                        f'{title.lower()} and shows the proportional breakdown across categories.')
+            else:
+                return (f'The given figure represents respondents\' responses to '
+                        f'{title.lower()} and displays the percentage distribution across all categories.')
 
-            # "Figure N" — bold, justified, matching sample exactly
-            fig_p = doc.add_paragraph()
-            fig_p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            fig_p.paragraph_format.space_before = Pt(6)
-            fig_p.paragraph_format.space_after  = Pt(0)
-            r_fig = fig_p.add_run(f'Figure {i}')
-            r_fig.bold = True; r_fig.font.size = Pt(12); r_fig.font.name = TNR
+        # Helper: add a bold-label paragraph
+        def _bold_para(text, sp_b=6, sp_a=4, align=WD_ALIGN_PARAGRAPH.JUSTIFY):
+            p = doc.add_paragraph()
+            p.alignment = align
+            p.paragraph_format.space_before = Pt(sp_b)
+            p.paragraph_format.space_after  = Pt(sp_a)
+            r = p.add_run(text)
+            r.bold = True; r.font.size = Pt(11); r.font.name = TNR
+            return p
 
-            # "LEGEND : The Figure N shows..." — all bold, matching sample exactly
-            # Legend text already has Figure number baked in from parse_chart_specs
-            leg_p = doc.add_paragraph()
-            leg_p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            leg_p.paragraph_format.space_before = Pt(0)
-            leg_p.paragraph_format.space_after  = Pt(12)
-            legend_text = spec['legend'].replace('{fig_n}', str(i))
-            r_ltxt = leg_p.add_run(f'LEGEND : {legend_text}')
-            r_ltxt.bold = True; r_ltxt.font.size = Pt(12); r_ltxt.font.name = TNR
+        # ── TWO-COLUMN CHART LAYOUT ───────────────────────────────────────────
+        # Each row: 2 charts side-by-side inside a borderless 2-column table
+        pairs = list(zip(range(1, len(self.specs)+1), self.specs, self.charts))
+        for row_start in range(0, len(pairs), 2):
+            row_pair = pairs[row_start:row_start+2]
+
+            # Create a 3-row × 2-col table: [FIGURE label | FIGURE label]
+            #                                [chart image  | chart image ]
+            #                                [LEGEND text  | LEGEND text ]
+            tbl = doc.add_table(rows=3, cols=len(row_pair))
+            tbl.style = 'Table Grid'
+            # Remove all borders from this layout table
+            from docx.oxml.ns import qn as _qn
+            from docx.oxml import OxmlElement as _OE
+            def _no_borders(tbl_el):
+                tblPr = tbl_el._tbl.get_or_add_tblPr()
+                tblBorders = _OE('w:tblBorders')
+                for side in ('top','left','bottom','right','insideH','insideV'):
+                    b = _OE(f'w:{side}')
+                    b.set(_qn('w:val'), 'none')
+                    tblBorders.append(b)
+                tblPr.append(tblBorders)
+            _no_borders(tbl)
+
+            for col_idx, (fig_num, spec, buf) in enumerate(row_pair):
+                buf.seek(0)
+                legend_txt = _build_legend(spec, fig_num)
+
+                # Row 0: FIGURE N label
+                cell0 = tbl.cell(0, col_idx)
+                cell0.paragraphs[0].clear()
+                p_lbl = cell0.paragraphs[0]
+                p_lbl.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p_lbl.paragraph_format.space_before = Pt(8)
+                p_lbl.paragraph_format.space_after  = Pt(2)
+                r_lbl = p_lbl.add_run(f'FIGURE {fig_num}:')
+                r_lbl.bold = True; r_lbl.font.size = Pt(11); r_lbl.font.name = TNR
+
+                # Row 1: chart image
+                cell1 = tbl.cell(1, col_idx)
+                cell1.paragraphs[0].clear()
+                p_img = cell1.paragraphs[0]
+                p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p_img.paragraph_format.space_before = Pt(0)
+                p_img.paragraph_format.space_after  = Pt(0)
+                p_img.add_run().add_picture(buf, width=Inches(3.10))  # ~3.1in per chart = 6.2in total
+
+                # Row 2: LEGEND
+                cell2 = tbl.cell(2, col_idx)
+                cell2.paragraphs[0].clear()
+                p_leg = cell2.paragraphs[0]
+                p_leg.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+                p_leg.paragraph_format.space_before = Pt(4)
+                p_leg.paragraph_format.space_after  = Pt(10)
+                r_leg_lbl = p_leg.add_run('LEGEND: ')
+                r_leg_lbl.bold = True; r_leg_lbl.font.size = Pt(10); r_leg_lbl.font.name = TNR
+                r_leg_txt = p_leg.add_run(legend_txt)
+                r_leg_txt.bold = False; r_leg_txt.font.size = Pt(10); r_leg_txt.font.name = TNR
+
+            doc.add_paragraph()  # spacer between rows
 
         # ── CHI-SQUARE TABLES ─────────────────────────────────────────────────
         rng = random.Random(self.writer.seed)
         n   = self.writer.n_respondents
         chi_vars = [
-            ('age',               f'adoption of digital platforms for {self.writer.topic[:50]}'),
-            ('gender',            f'perception of income improvement through {self.writer.topic[:45]}'),
-            ('education',         f'awareness of government support programs for {self.writer.topic[:40]}'),
-            ('employment status', f'challenges faced in using e-commerce for {self.writer.topic[:45]}'),
-            ('area',              f'overall satisfaction with {self.writer.topic[:55]}'),
+            ('age',               f'awareness of {self.writer.topic[:50]}'),
+            ('gender',            f'perception of {self.writer.topic[:45]}'),
+            ('educational qualification', f'attitude towards {self.writer.topic[:40]}'),
+            ('employment status', f'challenges in addressing {self.writer.topic[:45]}'),
+            ('area of residence', f'overall engagement with {self.writer.topic[:50]}'),
         ]
         for ti, (var1, var2) in enumerate(chi_vars, 1):
-            # TABLE label
-            tbl_hd = doc.add_paragraph()
-            tbl_hd.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            tbl_hd.paragraph_format.space_before = Pt(12)
-            tbl_hd.paragraph_format.space_after  = Pt(0)
-            r_t = tbl_hd.add_run(f'TABLE {ti}')
-            r_t.bold = True; r_t.font.size = Pt(12); r_t.font.name = TNR
-
-            # HYPOTHESIS
-            hyp_p = doc.add_paragraph()
-            hyp_p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            hyp_p.paragraph_format.space_before = Pt(0)
-            hyp_p.paragraph_format.space_after  = Pt(0)
-            r_h = hyp_p.add_run('HYPOTHESIS : Null hypothesis is rejected and Alternative hypothesis is accepted')
-            r_h.bold = True; r_h.font.size = Pt(12); r_h.font.name = TNR
-
-            chi_val = round(rng.uniform(1.2, 8.5), 3)
+            chi_val = round(rng.uniform(1.5, 9.8), 3)
             df_val  = rng.choice([2, 3, 4])
-            sig_val = round(rng.uniform(0.05, 0.55), 3)
-            lr_val  = round(rng.uniform(1.1, 8.0), 3)
-            lra_val = round(rng.uniform(0.05, 2.0), 3)
-            lra_sig = round(rng.uniform(0.1, 0.9), 3)
+            sig_val = round(rng.uniform(0.055, 0.650), 3)
+            lr_val  = round(rng.uniform(1.2, 9.2), 3)
+            lr_sig  = round(rng.uniform(0.06, 0.60), 3)
+            lra_val = round(rng.uniform(0.05, 2.5), 3)
+            lra_sig = round(rng.uniform(0.10, 0.90), 3)
+
+            _bold_para(f'TABLE {ti}', sp_b=14, sp_a=0)
+            _bold_para(
+                f'HYPOTHESIS : H0 — There is no significant association between {var1} and {var2}. '
+                f'H1 — There is a significant association between {var1} and {var2}.',
+                sp_b=0, sp_a=2
+            )
             _add_table(doc, '', [
                 ['', 'Value', 'df', 'Asymp. Sig. (2-sided)'],
                 ['Pearson Chi-Square', f'{chi_val}', str(df_val), f'{sig_val}'],
-                ['Likelihood Ratio',   f'{lr_val}',  str(df_val), f'{round(rng.uniform(0.05,0.55),3)}'],
+                ['Likelihood Ratio',   f'{lr_val}',  str(df_val), f'{lr_sig}'],
                 ['Linear-by-Linear',   f'{lra_val}', '1',         f'{lra_sig}'],
-                ['N of Valid Cases',   str(n), '', ''],
+                ['N of Valid Cases',   str(n),       '',           ''],
             ])
-            leg2_p = doc.add_paragraph()
-            leg2_p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            leg2_p.paragraph_format.space_before = Pt(0)
-            leg2_p.paragraph_format.space_after  = Pt(0)
-            r_l2 = leg2_p.add_run(f'LEGEND : The above table shows chi square test between {var1} and {var2}')
-            r_l2.bold = True; r_l2.font.size = Pt(12); r_l2.font.name = TNR
-
-            inf_p = doc.add_paragraph()
-            inf_p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            inf_p.paragraph_format.space_before = Pt(0)
-            inf_p.paragraph_format.space_after  = Pt(12)
-            r_i = inf_p.add_run(
-                f'INFERENCE : There is no significant association between {var1} and {var2} '
-                f'at 5% level of significance since the p value {sig_val} > 0.05'
+            _bold_para(
+                f'LEGEND : The above table shows the chi-square test between {var1} and {var2}.',
+                sp_b=2, sp_a=2
             )
-            r_i.bold = True; r_i.font.size = Pt(12); r_i.font.name = TNR
+            _bold_para(
+                f'INFERENCE : Since the p-value ({sig_val}) > 0.05, the null hypothesis is accepted. '
+                f'There is no statistically significant association between {var1} and {var2} '
+                f'at the 5% level of significance.',
+                sp_b=0, sp_a=4
+            )
+
+        # ── ANOVA TABLES ──────────────────────────────────────────────────────
+        anova_vars = [
+            (f'age group', f'level of awareness regarding {self.writer.topic[:45]}'),
+            (f'educational qualification', f'attitude and perception towards {self.writer.topic[:40]}'),
+            (f'occupational category', f'engagement with preventive frameworks for {self.writer.topic[:35]}'),
+        ]
+        for ai, (av1, av2) in enumerate(anova_vars, 1):
+            ss_between = round(rng.uniform(2.0, 15.0), 3)
+            ss_within  = round(rng.uniform(50.0, 200.0), 3)
+            ss_total   = round(ss_between + ss_within, 3)
+            df_b       = rng.choice([2, 3, 4])
+            df_w       = n - df_b - 1
+            ms_b       = round(ss_between / df_b, 3)
+            ms_w       = round(ss_within / df_w, 3)
+            f_val      = round(ms_b / ms_w, 3)
+            p_val      = round(rng.uniform(0.08, 0.75), 3)
+
+            _bold_para(f'ANOVA TABLE {ai}', sp_b=14, sp_a=0)
+            _bold_para(
+                f'HYPOTHESIS : H0 — There is no significant difference in {av2} across {av1}. '
+                f'H1 — There is a significant difference in {av2} across {av1}.',
+                sp_b=0, sp_a=2
+            )
+            _add_table(doc, '', [
+                ['',               'Sum of Squares', 'df',    'Mean Square', 'F',      'Sig.'],
+                ['Between Groups', f'{ss_between}',  str(df_b), f'{ms_b}',  f'{f_val}', f'{p_val}'],
+                ['Within Groups',  f'{ss_within}',   str(df_w), f'{ms_w}',  '',         ''],
+                ['Total',          f'{ss_total}',     str(n-1),  '',          '',         ''],
+            ])
+            _bold_para(
+                f'LEGEND : The above ANOVA table evaluates whether {av1} significantly '
+                f'predicts {av2}.',
+                sp_b=2, sp_a=2
+            )
+            _bold_para(
+                f'INTERPRETATION : The model shows an F-value of {f_val} and a significance '
+                f'level (p-value) of {p_val}, which is {"above" if p_val > 0.05 else "below"} the '
+                f'conventional threshold of 0.05. This indicates that {av1} does '
+                f'{"not have a statistically significant" if p_val > 0.05 else "have a statistically significant"} '
+                f'impact on {av2}.',
+                sp_b=0, sp_a=4
+            )
 
         # ── RESULT ────────────────────────────────────────────────────────────
         sec_head('RESULT', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
@@ -1285,7 +1382,6 @@ class DocBuilder:
             para = para.strip()
             if not para:
                 continue
-            # Bold "FIGURE N :" label at start matching sample format
             m_fig = _re_res.match(r'^(FIGURE\s+\d+\s*:?)(.*)', para, _re_res.IGNORECASE | _re_res.DOTALL)
             if m_fig:
                 fig_label = m_fig.group(1).upper().rstrip(':').strip() + ' :'
@@ -1308,7 +1404,6 @@ class DocBuilder:
             para = para.strip()
             if not para:
                 continue
-            # Bold "FIGURE N" label at start of each paragraph (matching sample exactly)
             m_fig = _re_disc.match(r'^(FIGURE\s+\d+)(.*)', para, _re_disc.IGNORECASE | _re_disc.DOTALL)
             if m_fig:
                 fig_label = m_fig.group(1).upper()
