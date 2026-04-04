@@ -152,17 +152,19 @@ SECTION_LABELS = {
 _AI_START = 30
 _AI_END   = 75
 
-# Free models on OpenRouter — tried in order, skipped on 429/quota/empty
+# Free models on OpenRouter — tried in order, skipped on 404/429/quota/empty
 # Updated April 2026 — verified slugs from openrouter.ai/models
 _OPENROUTER_FREE_MODELS = [
-    "openrouter/free",                              # Auto-router: picks best available free model
-    "deepseek/deepseek-chat-v3.1:free",             # DeepSeek V3.1 — top general model
+    "meta-llama/llama-4-maverick:free",             # Llama 4 Maverick — reliable, large context
+    "meta-llama/llama-4-scout:free",                # Llama 4 Scout — fast fallback
     "deepseek/deepseek-r1:free",                    # DeepSeek R1 — strong reasoning
-    "meta-llama/llama-4-maverick:free",             # Llama 4 Maverick
+    "deepseek/deepseek-chat:free",                  # DeepSeek Chat (stable slug)
     "qwen/qwen3-235b-a22b:free",                    # Qwen3 235B MoE
+    "qwen/qwen3-30b-a3b:free",                      # Qwen3 30B — lighter fallback
     "mistralai/mistral-small-3.1-24b-instruct:free",# Mistral Small 3.1
-    "meta-llama/llama-3.3-70b-instruct:free",       # Llama 3.3 70B
+    "meta-llama/llama-3.3-70b-instruct:free",       # Llama 3.3 70B — proven workhorse
     "google/gemma-3-27b-it:free",                   # Gemma 3 27B
+    "openrouter/free",                              # Last resort auto-router
 ]
 
 
@@ -214,9 +216,9 @@ def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
             conn.request("POST", "/api/v1/chat/completions", body=body, headers=hdrs)
             resp = conn.getresponse()
 
-            if resp.status in (429, 402, 503):
+            if resp.status in (404, 429, 402, 503, 400):
                 err = resp.read().decode("utf-8", errors="replace")
-                print(f"[OpenRouter] {resp.status} on {model}, trying next...")
+                print(f"[OpenRouter] {resp.status} on {model} (skipping) → {err[:200]}")
                 last_error = f"HTTP {resp.status} on {model}: {err[:200]}"
                 conn.close()
                 continue
@@ -496,8 +498,11 @@ class GeminiWriter:
 
         sections = {}
 
-        # ── CALL A: keywords + abstract + objectives ──────────────────────────
-        if progress_cb: progress_cb(30, "Writing keywords, abstract & objectives...")
+        # ── PARALLEL AI CALLS A, B, C, D ─────────────────────────────────────
+        # All four calls share only pre-built hdr/q context — fully independent,
+        # so we fire them concurrently for a ~3× speed improvement.
+        if progress_cb: progress_cb(30, "Writing all sections in parallel...")
+
         pA = (hdr + q_prob + q_obj + q_stmt +
               "Write using XML tags only. Scholarly prose, no markdown bullets outside objectives.\n\n"
               "<keywords>6-8 comma-separated academic keywords for this topic. Do NOT use bold markers.</keywords>\n"
@@ -515,13 +520,7 @@ class GeminiWriter:
               + ("Reproduce VERBATIM, each on its own line, each starting '● To ...':\n" + q['objectives'] if q.get('objectives') else
                  f"Write EXACTLY 4 specific objectives for {self.topic}, each on its own line starting '● To [active verb] ...'. No more, no fewer than 4.")
               + "</objectives>")
-        raw_A = ai_generate(pA, system=SYSTEM_PROMPT, temperature=0.7)
-        for tag in ('keywords', 'abstract', 'objectives'):
-            m = re.search(rf'<{tag}>(.*?)</{tag}>', raw_A, re.DOTALL)
-            sections[tag] = m.group(1).strip() if m else ''
-        if progress_cb: progress_cb(36, "Abstract done. Writing introduction...")
 
-        # ── CALL B: introduction — one long condensed paragraph ─────────────
         pB = (hdr + q_prob + q_gap + q_stmt +
               "Write a formal academic INTRODUCTION section using XML tags. Flowing prose only — no bullet points, no subheadings.\n\n"
               f"<introduction>Write ONE single lengthy paragraph of 350-450 words. "
@@ -536,12 +535,7 @@ class GeminiWriter:
               f"(7) a concluding sentence beginning: 'The aim of this study is to...' "
               + (f"rooted in: {q['statement'][:120]}" if q.get('statement') else "") +
               "\nNo subheadings. No bold text. No bullets. ONE paragraph only.</introduction>")
-        raw_B = ai_generate(pB, system=SYSTEM_PROMPT, temperature=0.7)
-        m = re.search(r'<introduction>(.*?)</introduction>', raw_B, re.DOTALL)
-        sections['introduction'] = m.group(1).strip() if m else ''
-        if progress_cb: progress_cb(44, "Introduction done. Writing literature review...")
 
-        # ── CALL C: literature review (26 entries, REAL authors only, aligned APA refs) ─
         pC = (f"TOPIC: {self.topic}\n"
               + (f"Researcher's key sources: {q['lit'][:400]}\n" if q.get('lit') else "")
               + "Write a LITERATURE REVIEW and REFERENCES using XML tags.\n"
@@ -581,15 +575,7 @@ class GeminiWriter:
               f"  Report/Organisation: [N]. Organisation Name. (Year). Title of report. Publisher.\n"
               f"CRITICAL: Entry N in references must match entry N in literature review — same author, year, and title. "
               f"Do NOT fabricate DOIs — omit the DOI field if you are not certain it exists.</references>")
-        raw_C = ai_generate(pC, system=SYSTEM_PROMPT, temperature=0.7)
-        m = re.search(r'<literature_review>(.*?)</literature_review>', raw_C, re.DOTALL)
-        sections['literature_review'] = m.group(1).strip() if m else ''
-        m_refs = re.search(r'<references>(.*?)</references>', raw_C, re.DOTALL)
-        # Store AI-generated APA references aligned with lit review; fallback to scraper refs later
-        sections['ai_references'] = m_refs.group(1).strip() if m_refs else ''
-        if progress_cb: progress_cb(56, "Literature review done. Writing methodology & analysis...")
 
-        # ── CALL D: methodology + results + discussion + limitations + suggestions + conclusion + charts ─
         pD = (hdr +
               "Write the remaining paper sections using XML tags. Scholarly prose only — no bullet points.\n\n"
               f"<methodology>Write 4-6 prose paragraphs (no numbering, no bullets). "
@@ -632,10 +618,51 @@ class GeminiWriter:
               f"bar|Level of Concern about {self.topic[:20]} by Education|Below 10th,10th-12th,UG,PG,PhD\n"
               f"pie|Gender Distribution of Respondents|Female,Male,Non-binary,Prefer not to say\n"
               f"stacked|Trust in Prevention Frameworks by Occupation|Students,Employed,Self-employed,Retired;High,Moderate,Low</charts>")
-        raw_D = ai_generate(pD, system=SYSTEM_PROMPT, temperature=0.7)
+
+        def _call_A():
+            return 'A', ai_generate(pA, system=SYSTEM_PROMPT, temperature=0.7)
+        def _call_B():
+            return 'B', ai_generate(pB, system=SYSTEM_PROMPT, temperature=0.7)
+        def _call_C():
+            return 'C', ai_generate(pC, system=SYSTEM_PROMPT, temperature=0.7)
+        def _call_D():
+            return 'D', ai_generate(pD, system=SYSTEM_PROMPT, temperature=0.7)
+
+        raw_results = {}
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = {pool.submit(fn): fn.__name__ for fn in (_call_A, _call_B, _call_C, _call_D)}
+            done_count = 0
+            for fut in as_completed(futures):
+                label, raw = fut.result()   # propagates exceptions naturally
+                raw_results[label] = raw
+                done_count += 1
+                pct = 30 + int(done_count / 4 * 44)   # 30 → 74 %
+                msgs = {1: "First section ready...", 2: "Half-way through sections...",
+                        3: "Nearly done writing...", 4: "All sections written. Assembling document..."}
+                if progress_cb: progress_cb(pct, msgs.get(done_count, "Writing sections..."))
+
+        raw_A, raw_B, raw_C, raw_D = raw_results['A'], raw_results['B'], raw_results['C'], raw_results['D']
+
+        # Parse Call A
+        for tag in ('keywords', 'abstract', 'objectives'):
+            m = re.search(rf'<{tag}>(.*?)</{tag}>', raw_A, re.DOTALL)
+            sections[tag] = m.group(1).strip() if m else ''
+
+        # Parse Call B
+        m = re.search(r'<introduction>(.*?)</introduction>', raw_B, re.DOTALL)
+        sections['introduction'] = m.group(1).strip() if m else ''
+
+        # Parse Call C
+        m = re.search(r'<literature_review>(.*?)</literature_review>', raw_C, re.DOTALL)
+        sections['literature_review'] = m.group(1).strip() if m else ''
+        m_refs = re.search(r'<references>(.*?)</references>', raw_C, re.DOTALL)
+        sections['ai_references'] = m_refs.group(1).strip() if m_refs else ''
+
+        # Parse Call D
         for tag in ('methodology', 'results', 'discussion', 'limitations', 'suggestions', 'conclusion', 'charts'):
             m = re.search(rf'<{tag}>(.*?)</{tag}>', raw_D, re.DOTALL)
             sections[tag] = m.group(1).strip() if m else ''
+
         if progress_cb: progress_cb(74, "All sections written. Assembling Word document...")
 
         # ── Fallbacks ─────────────────────────────────────────────────────────
