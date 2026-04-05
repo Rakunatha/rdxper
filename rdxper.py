@@ -526,19 +526,29 @@ class GeminiWriter:
               + "</objectives>")
 
         pB = (hdr + q_prob + q_gap + q_stmt +
-              "Write a formal academic INTRODUCTION section using XML tags. Flowing prose only — no bullet points, no subheadings.\n\n"
-              f"<introduction>Write ONE single lengthy paragraph of 350-450 words. "
-              f"Do NOT use any subheadings, bold labels, or line breaks — it must be continuous unbroken prose. "
-              f"The paragraph must flow naturally through all of these elements in sequence: "
-              f"(1) the historical background and significance of {self.topic}; "
-              f"(2) how the field has evolved from early approaches to present-day digital and legislative interventions; "
-              f"(3) relevant government acts, schemes, and bodies addressing {self.topic} with named examples; "
-              f"(4) 4-5 key factors that influence outcomes in {self.topic} (infrastructure, socio-economic, cultural, policy, technology); "
-              + (f"(5) this research gap: {q['gap'][:150]}; " if q.get('gap') else "(5) current gaps in research and practice; ") +
-              f"(6) recent developments and innovations; "
-              f"(7) a concluding sentence beginning: 'The aim of this study is to...' "
-              + (f"rooted in: {q['statement'][:120]}" if q.get('statement') else "") +
-              "\nNo subheadings. No bold text. No bullets. ONE paragraph only.</introduction>")
+              "Write a formal academic INTRODUCTION section using XML tags. Flowing prose only — no bullet points, no subheadings, no bold markers.\n\n"
+              f"<introduction>Write EXACTLY 3 to 4 distinct paragraphs separated by a blank line. "
+              f"Each paragraph must be continuous flowing prose with NO subheadings, NO bold text, and NO bullet points. "
+              f"Total length: 450-600 words across all paragraphs.\n\n"
+              f"PARAGRAPH 1 (120-160 words): Establish the historical background and significance of {self.topic}. "
+              f"Introduce the key institutions, laws, or frameworks associated with {self.topic}. "
+              f"Name specific acts, bodies, or landmark developments relevant to {self.topic} in India or globally. "
+              f"End the paragraph with a transition to the broader governance or regulatory context.\n\n"
+              f"PARAGRAPH 2 (120-150 words): Introduce the key oversight or review mechanism relevant to {self.topic} "
+              f"(e.g. judicial review, regulatory audit, policy evaluation, or equivalent). "
+              f"Explain its constitutional or statutory basis, its purpose as a safeguard, and how it operates in practice. "
+              + (f"Connect to this research gap: {q['gap'][:150]}. " if q.get('gap') else "Discuss tensions between technical expertise and legal/policy standards. ") +
+              f"This paragraph should elaborate on why oversight matters for {self.topic}.\n\n"
+              f"PARAGRAPH 3 (100-140 words): Discuss the evolving landscape of {self.topic} — recent legislative, "
+              f"judicial, technological, or policy developments that have reshaped the field. "
+              f"Note any structural changes, reforms, or shifts in how {self.topic} is governed or studied. "
+              f"Raise the important questions this evolution creates for researchers, practitioners, and policymakers.\n\n"
+              f"PARAGRAPH 4 (80-120 words): State the aim and scope of this study. "
+              f"Begin with: 'This study aims to critically examine...' and describe what the paper explores, "
+              f"the legal/empirical/analytical framework used, and the contribution it makes to understanding {self.topic}. "
+              + (f"Ground the aim in: {q['statement'][:120]}" if q.get('statement') else "") +
+              f"\n\nCRITICAL: No subheadings. No bold text. No numbered lists. Separate paragraphs with a blank line only. "
+              f"Write scholarly prose as found in peer-reviewed law or social science journals.</introduction>")
 
         # Build a digest of scraped real papers to seed the AI's lit review
         scraped_seed = ""
@@ -583,14 +593,18 @@ class GeminiWriter:
 
         pD = (hdr +
               "Write the remaining paper sections using XML tags. Scholarly prose only — no bullet points.\n\n"
-              f"<methodology>Write 4-6 prose paragraphs (no numbering, no bullets). "
-              f"Must open with: 'The research method which is followed here is empirical research.' "
-              f"Then cover: why this method suits {self.topic}; sampling — 'A total of {nr} samples have been collected'; "
-              f"data collection via structured questionnaire with Likert scale; "
-              f"secondary sources (journals, reports, government data) consulted for {self.topic}; "
-              f"SPSS version 21 used for analysis — name specific tests (chi-square, ANOVA, Pearson correlation); "
-              f"independent variables: age, gender, education, location, occupation; "
-              f"dependent variable: [relevant outcome for {self.topic}].</methodology>\n\n"
+              f"<methodology>Write EXACTLY ONE single flowing paragraph of approximately 200 words (no more than 220 words). "
+              f"No subheadings, no bullet points, no line breaks — continuous scholarly prose only. "
+              f"The paragraph MUST open with: 'The research method which is followed here is empirical research.' "
+              f"Then in the same flowing paragraph, concisely cover all of the following: "
+              f"why empirical/descriptive research suits {self.topic}; "
+              f"'A total of {nr} samples have been collected' via convenience sampling; "
+              f"data collection through a structured questionnaire with a five-point Likert scale; "
+              f"secondary sources including peer-reviewed journals, government reports, and statistical databases consulted for {self.topic}; "
+              f"SPSS version 21 used for statistical analysis employing chi-square, ANOVA, and Pearson correlation tests; "
+              f"independent variables of age, gender, educational qualification, geographic area, and occupation; "
+              f"and the dependent variable being the relevant outcome or awareness level for {self.topic}. "
+              f"Aim for tight, precise academic prose — approximately 200 words in a single unbroken paragraph.</methodology>\n\n"
               f"<results>Write EXACTLY {self._nfigs} short paragraphs separated by blank lines — one per Figure, in order. "
               f"Each paragraph MUST open with: 'FIGURE [N] : Response of [demographic group] [percentage]%, "
               f"[next group] [percentage]%, ...' then 1-2 sentences describing key findings for that figure. "
@@ -680,7 +694,30 @@ class GeminiWriter:
                 f'In **Conclusion**, the study underscores the need for integrated policy responses combining '
                 f'digital innovation, legislative reform, and community education to effectively address {self.topic}.'
             ),
-            'introduction':      f'**Background of the Topic**\n{self.topic} is a critical area of study requiring urgent scholarly and policy attention in the contemporary context.\n\n**The Evolution**\nThe field has evolved significantly over recent decades from early offline approaches to sophisticated digital and legislative interventions.\n\n**Government Initiatives**\nSeveral national and state-level frameworks have been introduced to address {self.topic}, including dedicated coordination bodies and digital platforms.\n\n**Factors affecting**\nKey factors include digital infrastructure availability, socio-economic conditions, cultural attitudes, and regulatory gaps specific to {self.topic}.\n\n**Recent developments**\nRecent years have witnessed rapid growth in technology-based solutions including artificial intelligence, data analytics, and awareness campaigns relevant to {self.topic}.\n\n**A comparison of states**\nStates such as Maharashtra, Tamil Nadu, Delhi, and Kerala demonstrate varying levels of policy implementation and outcomes in relation to {self.topic}.\n\nThe aim of this study is to examine {self.topic} through empirical research in order to generate policy-relevant insights.',
+            'introduction':      (
+                f'{self.topic} has emerged as a significant area of scholarly and policy concern in recent decades, '
+                f'reflecting the complex interplay of legislation, institutional frameworks, and evolving social realities. '
+                f'In India, the administration and adjudication of matters related to {self.topic} have increasingly been entrusted '
+                f'to specialised bodies and statutory authorities designed to ensure technical expertise, efficiency, and expedited resolution. '
+                f'These institutions play a pivotal role in interpreting and enforcing the relevant legal and regulatory frameworks '
+                f'governing {self.topic}, including key acts, schemes, and policy instruments introduced at the national and state levels.\n\n'
+                f'However, the decisions and practices of such administrative and regulatory bodies are not beyond scrutiny. '
+                f'Mechanisms of judicial and regulatory oversight — vested in constitutional courts and supervisory authorities — '
+                f'act as fundamental safeguards to ensure that these bodies function within the bounds of legality, fairness, '
+                f'and procedural propriety. Such oversight serves to check arbitrariness, jurisdictional errors, and violations '
+                f'of principles of natural justice, thereby maintaining the rule of law and accountability in the governance of {self.topic}.\n\n'
+                f'The evolving landscape of {self.topic} in India, particularly in light of recent legislative reforms, '
+                f'judicial pronouncements, and technological developments, has further intensified the discourse on the role and '
+                f'scope of effective governance in this domain. Policymakers and courts are increasingly called upon to balance '
+                f'deference to technical expertise with the need to uphold constitutional principles and legal standards, '
+                f'raising important questions regarding the extent of intervention, the standards applied, and the implications '
+                f'for efficiency and consistency in the administration of {self.topic}.\n\n'
+                f'This study aims to critically examine the governance and empirical dimensions of {self.topic} in India. '
+                f'It explores the legal and institutional framework, analyses key judicial and policy precedents, and evaluates '
+                f'the challenges and implications of current approaches. By doing so, the research seeks to contribute to a '
+                f'nuanced understanding of the relationship between administrative practice and constitutional or regulatory '
+                f'control in the field of {self.topic}.'
+            ),
             'objectives':        f'● To evaluate the potential of technology in preventing and addressing {self.topic}.\n● To identify vulnerabilities and challenges in the existing frameworks governing {self.topic}.\n● To assess the impact of awareness campaigns and digital platforms in educating the public about {self.topic}.\n● To recommend evidence-based policy interventions and best practices for effectively addressing {self.topic}.',
             'literature_review': self._build_lit_review_fallback(nr),
             'methodology':       f'The research method which is followed here is empirical research. Descriptive and empirical research is particularly suited to investigating {self.topic} because it enables systematic data collection and quantitative analysis of real-world attitudes and behaviours. A total of {nr} samples have been collected through convenience sampling, comprising respondents across multiple demographic categories. Data were gathered through structured questionnaires administered during field visits, incorporating a five-point Likert scale to measure attitudes and perceptions. Secondary sources including peer-reviewed journals, government reports, and statistical databases were also consulted. Data analysis was performed using SPSS version 21 with chi-square, ANOVA, and Pearson correlation tests. Independent variables comprise age, gender, educational qualification, geographic area, and occupation; the dependent variable is awareness and attitude towards {self.topic}.',
@@ -1204,10 +1241,10 @@ class DocBuilder:
         sec_head('INTRODUCTION')
         import re as _re_intro
         intro_text = self.sections['introduction'].strip()
-        # Introduction is now one condensed paragraph — render as plain justified body text
-        # Strip any stray markdown bold markers the AI may have added
+        # Introduction is 3-4 flowing paragraphs separated by blank lines.
+        # Strip any stray markdown bold markers or subheading lines the AI may have added.
         intro_clean = _re_intro.sub(r'\*\*([^*]+)\*\*', r'\1', intro_text)
-        # Split on double newlines in case AI still produced multiple paragraphs
+        intro_clean = _re_intro.sub(r'(?m)^[A-Z][A-Za-z ]{2,30}:\s*\n', '', intro_clean)
         intro_paras = [p.strip() for p in intro_clean.split('\n\n') if p.strip()]
         for para in intro_paras:
             body(para, sp_b=12, sp_a=6, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
