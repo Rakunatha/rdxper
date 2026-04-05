@@ -605,16 +605,22 @@ class GeminiWriter:
               f"independent variables of age, gender, educational qualification, geographic area, and occupation; "
               f"and the dependent variable being the relevant outcome or awareness level for {self.topic}. "
               f"Aim for tight, precise academic prose — approximately 200 words in a single unbroken paragraph.</methodology>\n\n"
-              f"<results>Write EXACTLY {self._nfigs} short paragraphs separated by blank lines — one per Figure, in order. "
-              f"Each paragraph MUST open with: 'FIGURE [N] : Response of [demographic group] [percentage]%, "
-              f"[next group] [percentage]%, ...' then 1-2 sentences describing key findings for that figure. "
-              f"Keep each paragraph to 40-60 words. Include realistic-looking percentage breakdowns by "
-              f"educational qualification, age, gender, or area as appropriate to the chart topic.</results>\n\n"
-              f"<discussion>Write {self._nfigs} paragraphs separated by blank lines — one per Figure. "
-              f"Each paragraph MUST open with: 'FIGURE [N] In the data analysis says that majority of the respondents says "
-              f"[key finding about {self.topic}].' Then elaborate (60-80 words): connect finding to broader context of "
-              f"{self.topic}, note subgroup differences, cite one related concept or author if relevant. "
-              f"Prose only, no headings within.</discussion>\n\n"
+              f"<results>Write ONE single continuous paragraph (no line breaks or blank lines within it). "
+              f"Describe key findings from all {self._nfigs} figures in sequence, embedding an inline bold figure "
+              f"reference after each figure's description. "
+              f"FORMAT: 'According to the chart, [2-3 sentences of findings with realistic % values for figure 1] **(fig: 1)**. "
+              f"The data reveals [findings for figure 2] **(fig: 2)**. [Continue for all figures up to {self._nfigs}].' "
+              f"Keep each figure's description to 2-3 sentences with specific demographic % values. "
+              f"Use varied openers: 'According to the chart,', 'The data reveals that', 'Among respondents,', "
+              f"'Notably,', 'A majority of respondents', 'The findings show that', etc. "
+              f"End the paragraph after **(fig: {self._nfigs})**. No separate paragraphs — ONE block of text only.</results>\n\n"
+              f"<discussion>Write EXACTLY {self._nfigs} paragraphs separated by blank lines — one per Figure. "
+              f"Each paragraph: 60-90 words of flowing scholarly prose connecting the figure's data to the broader context of {self.topic}. "
+              f"Mention subgroup differences, relevant concepts, and policy implications. "
+              f"EACH paragraph MUST END with the inline bold figure reference: **(fig: [N])** "
+              f"Example closing: '...reinforcing the need for targeted policy interventions in this domain **(fig: 1)**.' "
+              f"Do NOT open paragraphs with 'FIGURE N' — start directly with the analysis. "
+              f"Prose only, no headings, no bullet points within.</discussion>\n\n"
               f"<limitations>Write 2 paragraphs (150-200 words total). "
               f"First paragraph: study limitations — sample characteristics, geographic scope, convenience sampling bias, "
               f"self-report limitations specific to {self.topic}. "
@@ -721,8 +727,18 @@ class GeminiWriter:
             'objectives':        f'● To evaluate the potential of technology in preventing and addressing {self.topic}.\n● To identify vulnerabilities and challenges in the existing frameworks governing {self.topic}.\n● To assess the impact of awareness campaigns and digital platforms in educating the public about {self.topic}.\n● To recommend evidence-based policy interventions and best practices for effectively addressing {self.topic}.',
             'literature_review': self._build_lit_review_fallback(nr),
             'methodology':       f'The research method which is followed here is empirical research. Descriptive and empirical research is particularly suited to investigating {self.topic} because it enables systematic data collection and quantitative analysis of real-world attitudes and behaviours. A total of {nr} samples have been collected through convenience sampling, comprising respondents across multiple demographic categories. Data were gathered through structured questionnaires administered during field visits, incorporating a five-point Likert scale to measure attitudes and perceptions. Secondary sources including peer-reviewed journals, government reports, and statistical databases were also consulted. Data analysis was performed using SPSS version 21 with chi-square, ANOVA, and Pearson correlation tests. Independent variables comprise age, gender, educational qualification, geographic area, and occupation; the dependent variable is awareness and attitude towards {self.topic}.',
-            'results':           '\n\n'.join([f'FIGURE {i} : Response of age 18-30 years {round(10+i*2.1,1)}%, 31-40 years {round(18+i*1.3,1)}%, 41-50 years {round(14+i*0.9,1)}%, 51 and above {round(8+i*0.7,1)}% are given their responses towards {self.topic}. The majority of respondents in the 31-40 age group indicated strong awareness. Educational qualification emerged as a significant moderating factor in shaping these responses.' for i in range(1, self._nfigs+1)]),
-            'discussion':        '\n\n'.join([f'FIGURE {i} In the data analysis says that majority of the respondents says that awareness of {self.topic} is most pronounced among respondents with higher educational qualifications and those in the 31-40 age bracket. This finding aligns with existing scholarship on the relationship between education level and civic awareness of sensitive social issues. The data underscores the importance of targeted educational and digital outreach strategies to reach under-informed demographic segments.' for i in range(1, self._nfigs+1)]),
+            'results':           ' '.join([
+                f'According to the chart, {round(10+i*2.1,1)}% of respondents aged 18–30, {round(18+i*1.3,1)}% aged 31–40, '
+                f'{round(14+i*0.9,1)}% aged 41–50, and {round(8+i*0.7,1)}% aged 51 and above provided their responses towards {self.topic}. '
+                f'The 31–40 age group showed the strongest awareness levels, with educational qualification emerging as a significant moderating factor. **(fig: {i})**'
+                for i in range(1, self._nfigs+1)
+            ]),
+            'discussion':        '\n\n'.join([
+                f'The data on {self.topic} reveals that awareness is most pronounced among respondents with higher educational qualifications and those in the 31–40 age bracket. '
+                f'This finding aligns with existing scholarship on the relationship between education level and civic awareness of sensitive social issues. '
+                f'The data underscores the importance of targeted educational and digital outreach strategies to reach under-informed demographic segments. **(fig: {i})**'
+                for i in range(1, self._nfigs+1)
+            ]),
             'limitations':       f'The body of literature reviewed highlights several limitations that merit consideration. This study relies on a convenience sample of {nr} respondents, which, while adequate for exploratory analysis, limits the generalisability of findings across all population groups relevant to {self.topic}. Self-report biases and social desirability effects may have influenced responses on sensitive dimensions of the topic.\n\nThe geographic scope of the study is concentrated and may not adequately represent rural and remote populations who experience {self.topic} differently from urban respondents. Future research should employ longitudinal methodologies with larger, more geographically diverse samples across multiple Indian states to validate and extend the current findings.',
             'suggestions':       f'Policymakers should prioritise strengthening the legislative and regulatory frameworks governing {self.topic} and ensure that existing laws are rigorously enforced at both central and state levels. Investment in technology-based solutions, including AI-driven monitoring and reporting systems, should be accelerated. Community awareness programmes must be expanded with particular emphasis on reaching underserved and rural populations. Educational institutions should integrate age-appropriate curricula to build long-term awareness from an early stage. Researchers and practitioners should collaborate to develop evidence-based intervention models suitable for adoption by state governments. Civil society organisations must be adequately funded and legally empowered to support affected individuals and advocate for systemic reform.',
             'conclusion':        f'This study has undertaken an empirical examination of {self.topic} through research with {nr} respondents drawn from diverse demographic backgrounds. The findings indicate significant variation in awareness and attitudes across educational, age, gender, and occupational groups, with the majority demonstrating moderate to high levels of awareness. Graduate-level respondents and those in the 31-40 age group showed the strongest engagement with the issue, while rural respondents and those with lower educational attainment indicated comparatively lower awareness. These findings substantially fulfil the stated objectives of the study, confirming the relevance of education and technology-based interventions. Policymakers should prioritise legislative reform, digital infrastructure investment, and sustained community outreach as the three pillars of an integrated response to {self.topic}. The study is subject to limitations in sample size and geographic coverage, which future longitudinal and multi-state research should address to build a more comprehensive evidence base.',
@@ -1351,95 +1367,39 @@ class DocBuilder:
             r.bold = True; r.font.size = Pt(11); r.font.name = TNR
             return p
 
-        # ── TWO-COLUMN CHART LAYOUT ───────────────────────────────────────────
-        # Each row: 2 charts side-by-side inside a borderless 2-column table
-        pairs = list(zip(range(1, len(self.specs)+1), self.specs, self.charts))
-        for row_start in range(0, len(pairs), 2):
-            row_pair = pairs[row_start:row_start+2]
+        # ── SINGLE-COLUMN CHART LAYOUT ────────────────────────────────────────
+        # Matches sample doc: each figure on its own row —
+        #   FIGURE N:  (bold, left-aligned)
+        #   [chart image, centered, ~3.2"]
+        #   LEGEND: (bold) descriptive text (normal)
+        for fig_num, spec, buf in zip(range(1, len(self.specs) + 1), self.specs, self.charts):
+            buf.seek(0)
+            legend_txt = _build_legend(spec, fig_num)
 
-            # Create a 3-row × 2-col table: [FIGURE label | FIGURE label]
-            #                                [chart image  | chart image ]
-            #                                [LEGEND text  | LEGEND text ]
-            tbl = doc.add_table(rows=3, cols=len(row_pair))
-            tbl.style = 'Table Grid'
-            # Remove all borders from this layout table using direct XML manipulation
-            tbl_xml = tbl._tbl
-            # Get or create tblPr
-            tblPr = tbl_xml.find(qn('w:tblPr'))
-            if tblPr is None:
-                tblPr = OxmlElement('w:tblPr')
-                tbl_xml.insert(0, tblPr)
-            # Remove existing tblBorders if present
-            existing_borders = tblPr.find(qn('w:tblBorders'))
-            if existing_borders is not None:
-                tblPr.remove(existing_borders)
-            # Add new tblBorders with all sides set to none
-            tblBorders = OxmlElement('w:tblBorders')
-            for side in ('top', 'left', 'bottom', 'right', 'insideH', 'insideV'):
-                b = OxmlElement(f'w:{side}')
-                b.set(qn('w:val'), 'none')
-                b.set(qn('w:sz'), '0')
-                b.set(qn('w:space'), '0')
-                b.set(qn('w:color'), 'auto')
-                tblBorders.append(b)
-            tblPr.append(tblBorders)
-            # Also clear borders on every cell
-            for row in tbl.rows:
-                for cell in row.cells:
-                    tc = cell._tc
-                    tcPr = tc.find(qn('w:tcPr'))
-                    if tcPr is None:
-                        tcPr = OxmlElement('w:tcPr')
-                        tc.insert(0, tcPr)
-                    existing_cb = tcPr.find(qn('w:tcBorders'))
-                    if existing_cb is not None:
-                        tcPr.remove(existing_cb)
-                    tcBorders = OxmlElement('w:tcBorders')
-                    for side in ('top', 'left', 'bottom', 'right', 'insideH', 'insideV'):
-                        b = OxmlElement(f'w:{side}')
-                        b.set(qn('w:val'), 'none')
-                        b.set(qn('w:sz'), '0')
-                        b.set(qn('w:space'), '0')
-                        b.set(qn('w:color'), 'auto')
-                        tcBorders.append(b)
-                    tcPr.append(tcBorders)
+            # FIGURE N: label — bold, left-aligned
+            p_lbl = doc.add_paragraph()
+            p_lbl.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            p_lbl.paragraph_format.space_before = Pt(14)
+            p_lbl.paragraph_format.space_after  = Pt(4)
+            r_lbl = p_lbl.add_run(f'FIGURE {fig_num}:')
+            r_lbl.bold = True; r_lbl.font.size = Pt(12); r_lbl.font.name = TNR
 
-            for col_idx, (fig_num, spec, buf) in enumerate(row_pair):
-                buf.seek(0)
-                legend_txt = _build_legend(spec, fig_num)
+            # Chart image — centered, ~3.2" wide matching sample dimensions
+            p_img = doc.add_paragraph()
+            p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p_img.paragraph_format.space_before = Pt(0)
+            p_img.paragraph_format.space_after  = Pt(4)
+            p_img.add_run().add_picture(buf, width=Inches(3.20))
 
-                # Row 0: FIGURE N label
-                cell0 = tbl.cell(0, col_idx)
-                cell0.paragraphs[0].clear()
-                p_lbl = cell0.paragraphs[0]
-                p_lbl.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                p_lbl.paragraph_format.space_before = Pt(8)
-                p_lbl.paragraph_format.space_after  = Pt(2)
-                r_lbl = p_lbl.add_run(f'FIGURE {fig_num}:')
-                r_lbl.bold = True; r_lbl.font.size = Pt(11); r_lbl.font.name = TNR
-
-                # Row 1: chart image
-                cell1 = tbl.cell(1, col_idx)
-                cell1.paragraphs[0].clear()
-                p_img = cell1.paragraphs[0]
-                p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                p_img.paragraph_format.space_before = Pt(0)
-                p_img.paragraph_format.space_after  = Pt(0)
-                p_img.add_run().add_picture(buf, width=Inches(3.10))  # ~3.1in per chart = 6.2in total
-
-                # Row 2: LEGEND
-                cell2 = tbl.cell(2, col_idx)
-                cell2.paragraphs[0].clear()
-                p_leg = cell2.paragraphs[0]
-                p_leg.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-                p_leg.paragraph_format.space_before = Pt(4)
-                p_leg.paragraph_format.space_after  = Pt(10)
-                r_leg_lbl = p_leg.add_run('LEGEND: ')
-                r_leg_lbl.bold = True; r_leg_lbl.font.size = Pt(10); r_leg_lbl.font.name = TNR
-                r_leg_txt = p_leg.add_run(legend_txt)
-                r_leg_txt.bold = False; r_leg_txt.font.size = Pt(10); r_leg_txt.font.name = TNR
-
-            doc.add_paragraph()  # spacer between rows
+            # LEGEND: bold label + normal description text — same paragraph
+            p_leg = doc.add_paragraph()
+            p_leg.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            p_leg.paragraph_format.space_before = Pt(4)
+            p_leg.paragraph_format.space_after  = Pt(8)
+            r_leg_lbl = p_leg.add_run('LEGEND: ')
+            r_leg_lbl.bold = True; r_leg_lbl.font.size = Pt(12); r_leg_lbl.font.name = TNR
+            r_leg_txt = p_leg.add_run(legend_txt)
+            r_leg_txt.bold = False; r_leg_txt.font.size = Pt(12); r_leg_txt.font.name = TNR
 
         # ── CHI-SQUARE TABLES ─────────────────────────────────────────────────
         rng = random.Random(self.writer.seed)
@@ -1530,24 +1490,25 @@ class DocBuilder:
         # ── RESULT ────────────────────────────────────────────────────────────
         sec_head('RESULT', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
         import re as _re_res
-        for para in self.sections.get('results', '').split('\n\n'):
-            para = para.strip()
-            if not para:
-                continue
-            m_fig = _re_res.match(r'^(FIGURE\s+\d+\s*:?)(.*)', para, _re_res.IGNORECASE | _re_res.DOTALL)
-            if m_fig:
-                fig_label = m_fig.group(1).upper().rstrip(':').strip() + ' :'
-                rest_text = m_fig.group(2)
-                p = doc.add_paragraph()
-                p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-                p.paragraph_format.space_before = Pt(12)
-                p.paragraph_format.space_after  = Pt(0)
-                r1 = p.add_run(fig_label)
-                r1.bold = True; r1.font.size = Pt(12); r1.font.name = TNR
-                r2 = p.add_run(rest_text)
-                r2.bold = False; r2.font.size = Pt(12); r2.font.name = TNR
-            else:
-                body(para, sp_b=12, sp_a=0, bold=False, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        results_raw = self.sections.get('results', '').strip()
+        if results_raw:
+            # Results is ONE paragraph with inline **(fig: N)** markers — render with bold refs
+            p_res = doc.add_paragraph()
+            p_res.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            p_res.paragraph_format.space_before = Pt(12)
+            p_res.paragraph_format.space_after  = Pt(0)
+            # Split on **(fig: N)** markers so we can bold them
+            segs = _re_res.split(r'(\*\*\(fig:\s*\d+\)\*\*)', results_raw)
+            for seg in segs:
+                if _re_res.match(r'\*\*\(fig:\s*\d+\)\*\*', seg):
+                    # Bold the (fig: N) reference, strip the ** markers
+                    ref_text = seg[2:-2]  # strip leading ** and trailing **
+                    r = p_res.add_run(ref_text)
+                    r.bold = True
+                else:
+                    r = p_res.add_run(seg)
+                    r.bold = False
+                r.font.size = Pt(12); r.font.name = TNR
 
         # ── DISCUSSION ────────────────────────────────────────────────────────
         sec_head('DISCUSSION', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
@@ -1556,20 +1517,26 @@ class DocBuilder:
             para = para.strip()
             if not para:
                 continue
-            m_fig = _re_disc.match(r'^(FIGURE\s+\d+)(.*)', para, _re_disc.IGNORECASE | _re_disc.DOTALL)
-            if m_fig:
-                fig_label = m_fig.group(1).upper()
-                rest_text = m_fig.group(2)
-                p = doc.add_paragraph()
-                p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-                p.paragraph_format.space_before = Pt(12)
-                p.paragraph_format.space_after  = Pt(0)
-                r1 = p.add_run(fig_label)
-                r1.bold = True; r1.font.size = Pt(12); r1.font.name = TNR
-                r2 = p.add_run(rest_text)
-                r2.bold = False; r2.font.size = Pt(12); r2.font.name = TNR
+            # Strip any leading "FIGURE N" opener the AI may still produce
+            para = _re_disc.sub(r'^FIGURE\s+\d+[\.\:]?\s*', '', para, flags=_re_disc.IGNORECASE)
+            # Split off a trailing **(fig: N)** or (fig: N) reference to bold it
+            m_ref = _re_disc.search(r'(\*\*\(fig:\s*\d+\)\*\*|\(fig:\s*\d+\))\s*$', para)
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            p.paragraph_format.space_before = Pt(12)
+            p.paragraph_format.space_after  = Pt(0)
+            if m_ref:
+                body_text = para[:m_ref.start()].rstrip()
+                ref_raw   = m_ref.group(1)
+                # Strip ** markers if present
+                ref_text  = _re_disc.sub(r'\*\*', '', ref_raw)
+                r1 = p.add_run(body_text + ' ')
+                r1.bold = False; r1.font.size = Pt(12); r1.font.name = TNR
+                r2 = p.add_run(ref_text)
+                r2.bold = True; r2.font.size = Pt(12); r2.font.name = TNR
             else:
-                body(para, sp_b=12, sp_a=0, bold=False, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+                r = p.add_run(para)
+                r.bold = False; r.font.size = Pt(12); r.font.name = TNR
 
         # ── LIMITATIONS ───────────────────────────────────────────────────────
         sec_head('LIMITATIONS', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
