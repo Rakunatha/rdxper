@@ -635,14 +635,15 @@ class GeminiWriter:
               f"(4) implications and 4-5 specific policy recommendations for {self.topic}; "
               f"(5) study limitations briefly; "
               f"(6) future research directions. No bullets.</conclusion>\n\n"
-              f"<charts>{self._nfigs} lines, one per figure. Format: TYPE|TITLE|CATS or TYPE|TITLE|GROUPS;SERIES. "
-              f"TYPE must be one of: bar, pie, grouped, stacked. "
+              f"<charts>{self._nfigs} lines, one per figure. Format: bar|TITLE|CATS\n"
+              f"TYPE is always 'bar' — do not use pie, grouped, or stacked.\n"
+              f"CATS is a comma-separated list of 4-6 category labels.\n"
               f"Titles must relate to {self.topic[:35]} and a demographic variable (age, gender, education, occupation, area). "
-              f"Mix chart types. EXAMPLES:\n"
-              f"grouped|Awareness of {self.topic[:25]} by Age Group|18-30,31-45,46-60,60+;Aware,Unaware,Neutral\n"
+              f"EXAMPLES:\n"
+              f"bar|Awareness of {self.topic[:25]} by Age Group|18-30,31-45,46-60,60+\n"
               f"bar|Level of Concern about {self.topic[:20]} by Education|Below 10th,10th-12th,UG,PG,PhD\n"
-              f"pie|Gender Distribution of Respondents|Female,Male,Non-binary,Prefer not to say\n"
-              f"stacked|Trust in Prevention Frameworks by Occupation|Students,Employed,Self-employed,Retired;High,Moderate,Low</charts>")
+              f"bar|Gender Distribution of Respondents|Female,Male,Non-binary,Prefer not to say\n"
+              f"bar|Trust in Prevention Frameworks by Occupation|Students,Employed,Self-employed,Retired</charts>")
 
         # Sequential calls — avoids hammering rate limits with simultaneous requests
         if progress_cb: progress_cb(32, "Writing keywords, abstract & objectives...")
@@ -837,44 +838,23 @@ class GeminiWriter:
             labels_raw = parts[2]
 
             try:
-                if chart_type in ('bar', 'pie'):
-                    cats = [c.strip() for c in labels_raw.split(',') if c.strip()][:6]
-                    if len(cats) < 2:
-                        continue
-                    vals = rv(cats)
-                    # Legend format matching sample paper: "The Figure N shows [demographic] of the respondents discussed about [topic]"
-                    demographic = title.split(' by ')[-1].strip() if ' by ' in title else 'educational qualification'
-                    subject = title.split(' by ')[0].strip() if ' by ' in title else title
-                    if chart_type == 'bar':
-                        legend_text = f'The Figure {{fig_n}} shows {demographic} of the respondents discussed about {subject.lower()}'
-                        specs.append({'type':'bar','title':title,'cats':cats,'vals':vals,
-                                      'color':C[len(specs)%len(C)],
-                                      'legend': legend_text,
-                                      'interp':f'Distribution across {len(cats)} response categories.'})
-                    else:
-                        legend_text = f'The Figure {{fig_n}} shows distribution of respondents by {subject.lower()}'
-                        specs.append({'type':'pie','title':title,'labels':cats,'vals':vals,
-                                      'legend': legend_text,
-                                      'interp':f'Proportional breakdown of responses.'})
-
-                elif chart_type in ('grouped', 'stacked'):
-                    if ';' in labels_raw:
-                        g_part, s_part = labels_raw.split(';', 1)
-                        groups = [g.strip() for g in g_part.split(',') if g.strip()][:4]
-                        series = [s.strip() for s in s_part.split(',') if s.strip()][:3]
-                    else:
-                        groups = [g.strip() for g in labels_raw.split(',') if g.strip()][:4]
-                        series = ['Positive','Neutral','Negative']
-                    if not groups or not series:
-                        continue
-                    matrix = [rv(groups) for _ in series]
-                    demographic = groups[0] if groups else 'group'
-                    subject = title.split(' by ')[0].strip() if ' by ' in title else title
-                    legend_text = f'The Figure {{fig_n}} shows {demographic} of the respondents discussed about {subject.lower()}'
-                    specs.append({'type':chart_type,'title':title,'groups':groups,'labels':series,
-                                  'matrix':matrix,
-                                  'legend': legend_text,
-                                  'interp':f'Cross-tabulation of responses by group.'})
+                # Always force bar chart regardless of what the AI returned
+                chart_type = 'bar'
+                cats = [c.strip() for c in labels_raw.split(',') if c.strip()]
+                # Handle grouped/stacked format where labels_raw contains "groups;series" — take groups only
+                if ';' in labels_raw:
+                    cats = [c.strip() for c in labels_raw.split(';')[0].split(',') if c.strip()]
+                cats = cats[:6]
+                if len(cats) < 2:
+                    continue
+                vals = rv(cats)
+                demographic = title.split(' by ')[-1].strip() if ' by ' in title else 'educational qualification'
+                subject     = title.split(' by ')[0].strip()  if ' by ' in title else title
+                legend_text = f'The Figure {{fig_n}} shows {demographic} of the respondents discussed about {subject.lower()}'
+                specs.append({'type': 'bar', 'title': title, 'cats': cats, 'vals': vals,
+                              'color': C[len(specs) % len(C)],
+                              'legend': legend_text,
+                              'interp': f'Distribution across {len(cats)} response categories.'})
             except Exception as e:
                 print(f"[Chart parse] skipped: {line!r} → {e}")
                 continue
@@ -918,21 +898,16 @@ class GeminiWriter:
             return [round(v/t*100, 1) for v in base]
         pool = [
             {'type':'bar','title':f'Awareness of {self.topic[:35]}','cats':['Not Aware','Slightly Aware','Moderately Aware','Well Aware','Expert'],'color':C[0]},
-            {'type':'pie','title':'Gender Distribution of Respondents','labels':['Female','Male','Non-binary','Prefer not to say']},
+            {'type':'bar','title':'Gender Distribution of Respondents','cats':['Female','Male','Non-binary','Prefer not to say'],'color':C[1]},
             {'type':'bar','title':'Level of Support for Policy Reform','cats':['Strongly Oppose','Oppose','Neutral','Support','Strongly Support'],'color':C[4]},
-            {'type':'grouped','title':'Perception by Age Group','groups':['16–18','19–35','36–55','55+'],'labels':['Positive','Neutral','Negative'],'matrix':[[rv(['16–18','19–35','36–55','55+'])[i] for i in range(4)] for _ in range(3)]},
+            {'type':'bar','title':f'Perception of {self.topic[:30]} by Age Group','cats':['16–18','19–35','36–55','55+'],'color':C[2]},
             {'type':'bar','title':'Key Implementation Barriers','cats':['Lack of Awareness','Regulatory Gaps','Resource Constraints','Resistance to Change','Technical Barriers'],'color':C[1]},
-            {'type':'stacked','title':'Trust in Frameworks by Occupation','groups':['Students','Practitioners','Academics','Policymakers'],'labels':['High Trust','Moderate','Low Trust'],'matrix':[[rv(['S','P','A','Po'])[i] for i in range(4)] for _ in range(3)]},
+            {'type':'bar','title':'Trust in Frameworks by Occupation','cats':['Students','Employed','Self-employed','Retired'],'color':C[5]},
         ]
         specs = []
         for idx2, sp in enumerate(pool[:n], 1):
             fig_legend = f"The Figure {{fig_n}} shows respondents discussed about {sp['title'].lower()}"
-            if sp['type'] == 'bar':
-                specs.append({**sp, 'vals': rv(sp['cats']), 'legend': fig_legend, 'interp': f"Survey responses for {sp['title'].lower()}."})
-            elif sp['type'] == 'pie':
-                specs.append({**sp, 'vals': rv(sp['labels']), 'legend': fig_legend, 'interp': f"Proportional breakdown: {sp['title'].lower()}."})
-            else:
-                specs.append({**sp, 'legend': fig_legend, 'interp': f"Cross-tabulation: {sp['title'].lower()}."})
+            specs.append({**sp, 'vals': rv(sp['cats']), 'legend': fig_legend, 'interp': f"Survey responses for {sp['title'].lower()}."})
         return specs[:n]
 
 
