@@ -1890,6 +1890,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
   </div>
   <div class="nav-links" id="nav-auth" style="display:none">
     <button class="nav-btn" onclick="showProfile()">👤 Profile</button>
+    <button class="nav-btn" onclick="show('s-legal')">⚖️ Legal</button>
     <div id="admin-link" style="display:none"><button class="nav-btn" onclick="showAdmin()">⚙️ Admin</button></div>
     <div class="user-chip" onclick="showProfile()">
       <img id="nav-avatar" src="" onerror="this.style.display='none'" style="display:none">
@@ -2196,6 +2197,113 @@ textarea::placeholder{color:#bbb;font-size:12px}
       <tbody id="adm-payments-list"></tbody></table></div>
     </div>
     <button class="btn btn-s" onclick="loadDashboard();show('s-dashboard')" style="max-width:180px;margin-top:12px">← Back</button>
+  </div>
+</div>
+
+<!-- LEGAL DRAFTING -->
+<div class="screen" id="s-legal">
+  <div style="padding-top:28px;max-width:700px;margin:0 auto">
+    <div style="margin-bottom:16px;display:flex;align-items:center;gap:12px">
+      <button class="btn btn-s" style="width:auto;padding:8px 16px;font-size:12px" onclick="loadDashboard();show('s-dashboard')">← Dashboard</button>
+      <div style="font-size:20px;font-weight:900;color:#111">⚖️ Legal Drafting</div>
+    </div>
+
+    <!-- Template Selector -->
+    <div id="legal-template-picker" style="margin-bottom:24px">
+      <div style="font-size:13px;color:#666;margin-bottom:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Select Template</div>
+      <div style="display:grid;grid-template-columns:1fr;gap:10px">
+        <div class="paper-card" style="cursor:pointer;border-color:#111" onclick="showLegalTemplate('trademark')">
+          <div style="display:flex;align-items:center;gap:12px">
+            <div style="font-size:28px">™</div>
+            <div>
+              <div class="paper-card-topic" style="font-size:15px">Licence to Use Trade Mark</div>
+              <div style="font-size:12px;color:#888">Generate a legally-structured trade mark licence agreement with all essential clauses</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Trademark License Form -->
+    <div id="legal-tm-form" style="display:none">
+      <div style="background:#f5f5f5;border:1.5px solid #d0d0d0;border-radius:10px;padding:16px;margin-bottom:20px">
+        <div style="font-size:14px;font-weight:700;margin-bottom:4px">™ Licence to Use Trade Mark</div>
+        <div style="font-size:12px;color:#666">Fill in the details below. All fields are used to populate the agreement.</div>
+      </div>
+      <div id="n-legal" class="notif"></div>
+
+      <div style="font-weight:700;font-size:12px;letter-spacing:1px;text-transform:uppercase;margin-bottom:10px;color:#444">Deed Details</div>
+      <div class="fg"><label>Date of Agreement</label>
+        <input type="text" id="ld-date" placeholder="e.g. 7th day of April 2026">
+      </div>
+
+      <div style="font-weight:700;font-size:12px;letter-spacing:1px;text-transform:uppercase;margin:16px 0 10px;color:#444">Licensor (Trade Mark Owner)</div>
+      <div class="fg"><label>Licensor Name / Company</label>
+        <input type="text" id="ld-licensor-name" placeholder="e.g. Acme Corp Ltd.">
+      </div>
+      <div class="fg"><label>Registered Under (applicable law)</label>
+        <input type="text" id="ld-licensor-reg" placeholder="e.g. the Companies Act 2013 / laws of USA">
+      </div>
+      <div class="fg"><label>Licensor Business Address</label>
+        <input type="text" id="ld-licensor-addr" placeholder="Full address">
+      </div>
+      <div class="fg"><label>Licensor Authorised Representative Name</label>
+        <input type="text" id="ld-licensor-rep" placeholder="Name of the signing representative">
+      </div>
+
+      <div style="font-weight:700;font-size:12px;letter-spacing:1px;text-transform:uppercase;margin:16px 0 10px;color:#444">Licensee (Trade Mark User)</div>
+      <div class="fg"><label>Licensee Name / Company</label>
+        <input type="text" id="ld-licensee-name" placeholder="e.g. Beta Industries Pvt. Ltd.">
+      </div>
+      <div class="fg"><label>Registered Under (applicable law)</label>
+        <input type="text" id="ld-licensee-reg" placeholder="e.g. the Companies Act 2013">
+      </div>
+      <div class="fg"><label>Licensee Business Address</label>
+        <input type="text" id="ld-licensee-addr" placeholder="Full address">
+      </div>
+
+      <div style="font-weight:700;font-size:12px;letter-spacing:1px;text-transform:uppercase;margin:16px 0 10px;color:#444">Trade Mark Details</div>
+      <div class="fg"><label>Trade Mark Name / Symbol</label>
+        <input type="text" id="ld-trademark" placeholder="e.g. COMOF">
+      </div>
+      <div class="fg"><label>Trade Mark Registration Number</label>
+        <input type="text" id="ld-tm-number" placeholder="e.g. TM/2024/001234">
+      </div>
+      <div class="fg"><label>Trade Mark Class Number</label>
+        <input type="text" id="ld-tm-class" placeholder="e.g. Class 9 (Electronics)">
+      </div>
+      <div class="fg"><label>Goods / Services Covered</label>
+        <input type="text" id="ld-goods" placeholder="e.g. Computers, components and parts">
+      </div>
+
+      <div style="font-weight:700;font-size:12px;letter-spacing:1px;text-transform:uppercase;margin:16px 0 10px;color:#444">Licence Terms</div>
+      <div class="fg"><label>Territory of Licence</label>
+        <input type="text" id="ld-territory" placeholder="e.g. India and Eastern Asia">
+      </div>
+      <div class="fg"><label>Licence Fee Rate (% of turnover)</label>
+        <input type="text" id="ld-fee-pct" placeholder="e.g. 10">
+      </div>
+      <div class="fg"><label>Payment Due Dates</label>
+        <input type="text" id="ld-pay-dates" placeholder="e.g. 30th June and 31st December">
+      </div>
+      <div class="fg"><label>Notice Period for Termination (months)</label>
+        <input type="text" id="ld-notice" placeholder="e.g. 3">
+      </div>
+
+      <div style="display:flex;gap:10px;margin-top:8px">
+        <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="document.getElementById('legal-tm-form').style.display='none';document.getElementById('legal-template-picker').style.display='block'">← Templates</button>
+        <button class="btn btn-p" id="btn-legal-gen" onclick="generateLegalDoc()" style="flex:1">⬇ Generate Agreement (.docx)</button>
+      </div>
+    </div>
+
+    <!-- Done state -->
+    <div id="legal-done" style="display:none;text-align:center;padding:32px 0">
+      <div style="font-size:48px;margin-bottom:12px">✅</div>
+      <div class="ct">Agreement ready!</div>
+      <div class="cs">Your Licence to Use Trade Mark agreement has been generated.</div>
+      <button class="btn btn-dl" id="btn-legal-dl" onclick="downloadLegal()" style="max-width:360px;margin:16px auto 8px">⬇ Download Agreement (.docx)</button>
+      <button class="btn btn-s" onclick="resetLegal()" style="max-width:200px;margin:0 auto">Generate Another</button>
+    </div>
   </div>
 </div>
 
@@ -2583,6 +2691,95 @@ function admTab(name,el){
     const d=document.getElementById('adm-tab-'+t);if(d)d.style.display=t===name?'block':'none';
   });
 }
+
+// ── LEGAL DRAFTING ────────────────────────────────────────────────────────────
+let legalJobId = '';
+
+function showLegalTemplate(type){
+  document.getElementById('legal-template-picker').style.display='none';
+  document.getElementById('legal-done').style.display='none';
+  if(type==='trademark'){
+    document.getElementById('legal-tm-form').style.display='block';
+  }
+}
+
+function resetLegal(){
+  legalJobId='';
+  document.getElementById('legal-done').style.display='none';
+  document.getElementById('legal-tm-form').style.display='none';
+  document.getElementById('legal-template-picker').style.display='block';
+  // Clear form
+  ['ld-date','ld-licensor-name','ld-licensor-reg','ld-licensor-addr','ld-licensor-rep',
+   'ld-licensee-name','ld-licensee-reg','ld-licensee-addr',
+   'ld-trademark','ld-tm-number','ld-tm-class','ld-goods',
+   'ld-territory','ld-fee-pct','ld-pay-dates','ld-notice'
+  ].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  document.getElementById('n-legal').classList.remove('show');
+}
+
+async function generateLegalDoc(){
+  const g = id => (document.getElementById(id)||{}).value||'';
+  const data = {
+    deed_date:       g('ld-date'),
+    licensor_name:   g('ld-licensor-name'),
+    licensor_reg:    g('ld-licensor-reg'),
+    licensor_addr:   g('ld-licensor-addr'),
+    licensor_rep:    g('ld-licensor-rep'),
+    licensee_name:   g('ld-licensee-name'),
+    licensee_reg:    g('ld-licensee-reg'),
+    licensee_addr:   g('ld-licensee-addr'),
+    trademark:       g('ld-trademark'),
+    tm_number:       g('ld-tm-number'),
+    tm_class:        g('ld-tm-class'),
+    goods_services:  g('ld-goods'),
+    territory:       g('ld-territory'),
+    licence_fee_pct: g('ld-fee-pct') || '10',
+    payment_dates:   g('ld-pay-dates') || '30th June and 31st December',
+    notice_period:   g('ld-notice') || '3',
+  };
+  if(!data.licensor_name || !data.licensee_name || !data.trademark){
+    const n=document.getElementById('n-legal');
+    n.className='notif error show';
+    n.textContent='Please fill in at least the Licensor Name, Licensee Name, and Trade Mark Name.';
+    return;
+  }
+  const btn=document.getElementById('btn-legal-gen');
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span> Generating...';
+  try{
+    const r = await fetch('/api/legal/trademark-license',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+      body:JSON.stringify(data)
+    });
+    const d = await r.json();
+    if(!d.success){
+      const n=document.getElementById('n-legal');
+      n.className='notif error show'; n.textContent=d.message||'Generation failed.';
+      btn.disabled=false; btn.innerHTML='⬇ Generate Agreement (.docx)';
+      return;
+    }
+    legalJobId = d.job_id;
+    document.getElementById('legal-tm-form').style.display='none';
+    document.getElementById('legal-done').style.display='block';
+  }catch(e){
+    const n=document.getElementById('n-legal');
+    n.className='notif error show'; n.textContent='Connection error. Please try again.';
+  }finally{
+    btn.disabled=false; btn.innerHTML='⬇ Generate Agreement (.docx)';
+  }
+}
+
+async function downloadLegal(){
+  const btn=document.getElementById('btn-legal-dl');
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span> Downloading...';
+  try{
+    const r = await fetch('/api/download/'+legalJobId,{headers:{'Authorization':'Bearer '+token}});
+    if(!r.ok) throw new Error('failed');
+    const blob=await r.blob(), url=URL.createObjectURL(blob), a=document.createElement('a');
+    a.href=url; a.download='Licence_to_Use_Trade_Mark.docx'; a.click(); URL.revokeObjectURL(url);
+  }catch(e){ alert('Download failed. Please try again.'); }
+  finally{ btn.disabled=false; btn.innerHTML='⬇ Download Agreement (.docx)'; }
+}
 </script>
 </body>
 </html>"""
@@ -2894,6 +3091,201 @@ def download_paper(jid):
                      mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
 
 
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  LEGAL DRAFTING — TRADEMARK LICENSE GENERATOR
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def build_trademark_license_docx(data: dict) -> str:
+    """Generate a Licence to Use Trade Mark agreement as a .docx file."""
+    from docx import Document
+    from docx.shared import Inches, Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    doc = Document()
+    for sec in doc.sections:
+        sec.page_width    = Inches(8.5)
+        sec.page_height   = Inches(11)
+        sec.top_margin    = Inches(1)
+        sec.bottom_margin = Inches(1)
+        sec.left_margin   = Inches(1.25)
+        sec.right_margin  = Inches(1.25)
+
+    TNR = 'Times New Roman'
+
+    def para(text, bold=False, sz=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY, sp_b=6, sp_a=6, center=False):
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER if center else align
+        p.paragraph_format.space_before = Pt(sp_b)
+        p.paragraph_format.space_after  = Pt(sp_a)
+        r = p.add_run(text)
+        r.bold = bold
+        r.font.size = Pt(sz)
+        r.font.name = TNR
+        return p
+
+    def clause(number, text, sp_b=4, sp_a=4):
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        p.paragraph_format.space_before = Pt(sp_b)
+        p.paragraph_format.space_after  = Pt(sp_a)
+        p.paragraph_format.left_indent  = Inches(0.5)
+        p.paragraph_format.first_line_indent = Inches(-0.5)
+        r_num = p.add_run(f'{number}.  ')
+        r_num.bold = True
+        r_num.font.size = Pt(12)
+        r_num.font.name = TNR
+        r_body = p.add_run(text)
+        r_body.font.size = Pt(12)
+        r_body.font.name = TNR
+        return p
+
+    # ── Title ──────────────────────────────────────────────────────────────────
+    para('LICENCE TO USE TRADE MARK', bold=True, sz=16, center=True, sp_b=0, sp_a=16)
+
+    # ── Preamble ───────────────────────────────────────────────────────────────
+    deed_date   = data.get('deed_date', '___________')
+    licensor_name = data.get('licensor_name', '[Licensor Name]')
+    licensor_reg  = data.get('licensor_reg', '[applicable laws]')
+    licensor_addr = data.get('licensor_addr', '[Licensor Address]')
+    licensee_name = data.get('licensee_name', '[Licensee Name]')
+    licensee_reg  = data.get('licensee_reg', '[applicable laws]')
+    licensee_addr = data.get('licensee_addr', '[Licensee Address]')
+    trademark     = data.get('trademark', '[TRADE MARK]')
+    tm_number     = data.get('tm_number', '[TM No.]')
+    tm_class      = data.get('tm_class', '[Class No.]')
+    goods_services= data.get('goods_services', '[goods/services]')
+    territory     = data.get('territory', '[Territory]')
+    licence_fee_pct = data.get('licence_fee_pct', '10')
+    payment_dates = data.get('payment_dates', '30th June and 31st December')
+    notice_period = data.get('notice_period', '3')
+    licensor_rep  = data.get('licensor_rep', '[Authorised Representative Name]')
+
+    preamble = (
+        f'THIS DEED OF LICENCE is made on this {deed_date} between {licensor_name}, '
+        f'a company/entity registered under {licensor_reg} and carrying on business at '
+        f'{licensor_addr}, hereinafter called the LICENSOR (which term shall unless excluded '
+        f'by or repugnant to the context include its successors and assigns) of the one part '
+        f'and {licensee_name}, a company/entity registered under {licensee_reg} and carrying '
+        f'on business at {licensee_addr}, hereinafter referred to as the LICENSEE (which term '
+        f'shall unless excluded by or repugnant to the context include its permitted nominees) '
+        f'of the other part.'
+    )
+    para(preamble, sp_b=0, sp_a=10)
+
+    recitals = [
+        (f'WHEREAS the LICENSOR is the manufacturer of and dealer in {goods_services} and holds '
+         f'the registered Trade Mark {trademark} being Trade Mark No. {tm_number} in Class No. {tm_class} '
+         f'in respect of {goods_services}.'),
+        (f'AND WHEREAS the LICENSOR intends to expand its business and sell its products under its '
+         f'Trade Mark in {territory}.'),
+        (f'AND WHEREAS the LICENSEE has a manufacturing/trading unit to deal in {goods_services}.'),
+        (f'AND WHEREAS the LICENSEE has approached the LICENSOR to grant licence to use the '
+         f"LICENSOR's Trade Mark {trademark} for sale of the products/services of the LICENSEE."),
+        (f'AND WHEREAS the LICENSOR has agreed to allow the LICENSEE to use its said Trade Mark '
+         f'{trademark} to sell/provide the LICENSEE\'s {goods_services} on certain terms and conditions.'),
+    ]
+    for rec in recitals:
+        para(rec, sp_b=4, sp_a=4)
+
+    para('NOW THEREFORE THESE PRESENTS witnesseth and the parties hereby agree as follows:', bold=True, sp_b=10, sp_a=8)
+
+    clauses = [
+        (1, f'The LICENSOR hereby doth grant to the LICENSEE non-exclusive right to use the '
+            f"LICENSOR's Trade Mark {trademark} in {territory} for sale/provision of its "
+            f'{goods_services} under the Trade Name {trademark}.'),
+        (2, f'The use of the Trade Mark by the LICENSEE shall be confined only to the items/services '
+            f'that may be manufactured or provided by the LICENSEE at its own premises or through '
+            f'its authorised channels. The LICENSEE shall pay half-yearly to the LICENSOR a licence '
+            f'fee at the rate of {licence_fee_pct}% on the turnover of business of the LICENSEE, '
+            f'such payment to be made by {payment_dates} every year.'),
+        (3, f'The LICENSEE shall comply with the requirements and provisions of all laws, rules and '
+            f'regulations in relation to the manufacture, sale or provision of {goods_services} '
+            f'under the said Trade Mark of the LICENSOR.'),
+        (4, f'The LICENSEE shall manufacture and sell/provide {goods_services} under the said Trade '
+            f'Mark {trademark} in accordance with the specifications, make-up, brand and packing that '
+            f'the LICENSOR may from time to time intimate to the LICENSEE.'),
+        (5, f"The LICENSOR shall have access to the LICENSEE's manufacturing/service unit and to "
+            f"inspect the LICENSEE's books of accounts and other records at all reasonable times on "
+            f'giving prior notice.'),
+        (6, f'The LICENSEE agrees, declares and covenants not to use the said Trade Mark or advertise '
+            f'or publish in newspapers, journals, labels or any other documents or packages or do '
+            f'anything having the effect of diluting the distinctiveness of the Trade Mark of the '
+            f'LICENSOR. The LICENSEE shall give indications either visually or phonetically to the '
+            f'purchasing public that the LICENSEE is using the Trade Mark {trademark} as the licensee '
+            f'of the LICENSOR.'),
+        (7, f'The LICENSEE undertakes to compensate the LICENSOR and keep the LICENSOR harmless from '
+            f'and indemnified against all claims, proceedings, losses, costs and expenses for any '
+            f'wilful or negligent conduct of the LICENSEE in relation to the use of the Trade Mark '
+            f'of the LICENSOR.'),
+        (8, f'The LICENSEE shall not acquire any right of registration of the Trade Mark by virtue '
+            f'of the LICENSEE manufacturing, selling or providing {goods_services} as user of the '
+            f'Trade Mark {trademark} for any number of years or after termination of the licence or otherwise.'),
+        (9, f"The LICENSEE shall inform the LICENSOR of any infringement of the LICENSOR's Trade "
+            f'Mark {trademark} with particulars of the infringement or passing off and the names and '
+            f'addresses of the offenders.'),
+        (10, f'The LICENSOR shall take and/or permit the LICENSEE to take all possible legal steps '
+             f'for the protection and preservation of the Trade Mark and prevention of its '
+             f'infringement or passing off by any person.'),
+        (11, f'This agreement is terminable by giving {notice_period} months\' notice from either side.'),
+        (12, f'In any legal proceedings or in any action against the infringement or passing off in '
+             f'relation to the Trade Mark of the goods/services covered by the Licence, the LICENSEE '
+             f'will take appropriate steps to protect the interests of the LICENSOR and allow the '
+             f'LICENSOR to take any legal action or steps and to join the LICENSEE as a party therein.'),
+    ]
+    for num, text in clauses:
+        clause(num, text)
+
+    # ── Signature block ────────────────────────────────────────────────────────
+    para('', sp_b=8, sp_a=0)
+    para('THE SCHEDULE', bold=True, center=True, sp_b=8, sp_a=8)
+    para('IN WITNESS WHEREOF the parties herein have executed these presents on the day, month and '
+         'year first above-written.', sp_b=0, sp_a=16)
+
+    para('Signed, sealed and delivered by', sp_b=0, sp_a=4)
+    para(f'Mr/Ms .......... the Constituted', sp_b=0, sp_a=4)
+    para(f'Attorney of {licensor_name} in the presence of:', sp_b=0, sp_a=12)
+
+    sig_p = doc.add_paragraph()
+    sig_p.paragraph_format.space_before = Pt(8)
+    sig_p.paragraph_format.space_after  = Pt(4)
+    tab = sig_p.paragraph_format.tab_stops
+    r1 = sig_p.add_run('1. ________________________')
+    r1.font.name = TNR; r1.font.size = Pt(12)
+    r1 = sig_p.add_run('\t\t\tSignature: ________________________')
+    r1.font.name = TNR; r1.font.size = Pt(12)
+
+    sig_p2 = doc.add_paragraph()
+    sig_p2.paragraph_format.space_before = Pt(8)
+    sig_p2.paragraph_format.space_after  = Pt(4)
+    r2 = sig_p2.add_run('2. ________________________')
+    r2.font.name = TNR; r2.font.size = Pt(12)
+    r2b = sig_p2.add_run('\t\t\tDate: ________________________')
+    r2b.font.name = TNR; r2b.font.size = Pt(12)
+
+    os.makedirs('generated', exist_ok=True)
+    safe = re.sub(r'[^\w\-]', '_', f'TM_Licence_{licensor_name[:25]}')
+    out  = os.path.abspath(f'generated/{safe}_{uuid.uuid4().hex[:8]}.docx')
+    doc.save(out)
+    return out
+
+
+@app.route('/api/legal/trademark-license', methods=['POST'])
+def gen_trademark_license():
+    tok = request.headers.get('Authorization', '').replace('Bearer ', '')
+    sess = session_get(tok)
+    if not sess:
+        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+    data = request.json or {}
+    try:
+        path = build_trademark_license_docx(data)
+        jid  = uuid.uuid4().hex
+        jobs[jid] = {'status': 'done', 'file_path': path, 'topic': 'Trademark License Agreement'}
+        return jsonify({'success': True, 'job_id': jid})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
