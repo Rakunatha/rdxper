@@ -2228,66 +2228,30 @@ textarea::placeholder{color:#bbb;font-size:12px}
     <div id="legal-tm-form" style="display:none">
       <div style="background:#f5f5f5;border:1.5px solid #d0d0d0;border-radius:10px;padding:16px;margin-bottom:20px">
         <div style="font-size:14px;font-weight:700;margin-bottom:4px">™ Licence to Use Trade Mark</div>
-        <div style="font-size:12px;color:#666">Fill in the details below. All fields are used to populate the agreement.</div>
+        <div style="font-size:12px;color:#666">Enter the key details — boilerplate clauses, standard dates, and legal language are filled in automatically.</div>
       </div>
       <div id="n-legal" class="notif"></div>
 
-      <div style="font-weight:700;font-size:12px;letter-spacing:1px;text-transform:uppercase;margin-bottom:10px;color:#444">Deed Details</div>
-      <div class="fg"><label>Date of Agreement</label>
-        <input type="text" id="ld-date" placeholder="e.g. 7th day of April 2026">
+      <div class="fg"><label>Licensor (Trade Mark Owner)</label>
+        <input type="text" id="ld-licensor-name" placeholder="e.g. Acme Corp Ltd., San Francisco USA">
       </div>
-
-      <div style="font-weight:700;font-size:12px;letter-spacing:1px;text-transform:uppercase;margin:16px 0 10px;color:#444">Licensor (Trade Mark Owner)</div>
-      <div class="fg"><label>Licensor Name / Company</label>
-        <input type="text" id="ld-licensor-name" placeholder="e.g. Acme Corp Ltd.">
+      <div class="fg"><label>Licensee (Trade Mark User)</label>
+        <input type="text" id="ld-licensee-name" placeholder="e.g. Beta Industries Pvt. Ltd., Mumbai">
       </div>
-      <div class="fg"><label>Registered Under (applicable law)</label>
-        <input type="text" id="ld-licensor-reg" placeholder="e.g. the Companies Act 2013 / laws of USA">
-      </div>
-      <div class="fg"><label>Licensor Business Address</label>
-        <input type="text" id="ld-licensor-addr" placeholder="Full address">
-      </div>
-      <div class="fg"><label>Licensor Authorised Representative Name</label>
-        <input type="text" id="ld-licensor-rep" placeholder="Name of the signing representative">
-      </div>
-
-      <div style="font-weight:700;font-size:12px;letter-spacing:1px;text-transform:uppercase;margin:16px 0 10px;color:#444">Licensee (Trade Mark User)</div>
-      <div class="fg"><label>Licensee Name / Company</label>
-        <input type="text" id="ld-licensee-name" placeholder="e.g. Beta Industries Pvt. Ltd.">
-      </div>
-      <div class="fg"><label>Registered Under (applicable law)</label>
-        <input type="text" id="ld-licensee-reg" placeholder="e.g. the Companies Act 2013">
-      </div>
-      <div class="fg"><label>Licensee Business Address</label>
-        <input type="text" id="ld-licensee-addr" placeholder="Full address">
-      </div>
-
-      <div style="font-weight:700;font-size:12px;letter-spacing:1px;text-transform:uppercase;margin:16px 0 10px;color:#444">Trade Mark Details</div>
-      <div class="fg"><label>Trade Mark Name / Symbol</label>
+      <div class="fg"><label>Trade Mark Name</label>
         <input type="text" id="ld-trademark" placeholder="e.g. COMOF">
-      </div>
-      <div class="fg"><label>Trade Mark Registration Number</label>
-        <input type="text" id="ld-tm-number" placeholder="e.g. TM/2024/001234">
-      </div>
-      <div class="fg"><label>Trade Mark Class Number</label>
-        <input type="text" id="ld-tm-class" placeholder="e.g. Class 9 (Electronics)">
       </div>
       <div class="fg"><label>Goods / Services Covered</label>
         <input type="text" id="ld-goods" placeholder="e.g. Computers, components and parts">
       </div>
-
-      <div style="font-weight:700;font-size:12px;letter-spacing:1px;text-transform:uppercase;margin:16px 0 10px;color:#444">Licence Terms</div>
       <div class="fg"><label>Territory of Licence</label>
         <input type="text" id="ld-territory" placeholder="e.g. India and Eastern Asia">
       </div>
-      <div class="fg"><label>Licence Fee Rate (% of turnover)</label>
+      <div class="fg"><label>Licence Fee (% of annual turnover)</label>
         <input type="text" id="ld-fee-pct" placeholder="e.g. 10">
       </div>
-      <div class="fg"><label>Payment Due Dates</label>
-        <input type="text" id="ld-pay-dates" placeholder="e.g. 30th June and 31st December">
-      </div>
-      <div class="fg"><label>Notice Period for Termination (months)</label>
-        <input type="text" id="ld-notice" placeholder="e.g. 3">
+      <div class="fg"><label>Date of Agreement <span style="font-weight:400;color:#999">(leave blank to use today)</span></label>
+        <input type="text" id="ld-date" placeholder="e.g. 7th day of April 2026">
       </div>
 
       <div style="display:flex;gap:10px;margin-top:8px">
@@ -2708,39 +2672,26 @@ function resetLegal(){
   document.getElementById('legal-done').style.display='none';
   document.getElementById('legal-tm-form').style.display='none';
   document.getElementById('legal-template-picker').style.display='block';
-  // Clear form
-  ['ld-date','ld-licensor-name','ld-licensor-reg','ld-licensor-addr','ld-licensor-rep',
-   'ld-licensee-name','ld-licensee-reg','ld-licensee-addr',
-   'ld-trademark','ld-tm-number','ld-tm-class','ld-goods',
-   'ld-territory','ld-fee-pct','ld-pay-dates','ld-notice'
+  ['ld-licensor-name','ld-licensee-name','ld-trademark','ld-goods','ld-territory','ld-fee-pct','ld-date'
   ].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
   document.getElementById('n-legal').classList.remove('show');
 }
 
 async function generateLegalDoc(){
-  const g = id => (document.getElementById(id)||{}).value||'';
+  const g = id => (document.getElementById(id)||{}).value.trim()||'';
   const data = {
-    deed_date:       g('ld-date'),
     licensor_name:   g('ld-licensor-name'),
-    licensor_reg:    g('ld-licensor-reg'),
-    licensor_addr:   g('ld-licensor-addr'),
-    licensor_rep:    g('ld-licensor-rep'),
     licensee_name:   g('ld-licensee-name'),
-    licensee_reg:    g('ld-licensee-reg'),
-    licensee_addr:   g('ld-licensee-addr'),
     trademark:       g('ld-trademark'),
-    tm_number:       g('ld-tm-number'),
-    tm_class:        g('ld-tm-class'),
     goods_services:  g('ld-goods'),
     territory:       g('ld-territory'),
     licence_fee_pct: g('ld-fee-pct') || '10',
-    payment_dates:   g('ld-pay-dates') || '30th June and 31st December',
-    notice_period:   g('ld-notice') || '3',
+    deed_date:       g('ld-date'),
   };
   if(!data.licensor_name || !data.licensee_name || !data.trademark){
     const n=document.getElementById('n-legal');
     n.className='notif error show';
-    n.textContent='Please fill in at least the Licensor Name, Licensee Name, and Trade Mark Name.';
+    n.textContent='Please fill in the Licensor, Licensee, and Trade Mark Name.';
     return;
   }
   const btn=document.getElementById('btn-legal-gen');
@@ -3145,30 +3096,26 @@ def build_trademark_license_docx(data: dict) -> str:
     para('LICENCE TO USE TRADE MARK', bold=True, sz=16, center=True, sp_b=0, sp_a=16)
 
     # ── Preamble ───────────────────────────────────────────────────────────────
-    deed_date   = data.get('deed_date', '___________')
+    deed_date   = data.get('deed_date', '').strip()
+    if not deed_date:
+        from datetime import datetime
+        deed_date = datetime.now().strftime('%-d %B %Y')  # e.g. "7 April 2026"
     licensor_name = data.get('licensor_name', '[Licensor Name]')
-    licensor_reg  = data.get('licensor_reg', '[applicable laws]')
-    licensor_addr = data.get('licensor_addr', '[Licensor Address]')
     licensee_name = data.get('licensee_name', '[Licensee Name]')
-    licensee_reg  = data.get('licensee_reg', '[applicable laws]')
-    licensee_addr = data.get('licensee_addr', '[Licensee Address]')
     trademark     = data.get('trademark', '[TRADE MARK]')
-    tm_number     = data.get('tm_number', '[TM No.]')
-    tm_class      = data.get('tm_class', '[Class No.]')
     goods_services= data.get('goods_services', '[goods/services]')
     territory     = data.get('territory', '[Territory]')
     licence_fee_pct = data.get('licence_fee_pct', '10')
-    payment_dates = data.get('payment_dates', '30th June and 31st December')
-    notice_period = data.get('notice_period', '3')
-    licensor_rep  = data.get('licensor_rep', '[Authorised Representative Name]')
+    # Auto-filled / boilerplate — not collected from user
+    payment_dates = '30th June and 31st December'
+    notice_period = '3'
 
     preamble = (
         f'THIS DEED OF LICENCE is made on this {deed_date} between {licensor_name}, '
-        f'a company/entity registered under {licensor_reg} and carrying on business at '
-        f'{licensor_addr}, hereinafter called the LICENSOR (which term shall unless excluded '
+        f'hereinafter called the LICENSOR (which term shall unless excluded '
         f'by or repugnant to the context include its successors and assigns) of the one part '
-        f'and {licensee_name}, a company/entity registered under {licensee_reg} and carrying '
-        f'on business at {licensee_addr}, hereinafter referred to as the LICENSEE (which term '
+        f'and {licensee_name}, '
+        f'hereinafter referred to as the LICENSEE (which term '
         f'shall unless excluded by or repugnant to the context include its permitted nominees) '
         f'of the other part.'
     )
@@ -3176,8 +3123,7 @@ def build_trademark_license_docx(data: dict) -> str:
 
     recitals = [
         (f'WHEREAS the LICENSOR is the manufacturer of and dealer in {goods_services} and holds '
-         f'the registered Trade Mark {trademark} being Trade Mark No. {tm_number} in Class No. {tm_class} '
-         f'in respect of {goods_services}.'),
+         f'the registered Trade Mark {trademark} in respect of {goods_services}.'),
         (f'AND WHEREAS the LICENSOR intends to expand its business and sell its products under its '
          f'Trade Mark in {territory}.'),
         (f'AND WHEREAS the LICENSEE has a manufacturing/trading unit to deal in {goods_services}.'),
@@ -3244,8 +3190,7 @@ def build_trademark_license_docx(data: dict) -> str:
          'year first above-written.', sp_b=0, sp_a=16)
 
     para('Signed, sealed and delivered by', sp_b=0, sp_a=4)
-    para(f'Mr/Ms .......... the Constituted', sp_b=0, sp_a=4)
-    para(f'Attorney of {licensor_name} in the presence of:', sp_b=0, sp_a=12)
+    para(f'The authorised representative of {licensor_name} in the presence of:', sp_b=0, sp_a=12)
 
     sig_p = doc.add_paragraph()
     sig_p.paragraph_format.space_before = Pt(8)
