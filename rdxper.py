@@ -2240,7 +2240,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
       <button class="btn btn-p" id="btn-legal-gen-format" onclick="generateLegalDocFromFormat()">⬇ Generate Draft (.docx)</button>
     </div>
 
-    <div style="font-size:11px;color:#999;margin-top:14px;line-height:1.5">⚠️ AI-generated drafts are a starting point and do not constitute legal advice. Please have the document reviewed by a qualified lawyer before use.</div>
+   
 
     <!-- Done state -->
     <div id="legal-done" style="display:none;text-align:center;padding:32px 0">
