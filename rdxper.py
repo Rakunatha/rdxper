@@ -2207,7 +2207,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
       <button class="btn btn-s" style="width:auto;padding:8px 16px;font-size:12px" onclick="loadDashboard();show('s-dashboard')">← Dashboard</button>
       <div style="font-size:20px;font-weight:900;color:#111">⚖️ AI Legal Drafting</div>
     </div>
-    <div class="cs" style="margin-bottom:20px">Describe the document you need and the details to include, and RDXper's AI will draft it for you — or upload a format/sample document and we'll follow its structure using your data.</div>
+    <div class="cs" style="margin-bottom:20px">Describe the document you need and the details to include, and RDXper's AI will draft it for you or upload a format/sample document and we'll follow its structure using your data.</div>
 
     <!-- Mode tabs -->
     <div class="tabs" id="legal-tabs">
@@ -2225,7 +2225,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
       <div class="fg"><label>Details &amp; data for the draft</label>
         <textarea id="ld-details" rows="10" placeholder="Provide everything the document needs — party names & addresses, dates, amounts, terms, obligations, governing law, jurisdiction, special clauses, etc.&#10;&#10;Example: Landlord: Rohan Mehta, 12 MG Road, Pune. Tenant: Aisha Khan, 45 Park St, Pune. Property: 2BHK Flat No. 301, Green Meadows, Baner, Pune. Monthly rent: ₹28,000, payable by the 5th of every month. Security deposit: ₹1,00,000. Lease term: 11 months from 1 August 2026. Notice period: 1 month for termination by either party."></textarea>
       </div>
-      <button class="btn btn-p" id="btn-legal-gen" onclick="generateLegalDoc()">⬇ Generate Draft (.docx)</button>
+      <button class="btn btn-p" id="btn-legal-gen" onclick="generateLegalDoc()">⬇ Generate</button>
     </div>
 
     <!-- Upload-your-own-format form -->
@@ -2235,9 +2235,9 @@ textarea::placeholder{color:#bbb;font-size:12px}
         <div style="font-size:11px;color:#999;margin-top:4px">Accepted: .docx or .txt. We'll follow its structure and clauses.</div>
       </div>
       <div class="fg"><label>Data to fill into that format</label>
-        <textarea id="ld-format-details" rows="9" placeholder="Provide the specific data that should replace the placeholders/details in the uploaded format — party names, dates, amounts, terms, etc."></textarea>
+        <textarea id="ld-format-details" rows="9" placeholder="Provide the specific data that should replace the placeholders/details in the uploaded format, party names, dates, amounts, terms, etc."></textarea>
       </div>
-      <button class="btn btn-p" id="btn-legal-gen-format" onclick="generateLegalDocFromFormat()">⬇ Generate Draft (.docx)</button>
+      <button class="btn btn-p" id="btn-legal-gen-format" onclick="generateLegalDocFromFormat()">⬇ Generate</button>
     </div>
 
    
