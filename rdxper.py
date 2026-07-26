@@ -2205,67 +2205,49 @@ textarea::placeholder{color:#bbb;font-size:12px}
   <div style="padding-top:28px;max-width:700px;margin:0 auto">
     <div style="margin-bottom:16px;display:flex;align-items:center;gap:12px">
       <button class="btn btn-s" style="width:auto;padding:8px 16px;font-size:12px" onclick="loadDashboard();show('s-dashboard')">← Dashboard</button>
-      <div style="font-size:20px;font-weight:900;color:#111">⚖️ Legal Drafting</div>
+      <div style="font-size:20px;font-weight:900;color:#111">⚖️ AI Legal Drafting</div>
+    </div>
+    <div class="cs" style="margin-bottom:20px">Describe the document you need and the details to include, and RDXper's AI will draft it for you — or upload a format/sample document and we'll follow its structure using your data.</div>
+
+    <!-- Mode tabs -->
+    <div class="tabs" id="legal-tabs">
+      <button class="tab active" onclick="legalSwitchTab('custom',this)">✍️ Describe &amp; Generate</button>
+      <button class="tab" onclick="legalSwitchTab('format',this)">📎 Use My Own Format</button>
     </div>
 
-    <!-- Template Selector -->
-    <div id="legal-template-picker" style="margin-bottom:24px">
-      <div style="font-size:13px;color:#666;margin-bottom:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Select Template</div>
-      <div style="display:grid;grid-template-columns:1fr;gap:10px">
-        <div class="paper-card" style="cursor:pointer;border-color:#111" onclick="showLegalTemplate('trademark')">
-          <div style="display:flex;align-items:center;gap:12px">
-            <div style="font-size:28px">™</div>
-            <div>
-              <div class="paper-card-topic" style="font-size:15px">Licence to Use Trade Mark</div>
-              <div style="font-size:12px;color:#888">Generate a legally-structured trade mark licence agreement with all essential clauses</div>
-            </div>
-          </div>
-        </div>
+    <div id="n-legal" class="notif"></div>
+
+    <!-- Custom description form -->
+    <div id="legal-form-custom">
+      <div class="fg"><label>What kind of drafting do you need?</label>
+        <input type="text" id="ld-doctype" placeholder="e.g. Rental Agreement, NDA, Employment Contract, Power of Attorney, Trademark Licence">
       </div>
+      <div class="fg"><label>Details &amp; data for the draft</label>
+        <textarea id="ld-details" rows="10" placeholder="Provide everything the document needs — party names & addresses, dates, amounts, terms, obligations, governing law, jurisdiction, special clauses, etc.&#10;&#10;Example: Landlord: Rohan Mehta, 12 MG Road, Pune. Tenant: Aisha Khan, 45 Park St, Pune. Property: 2BHK Flat No. 301, Green Meadows, Baner, Pune. Monthly rent: ₹28,000, payable by the 5th of every month. Security deposit: ₹1,00,000. Lease term: 11 months from 1 August 2026. Notice period: 1 month for termination by either party."></textarea>
+      </div>
+      <button class="btn btn-p" id="btn-legal-gen" onclick="generateLegalDoc()">⬇ Generate Draft (.docx)</button>
     </div>
 
-    <!-- Trademark License Form -->
-    <div id="legal-tm-form" style="display:none">
-      <div style="background:#f5f5f5;border:1.5px solid #d0d0d0;border-radius:10px;padding:16px;margin-bottom:20px">
-        <div style="font-size:14px;font-weight:700;margin-bottom:4px">™ Licence to Use Trade Mark</div>
-        <div style="font-size:12px;color:#666">Enter the key details — boilerplate clauses, standard dates, and legal language are filled in automatically.</div>
+    <!-- Upload-your-own-format form -->
+    <div id="legal-form-format" style="display:none">
+      <div class="fg"><label>Upload a format / sample document</label>
+        <input type="file" id="ld-format-file" accept=".docx,.txt" style="width:100%;padding:10px;border:1.5px dashed #b0b0b0;border-radius:8px;background:#fafafa;font-size:13px">
+        <div style="font-size:11px;color:#999;margin-top:4px">Accepted: .docx or .txt. We'll follow its structure and clauses.</div>
       </div>
-      <div id="n-legal" class="notif"></div>
-
-      <div class="fg"><label>Licensor (Trade Mark Owner)</label>
-        <input type="text" id="ld-licensor-name" placeholder="e.g. Acme Corp Ltd., San Francisco USA">
+      <div class="fg"><label>Data to fill into that format</label>
+        <textarea id="ld-format-details" rows="9" placeholder="Provide the specific data that should replace the placeholders/details in the uploaded format — party names, dates, amounts, terms, etc."></textarea>
       </div>
-      <div class="fg"><label>Licensee (Trade Mark User)</label>
-        <input type="text" id="ld-licensee-name" placeholder="e.g. Beta Industries Pvt. Ltd., Mumbai">
-      </div>
-      <div class="fg"><label>Trade Mark Name</label>
-        <input type="text" id="ld-trademark" placeholder="e.g. COMOF">
-      </div>
-      <div class="fg"><label>Goods / Services Covered</label>
-        <input type="text" id="ld-goods" placeholder="e.g. Computers, components and parts">
-      </div>
-      <div class="fg"><label>Territory of Licence</label>
-        <input type="text" id="ld-territory" placeholder="e.g. India and Eastern Asia">
-      </div>
-      <div class="fg"><label>Licence Fee (% of annual turnover)</label>
-        <input type="text" id="ld-fee-pct" placeholder="e.g. 10">
-      </div>
-      <div class="fg"><label>Date of Agreement <span style="font-weight:400;color:#999">(leave blank to use today)</span></label>
-        <input type="text" id="ld-date" placeholder="e.g. 7th day of April 2026">
-      </div>
-
-      <div style="display:flex;gap:10px;margin-top:8px">
-        <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="document.getElementById('legal-tm-form').style.display='none';document.getElementById('legal-template-picker').style.display='block'">← Templates</button>
-        <button class="btn btn-p" id="btn-legal-gen" onclick="generateLegalDoc()" style="flex:1">⬇ Generate Agreement (.docx)</button>
-      </div>
+      <button class="btn btn-p" id="btn-legal-gen-format" onclick="generateLegalDocFromFormat()">⬇ Generate Draft (.docx)</button>
     </div>
+
+    <div style="font-size:11px;color:#999;margin-top:14px;line-height:1.5">⚠️ AI-generated drafts are a starting point and do not constitute legal advice. Please have the document reviewed by a qualified lawyer before use.</div>
 
     <!-- Done state -->
     <div id="legal-done" style="display:none;text-align:center;padding:32px 0">
       <div style="font-size:48px;margin-bottom:12px">✅</div>
-      <div class="ct">Agreement ready!</div>
-      <div class="cs">Your Licence to Use Trade Mark agreement has been generated.</div>
-      <button class="btn btn-dl" id="btn-legal-dl" onclick="downloadLegal()" style="max-width:360px;margin:16px auto 8px">⬇ Download Agreement (.docx)</button>
+      <div class="ct">Draft ready!</div>
+      <div class="cs" id="legal-done-sub">Your document has been generated.</div>
+      <button class="btn btn-dl" id="btn-legal-dl" onclick="downloadLegal()" style="max-width:360px;margin:16px auto 8px">⬇ Download Draft (.docx)</button>
       <button class="btn btn-s" onclick="resetLegal()" style="max-width:200px;margin:0 auto">Generate Another</button>
     </div>
   </div>
@@ -2658,65 +2640,95 @@ function admTab(name,el){
 
 // ── LEGAL DRAFTING ────────────────────────────────────────────────────────────
 let legalJobId = '';
+let legalDlName = 'RDXper_Legal_Draft.docx';
 
-function showLegalTemplate(type){
-  document.getElementById('legal-template-picker').style.display='none';
+function legalSwitchTab(mode, btn){
+  document.querySelectorAll('#legal-tabs .tab').forEach(t=>t.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('legal-form-custom').style.display = mode==='custom' ? 'block' : 'none';
+  document.getElementById('legal-form-format').style.display = mode==='format' ? 'block' : 'none';
   document.getElementById('legal-done').style.display='none';
-  if(type==='trademark'){
-    document.getElementById('legal-tm-form').style.display='block';
-  }
+  const n=document.getElementById('n-legal'); n.classList.remove('show');
 }
 
 function resetLegal(){
   legalJobId='';
   document.getElementById('legal-done').style.display='none';
-  document.getElementById('legal-tm-form').style.display='none';
-  document.getElementById('legal-template-picker').style.display='block';
-  ['ld-licensor-name','ld-licensee-name','ld-trademark','ld-goods','ld-territory','ld-fee-pct','ld-date'
-  ].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  document.getElementById('legal-form-custom').style.display='block';
+  document.getElementById('legal-form-format').style.display='none';
+  document.querySelectorAll('#legal-tabs .tab').forEach((t,i)=>t.classList.toggle('active', i===0));
+  ['ld-doctype','ld-details','ld-format-details'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  const fEl=document.getElementById('ld-format-file'); if(fEl) fEl.value='';
   document.getElementById('n-legal').classList.remove('show');
+}
+
+function legalShowError(msg){
+  const n=document.getElementById('n-legal');
+  n.className='notif error show'; n.textContent=msg;
 }
 
 async function generateLegalDoc(){
   const g = id => (document.getElementById(id)||{}).value.trim()||'';
-  const data = {
-    licensor_name:   g('ld-licensor-name'),
-    licensee_name:   g('ld-licensee-name'),
-    trademark:       g('ld-trademark'),
-    goods_services:  g('ld-goods'),
-    territory:       g('ld-territory'),
-    licence_fee_pct: g('ld-fee-pct') || '10',
-    deed_date:       g('ld-date'),
-  };
-  if(!data.licensor_name || !data.licensee_name || !data.trademark){
-    const n=document.getElementById('n-legal');
-    n.className='notif error show';
-    n.textContent='Please fill in the Licensor, Licensee, and Trade Mark Name.';
+  const doc_type = g('ld-doctype'), details = g('ld-details');
+  if(!doc_type || !details){
+    legalShowError('Please enter the type of document and the details/data for the draft.');
     return;
   }
   const btn=document.getElementById('btn-legal-gen');
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span> Generating...';
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span> Drafting with AI...';
+  document.getElementById('n-legal').classList.remove('show');
   try{
-    const r = await fetch('/api/legal/trademark-license',{
+    const r = await fetch('/api/legal/generate',{
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
-      body:JSON.stringify(data)
+      body:JSON.stringify({mode:'custom', doc_type, details})
     });
     const d = await r.json();
-    if(!d.success){
-      const n=document.getElementById('n-legal');
-      n.className='notif error show'; n.textContent=d.message||'Generation failed.';
-      btn.disabled=false; btn.innerHTML='⬇ Generate Agreement (.docx)';
-      return;
-    }
+    if(!d.success){ legalShowError(d.message||'Generation failed.'); return; }
     legalJobId = d.job_id;
-    document.getElementById('legal-tm-form').style.display='none';
+    legalDlName = (doc_type.replace(/[^\w\-]+/g,'_')||'RDXper_Legal_Draft') + '.docx';
+    document.getElementById('legal-done-sub').textContent = 'Your ' + doc_type + ' has been generated.';
+    document.getElementById('legal-form-custom').style.display='none';
+    document.getElementById('legal-form-format').style.display='none';
     document.getElementById('legal-done').style.display='block';
   }catch(e){
-    const n=document.getElementById('n-legal');
-    n.className='notif error show'; n.textContent='Connection error. Please try again.';
+    legalShowError('Connection error. Please try again.');
   }finally{
-    btn.disabled=false; btn.innerHTML='⬇ Generate Agreement (.docx)';
+    btn.disabled=false; btn.innerHTML='⬇ Generate Draft (.docx)';
+  }
+}
+
+async function generateLegalDocFromFormat(){
+  const details = (document.getElementById('ld-format-details')||{}).value.trim()||'';
+  const fileEl = document.getElementById('ld-format-file');
+  const file = fileEl && fileEl.files && fileEl.files[0];
+  if(!file){ legalShowError('Please upload a format/sample document (.docx or .txt).'); return; }
+  if(!details){ legalShowError('Please enter the data to fill into the uploaded format.'); return; }
+  const btn=document.getElementById('btn-legal-gen-format');
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span> Drafting with AI...';
+  document.getElementById('n-legal').classList.remove('show');
+  try{
+    const fd = new FormData();
+    fd.append('mode','format');
+    fd.append('details', details);
+    fd.append('format_file', file);
+    const r = await fetch('/api/legal/generate',{
+      method:'POST',
+      headers:{'Authorization':'Bearer '+token},
+      body: fd
+    });
+    const d = await r.json();
+    if(!d.success){ legalShowError(d.message||'Generation failed.'); return; }
+    legalJobId = d.job_id;
+    legalDlName = 'RDXper_Legal_Draft.docx';
+    document.getElementById('legal-done-sub').textContent = 'Your document has been generated from the uploaded format.';
+    document.getElementById('legal-form-custom').style.display='none';
+    document.getElementById('legal-form-format').style.display='none';
+    document.getElementById('legal-done').style.display='block';
+  }catch(e){
+    legalShowError('Connection error. Please try again.');
+  }finally{
+    btn.disabled=false; btn.innerHTML='⬇ Generate Draft (.docx)';
   }
 }
 
@@ -2727,9 +2739,9 @@ async function downloadLegal(){
     const r = await fetch('/api/download/'+legalJobId,{headers:{'Authorization':'Bearer '+token}});
     if(!r.ok) throw new Error('failed');
     const blob=await r.blob(), url=URL.createObjectURL(blob), a=document.createElement('a');
-    a.href=url; a.download='Licence_to_Use_Trade_Mark.docx'; a.click(); URL.revokeObjectURL(url);
+    a.href=url; a.download=legalDlName; a.click(); URL.revokeObjectURL(url);
   }catch(e){ alert('Download failed. Please try again.'); }
-  finally{ btn.disabled=false; btn.innerHTML='⬇ Download Agreement (.docx)'; }
+  finally{ btn.disabled=false; btn.innerHTML='⬇ Download Draft (.docx)'; }
 }
 </script>
 </body>
@@ -3045,7 +3057,252 @@ def download_paper(jid):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  LEGAL DRAFTING — TRADEMARK LICENSE GENERATOR
+#  AI LEGAL DRAFTING
+# ═══════════════════════════════════════════════════════════════════════════════
+
+RDXPER_WATERMARK_TEXT = 'RDXper - A Rakunatha Khrishanth Manathra Creation'
+
+
+def add_watermark(doc, text: str = RDXPER_WATERMARK_TEXT):
+    """Insert a diagonal, semi-transparent watermark into the header of every
+    section (the classic Word VML watermark technique), plus a small text
+    credit line in the footer as a reliable fallback for viewers that don't
+    render VML shapes."""
+    from docx.enum.text import WD_ALIGN_PARAGRAPH as _ALIGN
+
+    from docx.oxml import parse_xml
+    import xml.sax.saxutils as _sax
+
+    safe_text = _sax.escape(text, {'"': '&quot;'})
+
+    watermark_xml = (
+        '<w:pict xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:v="urn:schemas-microsoft-com:vml" '
+        'xmlns:o="urn:schemas-microsoft-com:office:office">'
+        '<v:shapetype id="_x0000_t136" coordsize="1600,21600" o:spt="136" adj="10800" '
+        'path="m@7,0l@8,0m@5,21600l@6,21600e">'
+        '<v:formulas>'
+        '<v:f eqn="sum #0 0 10800"/><v:f eqn="prod #0 2 1"/><v:f eqn="sum 21600 0 #0"/>'
+        '<v:f eqn="sum 0 0 #1"/><v:f eqn="prod #1 2 1"/><v:f eqn="sum 21600 0 #1"/>'
+        '<v:f eqn="if #0 #3 0"/><v:f eqn="if #0 21600 #1"/><v:f eqn="if #3 21600 #2"/>'
+        '<v:f eqn="if #3 #1 21600"/><v:f eqn="mid #4 #5"/><v:f eqn="mid #6 #7"/><v:f eqn="val #0"/>'
+        '</v:formulas>'
+        '<v:path textpathok="t" o:connecttype="custom" '
+        'o:connectlocs="@9,0;@10,10800;@9,21600;@8,10800" o:connectangles="270,180,90,0"/>'
+        '<v:textpath on="t" fitshape="t"/>'
+        '</v:shapetype>'
+        '<v:shape id="RDXperWatermark" o:spid="_x0000_s2049" type="#_x0000_t136" '
+        'style="position:absolute;margin-left:0;margin-top:0;width:520pt;height:110pt;'
+        'rotation:315;z-index:-251654144;mso-position-horizontal:center;'
+        'mso-position-horizontal-relative:margin;mso-position-vertical:center;'
+        'mso-position-vertical-relative:margin" o:allowincell="f" fillcolor="#D8D8D8" stroked="f">'
+        '<v:fill opacity=".45"/>'
+        f'<v:textpath style="font-family:\'Calibri\';font-size:1pt" string="{safe_text}"/>'
+        '</v:shape>'
+        '</w:pict>'
+    )
+
+    for section in doc.sections:
+        # ── Diagonal watermark shape in the header ──────────────────────────
+        header = section.header
+        header.is_linked_to_previous = False
+        h_para = header.paragraphs[0] if header.paragraphs else header.add_paragraph()
+        h_para.text = ''
+        h_para.alignment = _ALIGN.CENTER
+        run = h_para.add_run()
+        r_el = run._r
+        pict = parse_xml(watermark_xml)
+        r_el.append(pict)
+
+        # ── Small credit line in the footer (reliable fallback) ────────────
+        footer = section.footer
+        footer.is_linked_to_previous = False
+        f_para = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+        f_para.text = ''
+        f_para.alignment = _ALIGN.CENTER
+        f_run = f_para.add_run(text)
+        f_run.font.size = Pt(8)
+        f_run.font.color.rgb = RGBColor(0xA0, 0xA0, 0xA0)
+        f_run.italic = True
+
+
+def build_ai_legal_docx(doc_type: str, ai_text: str) -> str:
+    """Convert the AI-drafted plain-text legal document into a formatted,
+    watermarked .docx file."""
+    doc = Document()
+    for sec in doc.sections:
+        sec.page_width    = Inches(8.5)
+        sec.page_height   = Inches(11)
+        sec.top_margin    = Inches(1)
+        sec.bottom_margin = Inches(1)
+        sec.left_margin   = Inches(1.25)
+        sec.right_margin  = Inches(1.25)
+
+    TNR = 'Times New Roman'
+    lines = [ln.rstrip() for ln in ai_text.strip().split('\n')]
+
+    numbered_re   = re.compile(r'^\s*(\d{1,3})[\.\)]\s+(.*)$')
+    title_written = False
+
+    for ln in lines:
+        stripped = ln.strip()
+        if not stripped:
+            continue
+        # Skip stray markdown fences/asterisked bold markers from the LLM
+        clean = stripped.strip('#').strip()
+        clean = re.sub(r'^\*\*(.*)\*\*$', r'\1', clean).strip()
+        clean = clean.lstrip('*').strip()
+        if not clean:
+            continue
+
+        m = numbered_re.match(clean)
+        if not title_written and not m:
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p.paragraph_format.space_after = Pt(16)
+            r = p.add_run(clean.upper())
+            r.bold = True; r.font.size = Pt(16); r.font.name = TNR
+            title_written = True
+            continue
+
+        if m:
+            num, body = m.group(1), m.group(2)
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            p.paragraph_format.space_before = Pt(4)
+            p.paragraph_format.space_after  = Pt(4)
+            p.paragraph_format.left_indent  = Inches(0.5)
+            p.paragraph_format.first_line_indent = Inches(-0.5)
+            r_num = p.add_run(f'{num}.  ')
+            r_num.bold = True; r_num.font.size = Pt(12); r_num.font.name = TNR
+            r_body = p.add_run(body)
+            r_body.font.size = Pt(12); r_body.font.name = TNR
+        elif clean.isupper() and len(clean) < 80:
+            # Section heading in caps, e.g. "WITNESSETH", "THE SCHEDULE"
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p.paragraph_format.space_before = Pt(10)
+            p.paragraph_format.space_after  = Pt(8)
+            r = p.add_run(clean)
+            r.bold = True; r.font.size = Pt(13); r.font.name = TNR
+        else:
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            p.paragraph_format.space_before = Pt(6)
+            p.paragraph_format.space_after  = Pt(6)
+            r = p.add_run(clean)
+            r.font.size = Pt(12); r.font.name = TNR
+
+    add_watermark(doc, RDXPER_WATERMARK_TEXT)
+
+    os.makedirs('generated', exist_ok=True)
+    safe = re.sub(r'[^\w\-]', '_', (doc_type or 'Legal_Draft')[:40]) or 'Legal_Draft'
+    out  = os.path.abspath(f'generated/{safe}_{uuid.uuid4().hex[:8]}.docx')
+    doc.save(out)
+    return out
+
+
+def extract_text_from_upload(file_storage) -> str:
+    """Extract plain text from an uploaded .docx or .txt reference format file."""
+    filename = (file_storage.filename or '').lower()
+    if filename.endswith('.docx'):
+        tmp_path = os.path.abspath(f'generated/_upload_{uuid.uuid4().hex[:8]}.docx')
+        os.makedirs('generated', exist_ok=True)
+        file_storage.save(tmp_path)
+        try:
+            src = Document(tmp_path)
+            text = '\n'.join(p.text for p in src.paragraphs if p.text.strip())
+            for tbl in src.tables:
+                for row in tbl.rows:
+                    text += '\n' + ' | '.join(c.text for c in row.cells)
+            return text
+        finally:
+            try: os.remove(tmp_path)
+            except OSError: pass
+    elif filename.endswith('.txt'):
+        raw = file_storage.read()
+        try:
+            return raw.decode('utf-8')
+        except UnicodeDecodeError:
+            return raw.decode('latin-1', errors='ignore')
+    else:
+        raise ValueError('Unsupported file type — please upload a .docx or .txt file.')
+
+
+def ai_draft_legal_document(doc_type: str, details: str, reference_text: str = '') -> str:
+    """Call the AI model to draft a full legal document as plain text."""
+    system = (
+        'You are an expert legal drafter. Draft complete, professional, ready-to-use legal '
+        'documents in plain text (no markdown, no asterisks, no code fences). '
+        'Structure: a centred ALL-CAPS title on the first line, then the preamble/recitals '
+        'as plain paragraphs, then the operative clauses as a numbered list ("1. ", "2. ", ...), '
+        'and finally a signature block. Use precise, formal legal language appropriate for the '
+        'jurisdiction implied by the details given. Do not include any commentary, explanations, '
+        'or notes outside the document itself — output ONLY the document text.'
+    )
+    if reference_text:
+        prompt = (
+            f'Use the following document as the FORMAT/STRUCTURE reference — follow its layout, '
+            f'clause structure and drafting style closely, but replace all names, dates, amounts '
+            f'and other details with the DATA provided below. Fill in any gaps sensibly.\n\n'
+            f'--- FORMAT REFERENCE ---\n{reference_text[:6000]}\n\n'
+            f'--- DATA TO USE ---\n{details}\n\n'
+            f'Now produce the complete final document text.'
+        )
+    else:
+        prompt = (
+            f'Draft a "{doc_type}" document using the following details and data:\n\n'
+            f'{details}\n\n'
+            f'Produce the complete, professional, ready-to-use document text.'
+        )
+    return ai_generate(prompt, system=system, temperature=0.4)
+
+
+@app.route('/api/legal/generate', methods=['POST'])
+def gen_ai_legal_draft():
+    tok = request.headers.get('Authorization', '').replace('Bearer ', '')
+    sess = session_get(tok)
+    if not sess:
+        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+
+    if not os.environ.get('GROQ_API_KEY', '').strip():
+        return jsonify({'success': False,
+                        'message': 'GROQ_API_KEY not set. Get a free key at https://console.groq.com'}), 400
+
+    is_multipart = request.content_type and 'multipart/form-data' in request.content_type
+    mode = (request.form.get('mode') if is_multipart else (request.json or {}).get('mode')) or 'custom'
+
+    try:
+        if mode == 'format':
+            details = (request.form.get('details') or '').strip()
+            if not details:
+                return jsonify({'success': False, 'message': 'Please provide the data to fill into the format.'}), 400
+            file_storage = request.files.get('format_file')
+            if not file_storage or not file_storage.filename:
+                return jsonify({'success': False, 'message': 'Please upload a format/sample document.'}), 400
+            reference_text = extract_text_from_upload(file_storage)
+            doc_type = 'Legal Draft'
+            ai_text = ai_draft_legal_document(doc_type, details, reference_text=reference_text)
+        else:
+            data = request.json or {}
+            doc_type = (data.get('doc_type') or '').strip()
+            details  = (data.get('details') or '').strip()
+            if not doc_type or not details:
+                return jsonify({'success': False, 'message': 'Please provide the document type and details.'}), 400
+            ai_text = ai_draft_legal_document(doc_type, details)
+
+        path = build_ai_legal_docx(doc_type, ai_text)
+        jid  = uuid.uuid4().hex
+        jobs[jid] = {'status': 'done', 'file_path': path, 'topic': doc_type}
+        return jsonify({'success': True, 'job_id': jid})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  LEGAL DRAFTING — TRADEMARK LICENSE GENERATOR (legacy structured template,
+#  still available programmatically via /api/legal/trademark-license)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def build_trademark_license_docx(data: dict) -> str:
