@@ -318,7 +318,7 @@ class WebScraper:
         self.topic = topic
         self.query = urllib.parse.quote(topic)
 
-    def fetch_semantic_scholar(self, limit: int = 10) -> list:
+    def fetch_semantic_scholar(self, limit: int = 20) -> list:
         url = (
             f"https://api.semanticscholar.org/graph/v1/paper/search"
             f"?query={self.query}&limit={limit}"
@@ -350,7 +350,7 @@ class WebScraper:
                 })
         return papers
 
-    def fetch_crossref(self, limit: int = 6) -> list:
+    def fetch_crossref(self, limit: int = 12) -> list:
         url = (
             f"https://api.crossref.org/works?query={self.query}"
             f"&rows={limit}&sort=relevance"
@@ -416,10 +416,10 @@ class WebScraper:
 
     def gather(self, progress_cb=None) -> dict:
         if progress_cb: progress_cb(10, "Querying Semantic Scholar for real papers...")
-        ss = self.fetch_semantic_scholar(10)
+        ss = self.fetch_semantic_scholar(22)
 
         if progress_cb: progress_cb(18, "Querying CrossRef for verified journal articles...")
-        cr = self.fetch_crossref(6)
+        cr = self.fetch_crossref(14)
 
         if progress_cb: progress_cb(24, "Fetching Wikipedia background context...")
         wiki = self.fetch_wikipedia()
@@ -475,7 +475,7 @@ class GeminiWriter:
         4 AI calls matching the sample paper's exact structure:
         Call A : keywords + abstract + objectives
         Call B : introduction (6 named subheadings, ~1200-1500w)
-        Call C : literature review (26 numbered entries, bold format)
+        Call C : literature review (20 entries, exact fixed-sentence template, bold author/year)
         Call D : methodology + results (FIGURE paragraphs) + discussion +
                  limitations + suggestions + conclusion + charts
         """
@@ -552,7 +552,7 @@ class GeminiWriter:
 
         # Build a digest of scraped real papers to seed the AI's lit review
         scraped_seed = ""
-        for i, p in enumerate(self.papers[:10], 1):
+        for i, p in enumerate(self.papers[:20], 1):
             jour = f", {p['journal']}" if p.get("journal") else ""
             doi  = f", DOI: {p['doi']}" if p.get("doi") else ""
             abst = f" Abstract: {p['abstract'][:200]}" if p.get("abstract") else ""
@@ -563,28 +563,46 @@ class GeminiWriter:
               + (f"\nREAL PAPERS SCRAPED FROM SEMANTIC SCHOLAR & CROSSREF (use these as your primary sources):\n{scraped_seed}\n" if scraped_seed else "")
               + "Write a LITERATURE REVIEW using XML tags.\n"
               "CRITICAL RULE: Use ONLY real, verifiable, published academic works. "
-              "PRIORITY: Use and expand on the scraped papers listed above first, then add other real known works.\n"
-              "Never invent authors, titles, journals, or DOIs. If unsure of a detail, omit it.\n\n"
-              f"<literature_review>Write EXACTLY 15 entries, one per paragraph, separated by a blank line.\n"
-              f"Every entry MUST be a REAL published work — a peer-reviewed article, book, or official report.\n"
-              f"Draw primarily from the scraped papers above, then supplement with other well-known real works "
-              f"in {self.topic} and related fields (policy, law, psychology, sociology, technology).\n\n"
-              f"FORMAT FOR EVERY ENTRY (follow precisely):\n"
-              f"Author Surname(s) or Organisation (Year) followed by ONE flowing paragraph covering:\n"
-              f"  — full title and publication venue\n"
-              f"  — aim of the work\n"
-              f"  — methodology used\n"
-              f"  — key findings (with statistics if known)\n"
-              f"  — conclusion and relevance to {self.topic}\n\n"
+              "PRIORITY: Use and expand on the scraped papers listed above first — use every one of them — "
+              "then, only if more are needed to reach 20, supplement with other real, well-known, verifiable works.\n"
+              "Never invent authors, titles, journals, DOIs, or statistics. Never fabricate a study that does not exist. "
+              "Do not invent specific numeric findings (%, sample sizes, etc.) unless they are given to you above — "
+              "describe findings qualitatively ('showed a positive impact', 'found limited awareness') when no real "
+              "figure is known. If unsure of any detail, write around it rather than invent it.\n\n"
+              f"<literature_review>Write EXACTLY 20 entries, one per paragraph, separated by a blank line.\n"
+              f"Every entry MUST be a REAL published work — a peer-reviewed article, book, or official report — "
+              f"never an invented author or study.\n\n"
+              f"EVERY ENTRY MUST FOLLOW THIS EXACT SEVEN-SENTENCE TEMPLATE, IN THIS ORDER, WITH NO DEVIATION:\n"
+              f"  1. '[Author Surname(s) or Organisation] (Year) examined [what the study investigated, tied to {self.topic}].'\n"
+              f"  2. 'The objective focused on [the study's specific objective].'\n"
+              f"  3. 'The methodology adopted was [research method/approach actually used, or a reasonable qualitative "
+              f"description if the exact method is not stated in the source].'\n"
+              f"  4. 'The findings showed [key result(s), described qualitatively unless a real statistic is known].'\n"
+              f"  5. 'The study suggested [the recommendation(s) made by the study].'\n"
+              f"  6. 'The future scope proposed [a direction for further research consistent with the study's own conclusion/discussion].'\n"
+              f"  7. 'The conclusion highlighted [the study's overall takeaway and its relevance to {self.topic}].'\n\n"
+              f"EXAMPLE OF THE REQUIRED FORMAT (match this structure and tone exactly, but with real content):\n"
+              f"\"Bhattacharya and Ghosh (2020) examined the implementation of AI-based tools in the Indian judicial "
+              f"system, including translation and legal research software. The objective focused on evaluating AI's "
+              f"role in reducing case backlog and language barriers. The methodology adopted was qualitative analysis "
+              f"of judicial initiatives and policy documents. The findings showed positive impact on administrative "
+              f"efficiency but limited public awareness. The study suggested expanding AI tools with multilingual "
+              f"capabilities. The future scope proposed studying public perception of AI-enabled judicial services. "
+              f"The conclusion highlighted AI's potential to enhance access to justice if inclusively implemented.\"\n\n"
               f"RULES:\n"
               f"  1. No number prefix, no bullet — start directly with Author/Org name then (Year)\n"
-              f"  2. ONE continuous paragraph per entry — no sub-labels like 'Aim:' or 'Findings:'\n"
-              f"  3. Only real works — if uncertain about a detail, write around it rather than invent it\n"
-              f"  4. Span years 1990–2024; include international authors\n"
-              f"  5. Separate entries with a blank line; no section headings\n"
-              f"  6. Aim for 80–120 words per entry\n"
-              f"  7. Write EXACTLY 15 entries</literature_review>\n\n"
-              f"<references>Generate APA 7th edition references for the same 15 works, numbered 1–15.\n"
+              f"  2. Exactly seven sentences per entry, in the exact order above, using the exact lead-in phrases "
+              f"'The objective focused on', 'The methodology adopted was', 'The findings showed', 'The study "
+              f"suggested', 'The future scope proposed', and 'The conclusion highlighted'\n"
+              f"  3. Only real works — never invent a paper, author, or finding to fill the template; if a study's "
+              f"future scope or suggestion is not explicit in the source, infer a modest, plausible one consistent "
+              f"with its actual findings rather than fabricating unrelated claims\n"
+              f"  4. Span years 1990–2024; include international authors where the real literature supports it\n"
+              f"  5. Separate entries with a blank line; no section headings, no sub-labels\n"
+              f"  6. Aim for 90–120 words per entry\n"
+              f"  7. Write EXACTLY 20 entries — no more, no fewer</literature_review>\n\n"
+              f"<references>Generate APA 7th edition references for the same 20 real works, in the same order, "
+              f"numbered 1–20.\n"
               f"FORMAT:\n"
               f"  Journal: [N]. Author, A. A., & Author, B. B. (Year). Title. Journal, volume(issue), pages.\n"
               f"  Book: [N]. Author, A. A. (Year). Title. Publisher.\n"
@@ -755,60 +773,63 @@ class GeminiWriter:
 
     def _build_lit_review_fallback(self, nr: int) -> str:
         """
-        Build a literature review from REAL scraped papers (Semantic Scholar + CrossRef).
-        Used only if the AI call fails. Never generates fake author names.
+        Build a literature review from REAL scraped papers (Semantic Scholar + CrossRef) only.
+        Used only if the AI call fails. Never invents author names, papers, or statistics —
+        each entry follows the fixed 7-sentence template but every claim is either drawn
+        from the paper's real metadata/abstract or phrased qualitatively (no fabricated numbers).
+
+        Target is exactly 20 entries, but this fallback will NEVER pad the count with
+        invented studies: if fewer than 20 real papers were scraped, it returns fewer
+        entries rather than hallucinate additional ones.
         """
-        rng     = random.Random(self.seed + 99)
         entries = []
 
-        for p in self.papers:
+        for p in self.papers[:20]:
             authors  = p.get('authors', 'Unknown Author')
             year     = p.get('year', 2020)
             title    = p.get('title', '').strip()
-            journal  = p.get('journal', 'Academic Journal') or 'Academic Journal'
+            journal  = (p.get('journal') or '').strip()
             abstract = (p.get('abstract') or '').strip()
-            doi      = p.get('doi', '')
             cites    = p.get('citations', 0)
 
             if not title:
                 continue
 
+            venue_clause = f" (published in {journal})" if journal else ""
+
             if abstract and len(abstract) > 80:
-                snip = abstract[:320].rsplit(' ', 1)[0]
-                body = (
-                    f"published in {journal}, examined {self.topic} through an empirical lens. "
-                    f"{snip}. "
-                    f"The study employed systematic analysis yielding findings of direct relevance "
-                    f"to policy and practice in {self.topic}. "
-                    f"The work contributes to a growing body of evidence supporting evidence-based "
-                    f"interventions and integrated legislative frameworks for addressing {self.topic} effectively."
-                )
+                # Ground every clause in the real abstract; no invented figures.
+                snip = abstract[:220].rsplit(' ', 1)[0].rstrip('.')
+                examined   = f"\"{title}\"{venue_clause}, focusing on {snip.lower()}"
+                objective  = f"understanding the core issue addressed in the study — {snip[:110].lower()}"
+                methodology = "an analysis of the study's own reported data and documentary/empirical evidence, as described in the published abstract"
+                findings   = "outcomes consistent with the abstract's own reported conclusions, without additional invented statistics"
+                suggestion = f"further application or refinement of its approach within the broader field of {self.topic}"
+                future     = f"extending this line of enquiry to related aspects of {self.topic} not yet covered by the original study"
+                conclusion = f"the continued relevance of this work to scholarship and practice on {self.topic}"
             else:
-                n_resp = rng.randint(150, 280)
-                aware  = rng.randint(58, 78)
-                gap    = rng.randint(35, 52)
-                body = (
-                    f"published in {journal}, investigated critical dimensions of {self.topic} using a structured "
-                    f"survey methodology with {n_resp} respondents drawn across varied demographic profiles. "
-                    f"The research employed descriptive statistics and inferential analysis including chi-square "
-                    f"and ANOVA tests to evaluate awareness, attitudes, and behavioural patterns. "
-                    f"Results indicated that {aware}% of respondents demonstrated moderate to high awareness of "
-                    f"{self.topic}, while {gap}% identified gaps in prevailing institutional and policy frameworks. "
-                    f"The authors concluded that targeted interventions combining legislative reform, technology "
-                    f"adoption, and community engagement are essential for effectively addressing {self.topic}."
-                )
-                if cites > 10:
-                    body += f" This work has been cited {cites:,} times, reflecting its scholarly influence."
+                # No usable abstract — describe only what is verifiably known (title/venue/year),
+                # and keep the rest strictly qualitative. No invented sample sizes or percentages.
+                examined   = f"\"{title}\"{venue_clause}, addressing aspects of {self.topic}"
+                objective  = f"exploring the dimensions of {self.topic} relevant to this work's stated title and venue"
+                methodology = "a methodology consistent with standard academic practice in the field, as indicated by its publication venue"
+                findings   = "results that contribute to the broader scholarly understanding of the subject"
+                suggestion = f"further empirical or policy attention to the specific dimension of {self.topic} it addresses"
+                future     = f"replication or extension of the work in different contexts relevant to {self.topic}"
+                conclusion = f"the work's contribution to the wider literature on {self.topic}"
 
-            doi_str = f" DOI: {doi}" if doi else ""
-            entries.append(f"{authors} ({year}) \"{title}\",{doi_str} {body}")
+            cite_clause = f" This work has been cited {cites:,} times." if cites and cites > 10 else ""
 
-        if len(entries) < 6:
-            entries.append(
-                f"For an authoritative overview of {self.topic}, readers are directed to peer-reviewed databases "
-                f"including Semantic Scholar, PubMed, and JSTOR, where a growing body of interdisciplinary "
-                f"research addresses legal, technological, and social dimensions of the field."
+            entry = (
+                f"{authors} ({year}) examined {examined}. "
+                f"The objective focused on {objective}. "
+                f"The methodology adopted was {methodology}. "
+                f"The findings showed {findings}. "
+                f"The study suggested {suggestion}. "
+                f"The future scope proposed {future}. "
+                f"The conclusion highlighted {conclusion}.{cite_clause}"
             )
+            entries.append(entry)
 
         return '\n\n'.join(entries)
 
@@ -872,7 +893,7 @@ class GeminiWriter:
 
     def references(self) -> list:
         refs, seen = [], set()
-        for p in self.papers[:12]:
+        for p in self.papers[:20]:
             key = p["title"][:35].lower()
             if key in seen: continue
             seen.add(key)
@@ -886,7 +907,7 @@ class GeminiWriter:
             "UNESCO. (2021). Recommendation on the Ethics of Artificial Intelligence. UNESCO.",
             "Floridi, L., & Cowls, J. (2019). A Unified Framework of Five Principles for AI in Society. Harvard Data Science Review, 1(1).",
         ]
-        return list(dict.fromkeys(refs))[:15]
+        return list(dict.fromkeys(refs))[:20]
 
     def _fallback_specs(self, n: int) -> list:
         """Safe fallback chart specs requiring no Gemini call."""
@@ -1616,8 +1637,8 @@ class PaperGenerator:
         scraper = WebScraper(topic)
         with ThreadPoolExecutor(max_workers=3) as ex:
             f_ss, f_cr, f_wiki = (
-                ex.submit(scraper.fetch_semantic_scholar, 10),
-                ex.submit(scraper.fetch_crossref, 6),
+                ex.submit(scraper.fetch_semantic_scholar, 22),
+                ex.submit(scraper.fetch_crossref, 14),
                 ex.submit(scraper.fetch_wikipedia),
             )
             ss, cr, wiki = f_ss.result(), f_cr.result(), f_wiki.result()
@@ -1628,8 +1649,32 @@ class PaperGenerator:
             if key not in seen:
                 seen.add(key); all_papers.append(p)
         all_papers.sort(key=lambda x: x.get('citations', 0), reverse=True)
+
+        # Safety net: if the topic is niche and we still don't have enough REAL
+        # papers to seed 20 genuine literature-review entries, broaden the query
+        # (first 2-3 words of the topic) and top up — never fabricate instead.
+        broadened = False
+        if len(all_papers) < 20:
+            broad_topic = ' '.join(topic.split()[:3]) or topic
+            if broad_topic.lower() != topic.lower():
+                broadened = True
+                broad_scraper = WebScraper(broad_topic)
+                with ThreadPoolExecutor(max_workers=2) as ex:
+                    f_ss2, f_cr2 = (
+                        ex.submit(broad_scraper.fetch_semantic_scholar, 20),
+                        ex.submit(broad_scraper.fetch_crossref, 10),
+                    )
+                    ss2, cr2 = f_ss2.result(), f_cr2.result()
+                for p in ss2 + cr2:
+                    key = p['title'][:40].lower()
+                    if key not in seen:
+                        seen.add(key); all_papers.append(p)
+                all_papers.sort(key=lambda x: x.get('citations', 0), reverse=True)
+
         scraped = {'papers': all_papers, 'wiki': wiki}
-        print(f"[Scraper] {len(ss)} SS + {len(cr)} CrossRef, wiki={'yes' if wiki.get('summary') else 'no'}")
+        print(f"[Scraper] {len(all_papers)} unique real papers gathered "
+              f"({len(ss)} SS + {len(cr)} CrossRef{' + broadened query' if broadened else ''}), "
+              f"wiki={'yes' if wiki.get('summary') else 'no'}")
 
         # ── Step 2: AI writes all sections ───────────────────────────────────
         self.prog(30, 'AI connected — writing keywords...')
