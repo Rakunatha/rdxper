@@ -441,6 +441,82 @@ class WebScraper:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  CHART DATA MODEL
+#  Fixed demographic value-labels (matching a real SPSS dataset export) and
+#  response-scale templates used to build two-variable clustered chart specs.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+DEMO_GROUPS = {
+    'age':                        ['16-18', '19-35', '36-55', '55 above'],
+    'gender':                     ['Male', 'female', 'Transgender'],
+    'educational qualification':  ['Below 10th', '10th-12th', 'Undergraduate', 'Postgraduate', 'PhD'],
+    'occupation':                 ['business', 'Employed', 'Retired', 'unemployed', 'Student'],
+    'area':                       ['Urban', 'Rural', 'Semi-Urban'],
+}
+# Aliases so loosely-worded AI output ("education", "geographic area", ...) still resolves
+_DEMO_ALIASES = {
+    'education': 'educational qualification', 'qualification': 'educational qualification',
+    'geographic area': 'area', 'region': 'area', 'residence': 'area', 'location': 'area',
+    'employment': 'occupation', 'employment status': 'occupation', 'job': 'occupation',
+    'sex': 'gender', 'age group': 'age',
+}
+
+LIKERT_10   = [str(i) for i in range(1, 11)]
+AGREEMENT_5 = ['Strongly agree', 'Agree', 'Neutral', 'Disagree', 'Strongly disagree']
+
+
+def resolve_demographic(raw: str):
+    """Map arbitrary AI/user text to one of the fixed demographic axes + its
+    real value-label set, so every chart's x-axis matches genuine SPSS output."""
+    key = (raw or '').strip().lower()
+    key = _DEMO_ALIASES.get(key, key)
+    if key in DEMO_GROUPS:
+        return key, DEMO_GROUPS[key]
+    for k in DEMO_GROUPS:
+        if k in key or key in k:
+            return k, DEMO_GROUPS[k]
+    # Deterministic fallback keeps things varied rather than always the same axis
+    k = list(DEMO_GROUPS)[sum(ord(c) for c in key) % len(DEMO_GROUPS)] if key else 'gender'
+    return k, DEMO_GROUPS[k]
+
+
+def sparse_percent_matrix(rng: random.Random, n_groups: int, n_series: int) -> list:
+    """Build a groups × series percentage matrix that sums to ~100%, with only
+    a handful of nonzero cells per group (and some groups left empty) — this
+    mirrors how a real SPSS crosstab of a convenience sample looks, rather
+    than an evenly-filled synthetic grid."""
+    weights = [[0.0] * n_series for _ in range(n_groups)]
+    any_active = False
+    for g in range(n_groups):
+        if n_groups > 2 and rng.random() < 0.18:
+            continue  # this demographic category had zero/negligible respondents
+        k = rng.randint(1, min(3, n_series))
+        for i in rng.sample(range(n_series), k):
+            weights[g][i] = rng.uniform(8, 32)
+            any_active = True
+    if not any_active:
+        weights[rng.randrange(n_groups)][rng.randrange(n_series)] = 20.0
+    total = sum(sum(row) for row in weights) or 1.0
+    return [[round(v / total * 100, 2) for v in row] for row in weights]
+
+
+def _make_spec(question: str, xvar: str, groups: list, series: list, matrix: list) -> dict:
+    legend_text = (f'The given figure represents the {xvar.lower()}-wise distribution of respondents\' '
+                   f'responses to: "{question}"')
+    return {
+        'type': 'bar',
+        'title': f'{question[:40]} by {xvar}',
+        'question': question,
+        'xvar': xvar,
+        'groups': groups,
+        'series': series,
+        'matrix': matrix,
+        'legend': legend_text,
+        'interp': f'Distribution of responses across {len(series)} options, broken down by {xvar.lower()}.',
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  GEMINI CONTENT GENERATOR
 #  Takes scraped data → asks Gemini to write each section
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -653,15 +729,19 @@ class GeminiWriter:
               f"(4) implications and 4-5 specific policy recommendations for {self.topic}; "
               f"(5) study limitations briefly; "
               f"(6) future research directions. No bullets.</conclusion>\n\n"
-              f"<charts>{self._nfigs} lines, one per figure. Format: bar|TITLE|CATS\n"
-              f"TYPE is always 'bar' — do not use pie, grouped, or stacked.\n"
-              f"CATS is a comma-separated list of 4-6 category labels.\n"
-              f"Titles must relate to {self.topic[:35]} and a demographic variable (age, gender, education, occupation, area). "
+              f"<charts>{self._nfigs} lines, one per figure. Format: bar|QUESTION|XVAR|SERIES\n"
+              f"QUESTION is the full survey statement/question this figure reports on, related to {self.topic[:40]}.\n"
+              f"XVAR is exactly one of: age, gender, educational qualification, occupation, area — the demographic "
+              f"the responses are broken down by. Cycle through all five before repeating, in roughly equal proportion.\n"
+              f"SERIES is a comma-separated list of the response options for the question — use ONE of these forms: "
+              f"a 5-point agreement scale (Strongly agree,Agree,Neutral,Disagree,Strongly disagree), "
+              f"a 1-10 rating scale (1,2,3,4,5,6,7,8,9,10), or 3-6 short topic-specific multiple-choice options.\n"
               f"EXAMPLES:\n"
-              f"bar|Awareness of {self.topic[:25]} by Age Group|18-30,31-45,46-60,60+\n"
-              f"bar|Level of Concern about {self.topic[:20]} by Education|Below 10th,10th-12th,UG,PG,PhD\n"
-              f"bar|Gender Distribution of Respondents|Female,Male,Non-binary,Prefer not to say\n"
-              f"bar|Trust in Prevention Frameworks by Occupation|Students,Employed,Self-employed,Retired</charts>")
+              f"bar|To what extent do you agree with the statement: \"{self.topic[:40]} poses a serious risk\"?|age|"
+              f"Strongly agree,Agree,Neutral,Disagree,Strongly disagree\n"
+              f"bar|How would you rate your awareness of {self.topic[:35]}?|gender|1,2,3,4,5,6,7,8,9,10\n"
+              f"bar|Which entity should be primarily responsible for addressing {self.topic[:30]}?|occupation|"
+              f"Government,Industry,Educators,Individuals,Civil Society</charts>")
 
         # Sequential calls — avoids hammering rate limits with simultaneous requests
         if progress_cb: progress_cb(32, "Writing keywords, abstract & objectives...")
@@ -834,53 +914,35 @@ class GeminiWriter:
         return '\n\n'.join(entries)
 
     def parse_chart_specs(self, n: int) -> list:
-        """Parse the <charts> block from Gemini into renderable spec dicts."""
-        C   = ['#4472C4','#ED7D31','#A9D18E','#FFC000','#7030A0','#FF0000','#00B050']
+        """Parse the <charts> block from Gemini into renderable spec dicts.
+
+        Each figure is modelled the way SPSS's Chart Builder actually reports a
+        crosstab: a demographic axis (age / gender / educational qualification /
+        occupation / area) clustered against the response options for a survey
+        question, with a legend headed by the full question text.
+        """
         rng = random.Random(self.seed + 7)
-
-        def rv(items):
-            base  = [rng.uniform(10, 38) for _ in items]
-            total = sum(base)
-            return [round(v / total * 100, 1) for v in base]
-
         specs = []
         raw   = self.sections.get('charts', '')
 
-        fig_n = 1  # figure counter for legend text matching sample format
         for line in raw.strip().splitlines():
             line = line.strip()
             if not line or '|' not in line:
                 continue
             parts = [p.strip() for p in line.split('|')]
-            if len(parts) < 3:
+            if len(parts) < 4:
                 continue
-            chart_type = parts[0].lower()
-            title      = parts[1]
-            labels_raw = parts[2]
-
+            _type, question, xvar_raw, series_raw = parts[0], parts[1], parts[2], parts[3]
             try:
-                # Always force bar chart regardless of what the AI returned
-                chart_type = 'bar'
-                cats = [c.strip() for c in labels_raw.split(',') if c.strip()]
-                # Handle grouped/stacked format where labels_raw contains "groups;series" — take groups only
-                if ';' in labels_raw:
-                    cats = [c.strip() for c in labels_raw.split(';')[0].split(',') if c.strip()]
-                cats = cats[:6]
-                if len(cats) < 2:
-                    continue
-                vals = rv(cats)
-                demographic = title.split(' by ')[-1].strip() if ' by ' in title else 'educational qualification'
-                subject     = title.split(' by ')[0].strip()  if ' by ' in title else title
-                legend_text = f'The Figure {{fig_n}} shows {demographic} of the respondents discussed about {subject.lower()}'
-                specs.append({'type': 'bar', 'title': title, 'cats': cats, 'vals': vals,
-                              'color': C[len(specs) % len(C)],
-                              'legend': legend_text,
-                              'interp': f'Distribution across {len(cats)} response categories.'})
+                xvar, groups = resolve_demographic(xvar_raw)
+                series = [s.strip() for s in series_raw.split(',') if s.strip()][:10]
+                if len(series) < 2:
+                    series = list(LIKERT_10)
+                matrix = sparse_percent_matrix(rng, len(groups), len(series))
+                specs.append(_make_spec(question, xvar, groups, series, matrix))
             except Exception as e:
                 print(f"[Chart parse] skipped: {line!r} → {e}")
                 continue
-
-            fig_n += 1
             if len(specs) >= n:
                 break
 
@@ -910,25 +972,33 @@ class GeminiWriter:
         return list(dict.fromkeys(refs))[:20]
 
     def _fallback_specs(self, n: int) -> list:
-        """Safe fallback chart specs requiring no Gemini call."""
-        C = ['#4472C4','#ED7D31','#A9D18E','#FFC000','#7030A0','#FF0000','#00B050']
+        """Safe fallback chart specs requiring no AI call — cycles through all
+        five demographic axes and a mix of response-scale templates so even a
+        large figure count (up to 25) produces varied, real-looking crosstabs."""
         rng = random.Random(self.seed)
-        def rv(cats):
-            base = [rng.uniform(10, 35) for _ in cats]
-            t = sum(base)
-            return [round(v/t*100, 1) for v in base]
-        pool = [
-            {'type':'bar','title':f'Awareness of {self.topic[:35]}','cats':['Not Aware','Slightly Aware','Moderately Aware','Well Aware','Expert'],'color':C[0]},
-            {'type':'bar','title':'Gender Distribution of Respondents','cats':['Female','Male','Non-binary','Prefer not to say'],'color':C[1]},
-            {'type':'bar','title':'Level of Support for Policy Reform','cats':['Strongly Oppose','Oppose','Neutral','Support','Strongly Support'],'color':C[4]},
-            {'type':'bar','title':f'Perception of {self.topic[:30]} by Age Group','cats':['16–18','19–35','36–55','55+'],'color':C[2]},
-            {'type':'bar','title':'Key Implementation Barriers','cats':['Lack of Awareness','Regulatory Gaps','Resource Constraints','Resistance to Change','Technical Barriers'],'color':C[1]},
-            {'type':'bar','title':'Trust in Frameworks by Occupation','cats':['Students','Employed','Self-employed','Retired'],'color':C[5]},
+        demo_keys = ['age', 'gender', 'educational qualification', 'occupation', 'area']
+        series_templates = [
+            AGREEMENT_5,
+            LIKERT_10,
+            ['Yes', 'No', 'Not Sure'],
+            ['Very Low', 'Low', 'Moderate', 'High', 'Very High'],
+        ]
+        question_stems = [
+            f'To what extent do you agree with the statement: "{self.topic[:42]} requires urgent attention"?',
+            f'How would you rate your overall awareness of {self.topic[:40]}?',
+            f'Do you believe existing frameworks adequately address {self.topic[:35]}?',
+            f'How concerned are you about the impact of {self.topic[:38]}?',
+            f'To what extent do you trust current measures related to {self.topic[:32]}?',
+            f'How would you rate the effectiveness of policies on {self.topic[:35]}?',
+            f'To what extent do you support stronger regulation of {self.topic[:35]}?',
         ]
         specs = []
-        for idx2, sp in enumerate(pool[:n], 1):
-            fig_legend = f"The Figure {{fig_n}} shows respondents discussed about {sp['title'].lower()}"
-            specs.append({**sp, 'vals': rv(sp['cats']), 'legend': fig_legend, 'interp': f"Survey responses for {sp['title'].lower()}."})
+        for i in range(n):
+            xvar, groups = resolve_demographic(demo_keys[i % len(demo_keys)])
+            series   = series_templates[i % len(series_templates)]
+            question = question_stems[i % len(question_stems)]
+            matrix   = sparse_percent_matrix(rng, len(groups), len(series))
+            specs.append(_make_spec(question, xvar, groups, series, matrix))
         return specs[:n]
 
 
@@ -936,120 +1006,108 @@ class GeminiWriter:
 #  CHART RENDERING  (matplotlib SPSS-style)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-SPSS_COLORS = ['#4472C4','#ED7D31','#A9D18E','#FFC000','#7030A0','#FF0000','#00B050','#0070C0']
+# Default SPSS categorical palette, in legend order (1..10 / Strongly agree..Strongly disagree / etc.)
+SPSS_COLORS = [
+    '#2A3B8F',  # 1 — navy blue
+    '#4E9A4E',  # 2 — green
+    '#D6CCA3',  # 3 — khaki / tan
+    '#7B1FA2',  # 4 — purple
+    '#FFFF66',  # 5 — pale yellow
+    '#E4141B',  # 6 — red
+    '#3FBFBF',  # 7 — teal / cyan
+    '#BEBEBE',  # 8 — grey
+    '#8DB3E2',  # 9 — light steel blue
+    '#1B4D2E',  # 10 — dark green
+]
 
-def _spss_style(ax, fig, title):
-    ax.set_facecolor('#FFFFFF')
-    fig.patch.set_facecolor('#FFFFFF')
-    for sp in ['top', 'right']:
-        ax.spines[sp].set_visible(False)
-    ax.spines['left'].set_color('#AAAAAA')
-    ax.spines['bottom'].set_color('#AAAAAA')
-    ax.tick_params(colors='#333333', labelsize=9)
-    ax.set_title(title, fontsize=11, fontweight='bold', color='#222222', pad=12)
-    ax.yaxis.grid(True, linestyle='--', alpha=0.5, color='#CCCCCC')
-    ax.set_axisbelow(True)
 
-def _bar_chart(title, cats, vals, color=None):
-    fig, ax = plt.subplots(figsize=(4.5, 3.2))
-    c    = color or SPSS_COLORS[0]
-    bars = ax.bar(cats, vals, color=c, width=0.5, edgecolor='white', linewidth=0.5)
-    for bar, v in zip(bars, vals):
-        ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.5,
-                f'{v:.1f}%', ha='center', va='bottom', fontsize=7, color='#333')
-    _spss_style(ax, fig, title)
-    ax.set_ylabel('Percent', fontsize=8, color='#444')
-    ax.set_xticks(range(len(cats)))
-    ax.set_xticklabels(cats, fontsize=7,
-                       rotation=20 if max((len(c) for c in cats), default=0) > 10 else 0,
-                       ha='right' if max((len(c) for c in cats), default=0) > 10 else 'center')
-    ax.set_ylim(0, max(vals) * 1.25 + 3)
-    plt.tight_layout()
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-    plt.close()
-    buf.seek(0)
-    return buf
+def _wrap(text: str, width: int = 24) -> str:
+    import textwrap
+    return '\n'.join(textwrap.wrap(text, width)) or text
 
-def _pie_chart(title, labels, vals):
-    fig, ax = plt.subplots(figsize=(4.5, 3.2))
-    total   = sum(vals) or 1
-    norm    = [v / total * 100 for v in vals]
-    colors  = SPSS_COLORS[:len(labels)]
-    wedges, texts, autotexts = ax.pie(
-        norm, labels=labels, colors=colors, autopct='%1.1f%%',
-        startangle=90, pctdistance=0.75,
-        wedgeprops=dict(edgecolor='white', linewidth=1.5)
+
+def _spss_clustered_chart(question, xvar, groups, series, matrix):
+    """Render a two-variable clustered bar chart matching SPSS Chart Builder's
+    default output: light-grey plot area, solid black frame, no gridlines,
+    thin black bar outlines, boxed % data labels, and a right-hand legend
+    headed by the survey question text (all series shown, even zero ones)."""
+    n_groups = len(groups)
+    n_series = len(series)
+    colors   = [SPSS_COLORS[i % len(SPSS_COLORS)] for i in range(n_series)]
+
+    fig, ax = plt.subplots(figsize=(4.6, 3.75))
+
+    group_width = 0.62
+    for gi in range(n_groups):
+        active = [(si, matrix[gi][si]) for si in range(n_series) if matrix[gi][si] and matrix[gi][si] > 0]
+        if not active:
+            continue
+        k     = len(active)
+        bw    = group_width / k
+        start = gi - group_width / 2
+        for j, (si, val) in enumerate(active):
+            xpos = start + bw * j + bw / 2
+            ax.bar(xpos, val, width=bw * 0.94, color=colors[si],
+                   edgecolor='black', linewidth=0.8, zorder=3)
+            label_y = val * 0.9 if val > 4 else val
+            va      = 'top' if val > 4 else 'bottom'
+            ax.annotate(f'{val:.2f}%', xy=(xpos, label_y), ha='center', va=va,
+                        fontsize=6.3, color='#222222',
+                        bbox=dict(boxstyle='square,pad=0.22', fc='white', ec='black', lw=0.6),
+                        zorder=4)
+
+    ax.set_xlim(-0.5, n_groups - 0.5)
+    ax.set_xticks(range(n_groups))
+    max_len = max((len(g) for g in groups), default=0)
+    crowded = max_len > 9 or n_groups >= 5
+    ax.set_xticklabels(
+        groups, fontsize=7.3 if crowded else 8, color='#111111',
+        rotation=18 if crowded else 0,
+        ha='right' if crowded else 'center',
     )
-    for t in texts:    t.set_fontsize(7)
-    for at in autotexts: at.set_fontsize(7); at.set_color('#333')
-    ax.set_title(title, fontsize=9, fontweight='bold', color='#222', pad=10)
-    fig.patch.set_facecolor('#FFFFFF')
+
+    flat = [v for row in matrix for v in row if v]
+    ymax = (max(flat) if flat else 10) * 1.3 + 3
+    ax.set_ylim(0, ymax)
+
+    # SPSS look: light-grey plot area, solid black frame, no gridlines
+    ax.set_facecolor('#EAEAEA')
+    fig.patch.set_facecolor('white')
+    for spine in ax.spines.values():
+        spine.set_visible(True)
+        spine.set_color('black')
+        spine.set_linewidth(0.9)
+    ax.xaxis.grid(False)
+    ax.yaxis.grid(False)
+    ax.set_axisbelow(True)
+    ax.tick_params(colors='#111111', labelsize=8, length=3)
+    ax.set_ylabel('Percent', fontsize=9, fontweight='bold', color='#111111')
+    ax.set_xlabel(xvar, fontsize=9, fontweight='bold', color='#111111')
+
+    handles = [plt.Rectangle((0, 0), 1, 1, fc=colors[i], ec='black', linewidth=0.6) for i in range(n_series)]
+    leg = ax.legend(handles, series, title=_wrap(question, 15),
+                     loc='upper left', bbox_to_anchor=(1.02, 1.02), frameon=False,
+                     fontsize=6.5, title_fontsize=6.8, handlelength=1.0, handleheight=1.0,
+                     labelspacing=0.3, borderaxespad=0)
+    leg._legend_box.align = 'left'
+    leg.get_title().set_ha('left')
+
     plt.tight_layout()
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-    plt.close()
+    plt.savefig(buf, format='png', dpi=170, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
     buf.seek(0)
     return buf
 
-def _grouped_chart(title, groups, labels, matrix):
-    fig, ax = plt.subplots(figsize=(4.5, 3.2))
-    x = np.arange(len(groups))
-    n = len(labels)
-    width = 0.7 / n
-    for i, (label, values) in enumerate(zip(labels, matrix)):
-        offset = (i - n/2 + 0.5) * width
-        bars = ax.bar(x + offset, values, width, label=label,
-                      color=SPSS_COLORS[i % len(SPSS_COLORS)], edgecolor='white', linewidth=0.3)
-        for bar, v in zip(bars, values):
-            if v > 1:
-                ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.3,
-                        f'{v:.1f}%', ha='center', va='bottom', fontsize=6, color='#333')
-    ax.set_xticks(x)
-    ax.set_xticklabels(groups, fontsize=8)
-    ax.legend(fontsize=7, loc='upper right', framealpha=0.9, ncol=1 if n <= 3 else 2)
-    _spss_style(ax, fig, title)
-    ax.set_ylabel('Percent', fontsize=9, color='#444')
-    ax.set_ylim(0, max(max(d) for d in matrix) * 1.3 + 5)
-    plt.tight_layout()
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-    plt.close()
-    buf.seek(0)
-    return buf
-
-def _stacked_chart(title, groups, labels, matrix):
-    fig, ax = plt.subplots(figsize=(4.5, 3.2))
-    x      = np.arange(len(groups))
-    bottom = np.zeros(len(groups))
-    for i, (label, values) in enumerate(zip(labels, matrix)):
-        vals = np.array(values)
-        ax.bar(x, vals, 0.5, bottom=bottom, label=label,
-               color=SPSS_COLORS[i % len(SPSS_COLORS)], edgecolor='white', linewidth=0.3)
-        for j, (v, b) in enumerate(zip(vals, bottom)):
-            if v > 4:
-                ax.text(x[j], b + v/2, f'{v:.0f}%', ha='center', va='center',
-                        fontsize=7, color='white', fontweight='bold')
-        bottom += vals
-    ax.set_xticks(x)
-    ax.set_xticklabels(groups, fontsize=8)
-    ax.legend(fontsize=7, loc='upper right', framealpha=0.9)
-    _spss_style(ax, fig, title)
-    ax.set_ylabel('Percent', fontsize=9, color='#444')
-    plt.tight_layout()
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-    plt.close()
-    buf.seek(0)
-    return buf
 
 def make_chart(spec: dict) -> io.BytesIO:
-    t = spec["type"]
-    if t == "bar":     return _bar_chart(spec["title"], spec["cats"], spec["vals"], spec.get("color"))
-    if t == "pie":     return _pie_chart(spec["title"], spec["labels"], spec["vals"])
-    if t == "grouped": return _grouped_chart(spec["title"], spec["groups"], spec["labels"], spec["matrix"])
-    if t == "stacked": return _stacked_chart(spec["title"], spec["groups"], spec["labels"], spec["matrix"])
-    return _bar_chart(spec["title"], spec.get("cats", ["A", "B"]), spec.get("vals", [50, 50]))
+    return _spss_clustered_chart(
+        spec.get('question', spec.get('title', '')),
+        spec.get('xvar', 'Gender'),
+        spec.get('groups', ['Male', 'female', 'Transgender']),
+        spec.get('series', LIKERT_10),
+        spec.get('matrix'),
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1338,20 +1396,18 @@ class DocBuilder:
 
         # Build descriptive legend texts from spec titles (sample style)
         def _build_legend(spec, fig_num):
+            if spec.get('question') and spec.get('xvar'):
+                return (f"The given figure represents the {spec['xvar'].lower()}-wise distribution of "
+                        f"respondents' responses to the statement/question: \"{spec['question']}\".")
             title = spec.get('title', '')
-            chart_type = spec.get('type', 'bar')
-            # Extract demographic variable and subject from title
+            # Legacy fallback for any spec that predates the question/xvar fields
             if ' by ' in title:
-                subject    = title.split(' by ')[0].strip()
+                subject     = title.split(' by ')[0].strip()
                 demographic = title.split(' by ')[-1].strip()
                 return (f'The given figure represents the {demographic.lower()}-wise distribution of '
                         f'respondents and their views on {subject.lower()}.')
-            elif chart_type == 'pie':
-                return (f'The given figure represents the distribution of respondents based on '
-                        f'{title.lower()} and shows the proportional breakdown across categories.')
-            else:
-                return (f'The given figure represents respondents\' responses to '
-                        f'{title.lower()} and displays the percentage distribution across all categories.')
+            return (f'The given figure represents respondents\' responses to '
+                    f'{title.lower()} and displays the percentage distribution across all categories.')
 
         # Helper: add a bold-label paragraph
         def _bold_para(text, sp_b=6, sp_a=4, align=WD_ALIGN_PARAGRAPH.JUSTIFY):
@@ -2135,7 +2191,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
   </div>
 
   <div class="fg" style="margin-top:12px"><label>Number of Figures: <b id="sl-display">6</b></label>
-    <input type="range" id="sl" min="3" max="20" value="6"
+    <input type="range" id="sl" min="3" max="25" value="6"
       oninput="document.getElementById('sl-display').textContent=this.value"
       style="width:100%;accent-color:var(--accent)">
   </div>
@@ -2979,7 +3035,7 @@ def generate_paper():
                         'message': 'GROQ_API_KEY not set. Get a free key at https://console.groq.com'}), 400
 
     topic  = data.get('topic', '').strip()
-    nfigs  = max(3, min(20, int(data.get('num_figures', 6))))
+    nfigs  = max(3, min(25, int(data.get('num_figures', 6))))
     author = data.get('author_name', 'Anonymous').strip()
     inst   = data.get('institution', '').strip()
     email  = sess['email']
