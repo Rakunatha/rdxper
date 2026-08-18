@@ -163,10 +163,74 @@ _AI_END   = 75
 # Groq production model. Keep this list conservative: model availability can
 # differ by Groq project/org permissions, and a 404 means the project cannot
 # use that model. Llama 3.3 70B is currently supported by Groq.
-_GROQ_MODELS = [
-    os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
+_GROQ_PREFERRED_MODELS = [
+    # Preferred order. The app will first ask Groq which models this API key
+    # can actually see, so a model that is unavailable to the project is never
+    # blindly selected.
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
 ]
-_GROQ_MODELS = list(dict.fromkeys(m for m in _GROQ_MODELS if m))
+
+
+def _get_groq_models(api_key, requests_module):
+    """Return active Groq models visible to the current API key/project."""
+    headers = {"Authorization": f"Bearer {api_key}"}
+    try:
+        resp = requests_module.get(
+            "https://api.groq.com/openai/v1/models",
+            headers=headers,
+            timeout=20,
+        )
+        if resp.status_code != 200:
+            return [], f"HTTP {resp.status_code} from Groq /models: {resp.text[:300]}"
+        data = resp.json()
+        models = data.get("data", []) if isinstance(data, dict) else []
+        ids = []
+        for item in models:
+            if not isinstance(item, dict):
+                continue
+            model_id = item.get("id")
+            if model_id and item.get("active", True):
+                ids.append(model_id)
+        return ids, None
+    except Exception as e:
+        return [], f"Could not query Groq /models: {e}"
+
+
+def _select_groq_models(api_key, requests_module):
+    """Build a model list from models actually exposed to this API key."""
+    preferred_override = os.environ.get("GROQ_MODEL", "").strip()
+    available, discovery_error = _get_groq_models(api_key, requests_module)
+    available_set = set(available)
+
+    if preferred_override:
+        # If the user explicitly chose a model, try it first even when /models
+        # could not be queried. This preserves the existing GROQ_MODEL behavior.
+        selected = [preferred_override]
+        selected.extend(m for m in _GROQ_PREFERRED_MODELS
+                        if m != preferred_override and m in available_set)
+    elif available:
+        selected = [m for m in _GROQ_PREFERRED_MODELS if m in available_set]
+        # If none of our preferred models are visible, use other active models
+        # returned by Groq, excluding obvious non-chat/safety/audio models.
+        excluded = ("whisper", "guard", "safeguard", "compound")
+        selected.extend(
+            m for m in available
+            if m not in selected and not any(x in m.lower() for x in excluded)
+        )
+    else:
+        # Discovery failed; retain a conservative fallback so the error from
+        # chat/completions remains actionable.
+        selected = [preferred_override] if preferred_override else [
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+        ]
+
+    return list(dict.fromkeys(selected)), discovery_error
 
 
 def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
@@ -190,6 +254,19 @@ def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
         "Authorization": f"Bearer {api_key}",
         "Content-Type":  "application/json",
     }
+
+    # IMPORTANT: Do not assume a model is available merely because Groq
+    # documents it. Availability can differ by project/organization. Ask the
+    # Models API which active models this key can actually access.
+    _GROQ_MODELS, discovery_error = _select_groq_models(api_key, _req)
+    print(f"[Groq] Models selected for this key/project: {_GROQ_MODELS}")
+    if discovery_error:
+        print(f"[Groq] Model discovery warning: {discovery_error}")
+    if not _GROQ_MODELS:
+        raise RuntimeError(
+            "No active Groq text models are available to this API key/project. "
+            "Check Groq Project > Settings > Limits/Model Permissions and API key."
+        )
 
     last_error = None
 
@@ -282,8 +359,10 @@ def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
         time.sleep(1)
 
     raise RuntimeError(
-        f"All Groq models failed. Last error: {last_error}. "
-        "Check your key at https://console.groq.com"
+        f"All accessible Groq models failed. Last error: {last_error}. "
+        "The application queried Groq /models first, so this error now reflects "
+        "models visible to your current API key/project. Check Groq Project "
+        "model permissions and API key at https://console.groq.com"
     )
 
 
