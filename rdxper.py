@@ -160,11 +160,12 @@ _AI_END   = 75
 #
 # GROQ_MODEL can be set to force a preferred model, e.g.:
 #   GROQ_MODEL=llama-3.3-70b-versatile
+# Groq production model. Keep this list conservative: model availability can
+# differ by Groq project/org permissions, and a 404 means the project cannot
+# use that model. Llama 3.3 70B is currently supported by Groq.
 _GROQ_MODELS = [
     os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
-    "llama-3.1-8b-instant",
 ]
-# Remove duplicates while preserving priority order.
 _GROQ_MODELS = list(dict.fromkeys(m for m in _GROQ_MODELS if m))
 
 
