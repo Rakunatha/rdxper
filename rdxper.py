@@ -163,7 +163,6 @@ _AI_END   = 75
 _GROQ_MODELS = [
     os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
     "llama-3.1-8b-instant",
-    "openai/gpt-oss-20b",
 ]
 # Remove duplicates while preserving priority order.
 _GROQ_MODELS = list(dict.fromkeys(m for m in _GROQ_MODELS if m))
@@ -198,7 +197,9 @@ def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
             "model":       model,
             "messages":    messages,
             "temperature": temperature,
-            "max_tokens":  4096,
+            # Groq's current production Llama models support max_completion_tokens.
+            # Keep the output bounded so long research-paper sections remain reliable.
+            "max_completion_tokens": 4096,
             "stream":      False,
         }
 
