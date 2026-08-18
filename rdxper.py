@@ -331,18 +331,14 @@ class WebScraper:
                 if not p.get("title"):
                     continue
                 raw_authors = p.get("authors", [])
-                # Skip papers with no identifiable author(s) rather than labelling
-                # them "Unknown Author" — an unattributed entry isn't verifiable
-                # and shouldn't feed into a literature review.
-                names = [a.get("name") for a in raw_authors if a.get("name")]
-                if not names:
-                    continue
-                elif len(names) == 1:
-                    author_str = names[0]
-                elif len(names) == 2:
-                    author_str = f"{names[0]} & {names[1]}"
+                if not raw_authors:
+                    author_str = "Unknown Author"
+                elif len(raw_authors) == 1:
+                    author_str = raw_authors[0].get("name", "Unknown")
+                elif len(raw_authors) == 2:
+                    author_str = f"{raw_authors[0].get('name','?')} & {raw_authors[1].get('name','?')}"
                 else:
-                    author_str = f"{names[0]} et al."
+                    author_str = f"{raw_authors[0].get('name','?')} et al."
                 papers.append({
                     "title":     p.get("title", "").strip(),
                     "authors":   author_str,
@@ -368,11 +364,9 @@ class WebScraper:
                 title  = titles[0] if titles else ""
                 if not title:
                     continue
-                raw = [a for a in item.get("author", []) if a.get("family")]
-                # Skip works with no identifiable author rather than labelling
-                # them "Unknown Author" — same rule as the Semantic Scholar fetch.
+                raw = item.get("author", [])
                 if not raw:
-                    continue
+                    author_str = "Unknown Author"
                 elif len(raw) == 1:
                     a = raw[0]
                     author_str = f"{a.get('family','?')}, {a.get('given','')[:1]}."
@@ -632,9 +626,7 @@ class GeminiWriter:
               f"\n\nCRITICAL: No subheadings. No bold text. No numbered lists. Separate paragraphs with a blank line only. "
               f"Write scholarly prose as found in peer-reviewed law or social science journals.</introduction>")
 
-        # Build a digest of scraped real papers to seed the AI's lit review.
-        # Every entry here has already passed through the author/title filters
-        # in fetch_semantic_scholar / fetch_crossref, so nothing "Unknown" is used.
+        # Build a digest of scraped real papers to seed the AI's lit review
         scraped_seed = ""
         for i, p in enumerate(self.papers[:20], 1):
             jour = f", {p['journal']}" if p.get("journal") else ""
@@ -642,28 +634,20 @@ class GeminiWriter:
             abst = f" Abstract: {p['abstract'][:200]}" if p.get("abstract") else ""
             scraped_seed += f"{i}. {p['authors']} ({p['year']}). \"{p['title']}\"{jour}{doi}.{abst}\n"
 
-        # Ask for exactly as many entries as we have real, verified sources —
-        # never force a fixed count (e.g. 20) that would pressure the model to
-        # pad the review with studies recalled from memory (and therefore
-        # unverifiable / at risk of being hallucinated).
-        n_real_papers = len(self.papers[:20])
-        lit_count = n_real_papers
-
         pC = (f"TOPIC: {self.topic}\n"
               + (f"Researcher's key sources: {q['lit'][:300]}\n" if q.get('lit') else "")
               + (f"\nREAL PAPERS SCRAPED FROM SEMANTIC SCHOLAR & CROSSREF (use these as your primary sources):\n{scraped_seed}\n" if scraped_seed else "")
               + "Write a LITERATURE REVIEW using XML tags.\n"
-              "CRITICAL RULE: Use ONLY the real, verifiable papers listed above — do NOT introduce any "
-              "additional studies, authors, or titles recalled from memory, even ones you believe are real "
-              "and well-known. If you are not 100% certain a paper exists exactly as scraped above, leave it out.\n"
+              "CRITICAL RULE: Use ONLY real, verifiable, published academic works. "
+              "PRIORITY: Use and expand on the scraped papers listed above first — use every one of them — "
+              "then, only if more are needed to reach 20, supplement with other real, well-known, verifiable works.\n"
               "Never invent authors, titles, journals, DOIs, or statistics. Never fabricate a study that does not exist. "
               "Do not invent specific numeric findings (%, sample sizes, etc.) unless they are given to you above — "
               "describe findings qualitatively ('showed a positive impact', 'found limited awareness') when no real "
               "figure is known. If unsure of any detail, write around it rather than invent it.\n\n"
-              f"<literature_review>Write EXACTLY {lit_count} entries — one for each scraped paper listed above, "
-              f"no more and no fewer — one per paragraph, separated by a blank line.\n"
-              f"Every entry MUST correspond to one of the real papers listed above — "
-              f"never an invented author or study, and never a paper not in that list.\n\n"
+              f"<literature_review>Write EXACTLY 20 entries, one per paragraph, separated by a blank line.\n"
+              f"Every entry MUST be a REAL published work — a peer-reviewed article, book, or official report — "
+              f"never an invented author or study.\n\n"
               f"EVERY ENTRY MUST FOLLOW THIS EXACT SEVEN-SENTENCE TEMPLATE, IN THIS ORDER, WITH NO DEVIATION:\n"
               f"  1. '[Author Surname(s) or Organisation] (Year) examined [what the study investigated, tied to {self.topic}].'\n"
               f"  2. 'The objective focused on [the study's specific objective].'\n"
@@ -686,15 +670,15 @@ class GeminiWriter:
               f"  2. Exactly seven sentences per entry, in the exact order above, using the exact lead-in phrases "
               f"'The objective focused on', 'The methodology adopted was', 'The findings showed', 'The study "
               f"suggested', 'The future scope proposed', and 'The conclusion highlighted'\n"
-              f"  3. Only real works from the scraped list above — never invent a paper, author, or finding to fill "
-              f"the template; if a study's future scope or suggestion is not explicit in the source, infer a modest, "
-              f"plausible one consistent with its actual findings rather than fabricating unrelated claims\n"
-              f"  4. Use only the years given for each scraped paper above — do not alter them\n"
+              f"  3. Only real works — never invent a paper, author, or finding to fill the template; if a study's "
+              f"future scope or suggestion is not explicit in the source, infer a modest, plausible one consistent "
+              f"with its actual findings rather than fabricating unrelated claims\n"
+              f"  4. Span years 1990–2024; include international authors where the real literature supports it\n"
               f"  5. Separate entries with a blank line; no section headings, no sub-labels\n"
               f"  6. Aim for 90–120 words per entry\n"
-              f"  7. Write EXACTLY {lit_count} entries — one per scraped paper, no more, no fewer</literature_review>\n\n"
-              f"<references>Generate APA 7th edition references for the same {lit_count} real works, in the same "
-              f"order, numbered 1–{lit_count}.\n"
+              f"  7. Write EXACTLY 20 entries — no more, no fewer</literature_review>\n\n"
+              f"<references>Generate APA 7th edition references for the same 20 real works, in the same order, "
+              f"numbered 1–20.\n"
               f"FORMAT:\n"
               f"  Journal: [N]. Author, A. A., & Author, B. B. (Year). Title. Journal, volume(issue), pages.\n"
               f"  Book: [N]. Author, A. A. (Year). Title. Publisher.\n"
@@ -767,14 +751,7 @@ class GeminiWriter:
         raw_B = ai_generate(pB, system=SYSTEM_PROMPT, temperature=0.7)
 
         if progress_cb: progress_cb(56, "Writing literature review...")
-        if lit_count > 0:
-            raw_C = ai_generate(pC, system=SYSTEM_PROMPT, temperature=0.7)
-        else:
-            # No real, attributable papers were scraped for this topic — do not
-            # ask the model to write a literature review, since with zero
-            # verified sources it would have nothing real to draw from.
-            print("[LitReview] 0 verified scraped papers — skipping AI call, using empty/fallback review.")
-            raw_C = ""
+        raw_C = ai_generate(pC, system=SYSTEM_PROMPT, temperature=0.7)
 
         if progress_cb: progress_cb(66, "Writing methodology, results & conclusion...")
         raw_D = ai_generate(pD, system=SYSTEM_PROMPT, temperature=0.7)
@@ -888,16 +865,14 @@ class GeminiWriter:
         entries = []
 
         for p in self.papers[:20]:
-            authors  = (p.get('authors') or '').strip()
+            authors  = p.get('authors', 'Unknown Author')
             year     = p.get('year', 2020)
             title    = p.get('title', '').strip()
             journal  = (p.get('journal') or '').strip()
             abstract = (p.get('abstract') or '').strip()
             cites    = p.get('citations', 0)
 
-            # Skip anything without a real title or a real, attributed author —
-            # never fabricate a placeholder like "Unknown Author" to fill a slot.
-            if not title or not authors:
+            if not title:
                 continue
 
             venue_clause = f" (published in {journal})" if journal else ""
@@ -989,10 +964,11 @@ class GeminiWriter:
             refs.append(f"{p['authors']} ({p['year']}). {p['title']}. {journal}.{doi_str}")
         if self.wiki.get("url"):
             refs.append(f"Wikipedia contributors. ({datetime.now().year}). {self.wiki.get('title', self.topic)}. Wikipedia. {self.wiki['url']}")
-        # NOTE: previously padded the list with three hardcoded, topic-irrelevant
-        # citations (WIPO/UNESCO/Floridi) regardless of subject matter. Removed —
-        # a reference list should only ever contain works actually scraped/relevant
-        # to this paper's topic, never filler citations bolted on to hit a count.
+        refs += [
+            "WIPO. (2024). Intellectual Property and Emerging Technologies. World Intellectual Property Organization.",
+            "UNESCO. (2021). Recommendation on the Ethics of Artificial Intelligence. UNESCO.",
+            "Floridi, L., & Cowls, J. (2019). A Unified Framework of Five Principles for AI in Society. Harvard Data Science Review, 1(1).",
+        ]
         return list(dict.fromkeys(refs))[:20]
 
     def _fallback_specs(self, n: int) -> list:
