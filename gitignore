@@ -1,0 +1,7 @@
+rdxper.db
+generated/
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/

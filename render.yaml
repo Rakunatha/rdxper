@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: rdxper
+    runtime: python
+    plan: free                      # change to "starter" (or higher) once you add a persistent disk
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn rdxper:app
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false                 # secret — set manually in the Render dashboard, not committed
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.11.9
+    # ── Uncomment once you add a paid plan + persistent disk ──
+    # disk:
+    #   name: rdxper-data
+    #   mountPath: /var/data
+    #   sizeGB: 1
