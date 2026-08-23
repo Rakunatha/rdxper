@@ -32,6 +32,7 @@ from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+import razorpay
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
@@ -40,6 +41,13 @@ otp_store = {}
 sessions  = {}
 jobs      = {}
 ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'rkhrishanthm@gmail.com')
+
+# ── Razorpay ──────────────────────────────────────────────────────────────────
+RAZORPAY_KEY_ID     = os.environ.get('RAZORPAY_KEY_ID', '').strip()
+RAZORPAY_KEY_SECRET = os.environ.get('RAZORPAY_KEY_SECRET', '').strip()
+razorpay_client = (razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+                    if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET else None)
+PAPER_PRICE_INR = 200
 
 # ── SQLite DB ─────────────────────────────────────────────────────────────────
 DB_PATH = os.environ.get('DB_PATH', 'rdxper.db')
@@ -77,6 +85,11 @@ def init_db():
                 created_at TEXT DEFAULT (datetime('now'))
             );
         """)
+        # Guarded migration for DBs created before the preview feature existed
+        try:
+            db.execute("ALTER TABLE papers ADD COLUMN preview_text TEXT")
+        except Exception:
+            pass
 
 init_db()
 os.makedirs('generated', exist_ok=True)
@@ -123,6 +136,12 @@ def session_delete(token: str):
             db.execute('DELETE FROM sessions WHERE token=?', (token,))
     except Exception as e:
         print(f'[session_delete] DB error: {e}')
+
+
+def is_admin(sess: dict) -> bool:
+    """True if this session belongs to the admin account (see ADMIN_EMAIL).
+    Admin bypasses payment — every paper is free for them."""
+    return bool(sess) and sess.get('email', '').strip().lower() == ADMIN_EMAIL.strip().lower()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1791,6 +1810,25 @@ class PaperGenerator:
         self.jobs[self.jid].update({'progress': pct, 'message': msg, 'status': 'running'})
         print(f'[{self.jid[:8]}] {pct}% – {msg}')
 
+    def _build_preview(self, sections: dict, max_words: int = 220) -> str:
+        """Free teaser text shown before payment: keywords + abstract + intro,
+        truncated. Never includes the full paper."""
+        parts = []
+        kw = (sections.get('keywords') or '').strip()
+        if kw:
+            parts.append(f'Keywords: {kw}')
+        ab = (sections.get('abstract') or '').strip()
+        if ab:
+            parts.append(ab)
+        intro = (sections.get('introduction') or '').strip()
+        if intro:
+            parts.append(intro)
+        text = '\n\n'.join(parts)
+        words = text.split()
+        if len(words) > max_words:
+            text = ' '.join(words[:max_words]) + ' …'
+        return text
+
     def generate(self, topic: str, nfigs: int, author: str, inst: str, email: str,
                  questionnaire: dict = None, co_author_info: dict = None) -> str:
         os.makedirs('generated', exist_ok=True)
@@ -1853,6 +1891,10 @@ class PaperGenerator:
         if sections.get('ai_references'):
             sections['use_ai_references'] = True
 
+        # Stash a free teaser (keywords + abstract + intro, truncated) for the
+        # pre-payment preview screen.
+        self.jobs[self.jid]['preview'] = self._build_preview(sections)
+
         # ── Step 3: Parse chart specs from AI's <charts> block ───────────────
         self.prog(78, 'Parsing chart specs...')
         specs = writer.parse_chart_specs(nfigs)
@@ -1893,6 +1935,7 @@ HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>rdxper</title>
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Segoe UI',Arial,sans-serif;background:#ffffff;color:#111111;min-height:100vh}
@@ -2333,7 +2376,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
     <div class="card" style="text-align:center">
       <div style="font-size:48px;margin-bottom:12px">✅</div>
       <div class="ct">Paper ready!</div>
-      <div class="cs">Your research paper has been generated successfully</div>
+      <div class="cs" id="done-sub">Preview it below, then unlock the full download</div>
       <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:16px;margin:16px 0;text-align:left">
         <div style="display:flex;justify-content:space-between;margin-bottom:8px">
           <span style="color:var(--muted);font-size:13px">Topic</span>
@@ -2345,7 +2388,19 @@ textarea::placeholder{color:#bbb;font-size:12px}
           <span style="color:var(--muted);font-size:13px">Generated</span>
           <span style="font-size:13px" id="d-time"></span></div>
       </div>
-      <button class="btn btn-dl" id="btn-dl" onclick="download()">⬇ Download Research Paper (.docx)</button>
+
+      <div style="position:relative;text-align:left;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:16px;margin:16px 0;max-height:260px;overflow:hidden">
+        <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:8px;letter-spacing:.06em">PREVIEW</div>
+        <div id="preview-text" style="font-size:13px;line-height:1.65;white-space:pre-wrap;color:var(--text)">Loading preview…</div>
+        <div id="preview-fade" style="position:absolute;left:0;right:0;bottom:0;height:90px;background:linear-gradient(to bottom, rgba(245,245,245,0), var(--surface2))"></div>
+      </div>
+
+      <div id="pay-box">
+        <button class="btn btn-dl" id="btn-pay" onclick="payAndUnlock()">🔒 Pay ₹__PAPER_PRICE__ &amp; Unlock Download</button>
+        <div style="font-size:11px;color:var(--dim);margin-top:6px">Secure payment via Razorpay</div>
+      </div>
+      <button class="btn btn-dl" id="btn-dl" onclick="download()" style="display:none">⬇ Download Research Paper (.docx)</button>
+
       <button class="btn btn-s" onclick="again()" style="margin-top:8px">Generate another paper</button>
       <button class="btn btn-s" onclick="loadDashboard();show('s-dashboard')" style="margin-top:6px;opacity:.7">← Back to Dashboard</button>
     </div>
@@ -2744,6 +2799,7 @@ function pollStatus(){
         document.getElementById('d-figs').textContent=curFigs+' figures';
         document.getElementById('d-time').textContent=new Date().toLocaleTimeString();
         show('s-done');
+        loadPreview();
       }else if(d.status==='error'){
         clearInterval(poll);
         const btn=document.getElementById('btn-gen');btn.disabled=false;btn.innerHTML='✦ Generate Paper (Free AI)';
@@ -2753,19 +2809,94 @@ function pollStatus(){
   },800);
 }
 
+let paperPaid = false;
+
+async function loadPreview(){
+  try{
+    const r=await fetch('/api/preview/'+jobId,{headers:{'Authorization':'Bearer '+token}});
+    const d=await r.json();
+    if(!d.success){document.getElementById('preview-text').textContent='Preview unavailable.';return;}
+    document.getElementById('preview-text').textContent=d.preview||'Preview unavailable.';
+    paperPaid=!!d.paid;
+    updatePayUI();
+  }catch(e){console.error(e);document.getElementById('preview-text').textContent='Preview unavailable.';}
+}
+
+function updatePayUI(){
+  const payBox=document.getElementById('pay-box');
+  const dlBtn=document.getElementById('btn-dl');
+  const sub=document.getElementById('done-sub');
+  const fade=document.getElementById('preview-fade');
+  if(paperPaid){
+    if(payBox)payBox.style.display='none';
+    if(fade)fade.style.display='none';
+    if(dlBtn)dlBtn.style.display='block';
+    if(sub)sub.textContent='Your paper is unlocked and ready to download';
+  }else{
+    if(payBox)payBox.style.display='block';
+    if(fade)fade.style.display='block';
+    if(dlBtn)dlBtn.style.display='none';
+    if(sub)sub.textContent='Preview it below, then unlock the full download';
+  }
+}
+
+async function payAndUnlock(){
+  if(typeof Razorpay==='undefined'){alert('Payment could not load. Check your connection and try again.');return;}
+  const btn=document.getElementById('btn-pay');
+  btn.disabled=true;btn.innerHTML='<span class="spin"></span>Starting payment...';
+  try{
+    const r=await fetch('/api/pay/create-order/'+jobId,{method:'POST',headers:{'Authorization':'Bearer '+token}});
+    const d=await r.json();
+    if(!d.success){alert(d.message||'Could not start payment.');btn.disabled=false;btn.innerHTML='🔒 Pay ₹__PAPER_PRICE__ & Unlock Download';return;}
+    if(d.already_paid){paperPaid=true;updatePayUI();btn.disabled=false;btn.innerHTML='🔒 Pay ₹__PAPER_PRICE__ & Unlock Download';return;}
+
+    const rz=new Razorpay({
+      key: d.key_id,
+      amount: d.amount,
+      currency: d.currency,
+      name: 'rdxper',
+      description: 'Research paper — '+curTopic,
+      order_id: d.order_id,
+      theme: {color:'#111111'},
+      handler: async function(resp){
+        try{
+          const vr=await fetch('/api/pay/verify',{method:'POST',
+            headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+            body:JSON.stringify({
+              job_id: jobId,
+              razorpay_order_id: resp.razorpay_order_id,
+              razorpay_payment_id: resp.razorpay_payment_id,
+              razorpay_signature: resp.razorpay_signature
+            })});
+          const vd=await vr.json();
+          if(vd.success){paperPaid=true;updatePayUI();}
+          else{alert(vd.message||'Payment verification failed. If money was deducted, contact support.');}
+        }catch(e){alert('Verification error. If money was deducted, contact support.');}
+        finally{btn.disabled=false;btn.innerHTML='🔒 Pay ₹__PAPER_PRICE__ & Unlock Download';}
+      },
+      modal:{ondismiss:function(){btn.disabled=false;btn.innerHTML='🔒 Pay ₹__PAPER_PRICE__ & Unlock Download';}}
+    });
+    rz.open();
+  }catch(e){alert('Connection error. Please try again.');btn.disabled=false;btn.innerHTML='🔒 Pay ₹__PAPER_PRICE__ & Unlock Download';}
+}
+
 async function download(){
+  if(!paperPaid){alert('Please complete payment first to unlock the download.');return;}
   const btn=document.getElementById('btn-dl');btn.disabled=true;btn.innerHTML='<span class="spin"></span>Downloading...';
   try{
     const r=await fetch('/api/download/'+jobId,{headers:{'Authorization':'Bearer '+token}});
-    if(!r.ok)throw new Error('failed');
+    if(!r.ok){
+      const err=await r.json().catch(()=>({}));
+      throw new Error(err.message||'failed');
+    }
     const blob=await r.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');
     a.href=url;a.download='rdxper_'+curTopic.slice(0,40).replace(/[^a-zA-Z0-9]/g,'_')+'.docx';a.click();URL.revokeObjectURL(url);
-  }catch(e){alert('Download failed. Try again.');}
+  }catch(e){alert(e.message||'Download failed. Try again.');}
   finally{btn.disabled=false;btn.innerHTML='⬇ Download Research Paper (.docx)';}
 }
 
 function again(){
-  jobId='';curTopic='';
+  jobId='';curTopic='';paperPaid=false;
   ['topic-in','inst-in','q-problem','q-lit','q-gap','q-objectives','q-statement',
    'co-author-name','co-author-title','co-author-inst','co-author-email','co-author-phone'].forEach(id=>{
     const el=document.getElementById(id);if(el) el.value='';
@@ -2967,7 +3098,9 @@ async function downloadLegal(){
 @app.route('/')
 def index():
     client_id = os.environ.get('GOOGLE_CLIENT_ID', '')
-    html = HTML.replace('__GOOGLE_CLIENT_ID__', client_id).replace('__ADMIN_EMAIL__', ADMIN_EMAIL)
+    html = (HTML.replace('__GOOGLE_CLIENT_ID__', client_id)
+                .replace('__ADMIN_EMAIL__', ADMIN_EMAIL)
+                .replace('__PAPER_PRICE__', str(PAPER_PRICE_INR)))
     return Response(html, mimetype='text/html')
 
 
@@ -3200,8 +3333,10 @@ def generate_paper():
             path = g.generate(topic, nfigs, author, inst, email, questionnaire, co_author_info)
             jobs[jid].update({'status': 'done', 'progress': 100,
                               'message': 'Research paper ready!', 'file_path': path})
+            preview_text = jobs[jid].get('preview', '')
             with get_db() as db:
-                db.execute('UPDATE papers SET file_path=? WHERE id=?', (path, jid))
+                db.execute('UPDATE papers SET file_path=?, preview_text=? WHERE id=?',
+                          (path, preview_text, jid))
         except Exception as e:
             import traceback; traceback.print_exc()
             jobs[jid].update({'status': 'error', 'message': str(e)})
@@ -3227,38 +3362,142 @@ def job_status(jid):
     return jsonify({'success': True, 'status': job['status'],
                     'progress': job['progress'], 'message': job['message']})
 
+@app.route('/api/preview/<jid>')
+def get_preview(jid):
+    """Returns the free teaser text plus whether this paper has been paid for."""
+    tok = request.headers.get('Authorization', '').replace('Bearer ', '')
+    sess = session_get(tok)
+    if not sess:
+        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+
+    user_id = sess.get('user_id', sess.get('email'))
+    with get_db() as db:
+        paper = db.execute('SELECT topic, preview_text, paid, user_id FROM papers WHERE id=?', (jid,)).fetchone()
+    if not paper:
+        return jsonify({'success': False, 'message': 'Job not found'}), 404
+    if paper['user_id'] != user_id:
+        return jsonify({'success': False, 'message': 'Forbidden'}), 403
+
+    job = jobs.get(jid)
+    preview = (job.get('preview') if job else None) or paper['preview_text'] or ''
+    topic   = (job.get('topic') if job else None) or paper['topic'] or ''
+    paid    = bool(paper['paid']) or is_admin(sess)
+
+    return jsonify({'success': True, 'preview': preview, 'topic': topic,
+                    'paid': paid, 'price': PAPER_PRICE_INR})
+
+
+@app.route('/api/pay/create-order/<jid>', methods=['POST'])
+def create_order(jid):
+    tok = request.headers.get('Authorization', '').replace('Bearer ', '')
+    sess = session_get(tok)
+    if not sess:
+        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+    if is_admin(sess):
+        return jsonify({'success': True, 'already_paid': True})
+    if not razorpay_client:
+        return jsonify({'success': False, 'message': 'Payments are not configured on the server (missing RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET).'}), 500
+
+    user_id = sess.get('user_id', sess.get('email'))
+    with get_db() as db:
+        paper = db.execute('SELECT id, user_id, paid FROM papers WHERE id=?', (jid,)).fetchone()
+    if not paper or paper['user_id'] != user_id:
+        return jsonify({'success': False, 'message': 'Paper not found'}), 404
+    if paper['paid']:
+        return jsonify({'success': True, 'already_paid': True})
+
+    amount_paise = PAPER_PRICE_INR * 100
+    try:
+        order = razorpay_client.order.create({
+            'amount': amount_paise,
+            'currency': 'INR',
+            'receipt': jid,
+            'notes': {'paper_id': jid, 'user_id': user_id},
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Could not start payment: {e}'}), 500
+
+    pay_id = uuid.uuid4().hex
+    with get_db() as db:
+        db.execute(
+            'INSERT INTO payments (id, user_id, paper_id, razorpay_order, amount, status) VALUES (?,?,?,?,?,?)',
+            (pay_id, user_id, jid, order['id'], PAPER_PRICE_INR, 'created')
+        )
+
+    return jsonify({'success': True, 'order_id': order['id'], 'amount': amount_paise,
+                    'currency': 'INR', 'key_id': RAZORPAY_KEY_ID})
+
+
+@app.route('/api/pay/verify', methods=['POST'])
+def verify_payment():
+    tok = request.headers.get('Authorization', '').replace('Bearer ', '')
+    sess = session_get(tok)
+    if not sess:
+        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+    if not razorpay_client:
+        return jsonify({'success': False, 'message': 'Payments are not configured on the server.'}), 500
+
+    data       = request.json or {}
+    jid        = data.get('job_id', '')
+    order_id   = data.get('razorpay_order_id', '')
+    payment_id = data.get('razorpay_payment_id', '')
+    signature  = data.get('razorpay_signature', '')
+    if not (jid and order_id and payment_id and signature):
+        return jsonify({'success': False, 'message': 'Missing payment fields'}), 400
+
+    user_id = sess.get('user_id', sess.get('email'))
+    with get_db() as db:
+        paper = db.execute('SELECT id, user_id FROM papers WHERE id=?', (jid,)).fetchone()
+    if not paper or paper['user_id'] != user_id:
+        return jsonify({'success': False, 'message': 'Paper not found'}), 404
+
+    try:
+        razorpay_client.utility.verify_payment_signature({
+            'razorpay_order_id': order_id,
+            'razorpay_payment_id': payment_id,
+            'razorpay_signature': signature,
+        })
+    except razorpay.errors.SignatureVerificationError:
+        with get_db() as db:
+            db.execute('UPDATE payments SET status=?, razorpay_payment=? WHERE razorpay_order=?',
+                      ('failed', payment_id, order_id))
+        return jsonify({'success': False, 'message': 'Payment verification failed'}), 400
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Verification error: {e}'}), 500
+
+    with get_db() as db:
+        db.execute('UPDATE payments SET status=?, razorpay_payment=? WHERE razorpay_order=?',
+                  ('paid', payment_id, order_id))
+        db.execute('UPDATE papers SET paid=1, amount=? WHERE id=?', (PAPER_PRICE_INR, jid))
+
+    return jsonify({'success': True, 'message': 'Payment verified — your download is unlocked.'})
+
+
 @app.route('/api/download/<jid>')
 def download_paper(jid):
     tok = request.headers.get('Authorization', '').replace('Bearer ', '')
-    if not session_get(tok):
+    sess = session_get(tok)
+    if not sess:
         return jsonify({'success': False, 'message': 'Unauthorized'}), 401
 
-    # First check in-memory jobs dict
+    user_id = sess.get('user_id', sess.get('email'))
+    with get_db() as db:
+        paper = db.execute('SELECT file_path, topic, user_id, paid FROM papers WHERE id=?', (jid,)).fetchone()
+    if not paper:
+        return jsonify({'success': False, 'message': 'Job not found'}), 404
+    if paper['user_id'] != user_id:
+        return jsonify({'success': False, 'message': 'Forbidden'}), 403
+    if not paper['paid'] and not is_admin(sess):
+        return jsonify({'success': False, 'message': f'Payment required — pay ₹{PAPER_PRICE_INR} to unlock this download.'}), 402
+
     job = jobs.get(jid)
-    fp = None
-
-    if job:
-        if job['status'] != 'done':
-            return jsonify({'success': False, 'message': 'File not ready'}), 400
-        fp = job.get('file_path')
-    else:
-        # Server may have restarted — look up file path from DB
-        with get_db() as db:
-            paper = db.execute('SELECT file_path, topic FROM papers WHERE id=?', (jid,)).fetchone()
-        if not paper:
-            return jsonify({'success': False, 'message': 'Job not found'}), 404
-        fp = paper['file_path']
-        topic_slug = paper['topic'] if paper['topic'] else jid
-        if not fp:
-            return jsonify({'success': False, 'message': 'File not ready — please generate again'}), 400
-        # Restore minimal job info for slug below
-        jobs[jid] = {'status': 'done', 'file_path': fp, 'topic': paper['topic'] or ''}
-
-    if not fp or not os.path.exists(fp):
+    fp  = paper['file_path'] or (job.get('file_path') if job else None)
+    if not fp:
+        return jsonify({'success': False, 'message': 'File not ready — please generate again'}), 400
+    if not os.path.exists(fp):
         return jsonify({'success': False, 'message': 'File not found on server'}), 404
 
-    topic_for_slug = jobs[jid].get('topic', '') if jid in jobs else ''
-    slug = re.sub(r'[^\w\-]', '_', topic_for_slug[:40]) if topic_for_slug else jid[:8]
+    slug = re.sub(r'[^\w\-]', '_', (paper['topic'] or jid)[:40])
     return send_file(fp, as_attachment=True,
                      download_name=f'rdxper_{slug}.docx',
                      mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
