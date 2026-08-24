@@ -90,6 +90,11 @@ def init_db():
             db.execute("ALTER TABLE papers ADD COLUMN preview_text TEXT")
         except Exception:
             pass
+        # Guarded migration for DBs created before the full-preview feature existed
+        try:
+            db.execute("ALTER TABLE papers ADD COLUMN full_text TEXT")
+        except Exception:
+            pass
 
 init_db()
 os.makedirs('generated', exist_ok=True)
@@ -1829,6 +1834,38 @@ class PaperGenerator:
             text = ' '.join(words[:max_words]) + ' …'
         return text
 
+    def _build_full_text(self, topic: str, sections: dict) -> str:
+        """Full paper assembled as plain text, for the protected in-browser
+        full-preview window. Mirrors the docx section order. This is shown
+        on-screen only (view-only, watermarked, copy/print blocked) — never
+        offered as a downloadable/copyable file pre-payment."""
+        def block(title, body):
+            body = (body or '').strip()
+            return f"{title.upper()}\n\n{body}" if body else ''
+
+        refs = sections.get('references', [])
+        if sections.get('use_ai_references') and sections.get('ai_references'):
+            refs_text = sections['ai_references'].strip()
+        else:
+            refs_text = '\n'.join(refs) if isinstance(refs, list) else str(refs or '')
+
+        parts = [
+            topic.strip().upper(),
+            block('Keywords', sections.get('keywords')),
+            block('Abstract', sections.get('abstract')),
+            block('1. Introduction', sections.get('introduction')),
+            block('2. Objectives', sections.get('objectives')),
+            block('3. Literature Review', sections.get('literature_review')),
+            block('4. Methodology', sections.get('methodology')),
+            block('5. Results', sections.get('results')),
+            block('6. Discussion', sections.get('discussion')),
+            block('7. Limitations', sections.get('limitations')),
+            block('8. Suggestions for Future Work', sections.get('suggestions')),
+            block('9. Conclusion', sections.get('conclusion')),
+            block('References', refs_text),
+        ]
+        return '\n\n'.join(p for p in parts if p).strip()
+
     def generate(self, topic: str, nfigs: int, author: str, inst: str, email: str,
                  questionnaire: dict = None, co_author_info: dict = None) -> str:
         os.makedirs('generated', exist_ok=True)
@@ -1894,6 +1931,11 @@ class PaperGenerator:
         # Stash a free teaser (keywords + abstract + intro, truncated) for the
         # pre-payment preview screen.
         self.jobs[self.jid]['preview'] = self._build_preview(sections)
+
+        # Stash the full assembled paper for the protected, view-only
+        # full-preview window (watermarked, copy/print/screenshot-deterred —
+        # see /api/full-preview and the full-preview modal in the frontend).
+        self.jobs[self.jid]['full_text'] = self._build_full_text(topic, sections)
 
         # ── Step 3: Parse chart specs from AI's <charts> block ───────────────
         self.prog(78, 'Parsing chart specs...')
@@ -2395,6 +2437,8 @@ textarea::placeholder{color:#bbb;font-size:12px}
         <div id="preview-fade" style="position:absolute;left:0;right:0;bottom:0;height:90px;background:linear-gradient(to bottom, rgba(245,245,245,0), var(--surface2))"></div>
       </div>
 
+      <button class="btn btn-s" id="btn-full-preview" onclick="openFullPreview()" style="margin-bottom:8px">🔍 View Full Paper (protected preview)</button>
+
       <div id="pay-box">
         <button class="btn btn-dl" id="btn-pay" onclick="payAndUnlock()">🔒 Pay ₹__PAPER_PRICE__ &amp; Unlock Download</button>
         <div style="font-size:11px;color:var(--dim);margin-top:6px">Secure payment via Razorpay</div>
@@ -2404,6 +2448,69 @@ textarea::placeholder{color:#bbb;font-size:12px}
       <button class="btn btn-s" onclick="again()" style="margin-top:8px">Generate another paper</button>
       <button class="btn btn-s" onclick="loadDashboard();show('s-dashboard')" style="margin-top:6px;opacity:.7">← Back to Dashboard</button>
     </div>
+  </div>
+</div>
+
+<!-- FULL PREVIEW MODAL — view-only protected reader.
+     NOTE: this deters casual copying/printing; it cannot block OS-level
+     screenshots, phone cameras, or screen recorders — no web page can. -->
+<style>
+#full-preview-overlay{
+  display:none; position:fixed; inset:0; z-index:9999;
+  background:rgba(0,0,0,.75); backdrop-filter:blur(2px);
+}
+#full-preview-overlay.open{display:flex; align-items:center; justify-content:center; padding:20px}
+#fp-panel{
+  position:relative; width:100%; max-width:760px; height:86vh;
+  background:var(--surface2,#1a1a1a); border:1px solid var(--border,#333); border-radius:14px;
+  display:flex; flex-direction:column; overflow:hidden;
+}
+#fp-header{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:14px 18px; border-bottom:1px solid var(--border,#333); flex-shrink:0;
+}
+#fp-header .t{font-size:14px;font-weight:700}
+#fp-close{background:none;border:none;color:var(--muted,#999);font-size:22px;cursor:pointer;line-height:1;padding:4px 8px}
+#fp-body-wrap{position:relative; flex:1; overflow:hidden}
+#fp-body{
+  position:absolute; inset:0; overflow-y:auto; padding:24px 28px 90px;
+  font-size:13.5px; line-height:1.8; white-space:pre-wrap; color:var(--text,#eee);
+  user-select:none; -webkit-user-select:none; -moz-user-select:none; -ms-user-select:none;
+  -webkit-touch-callout:none;
+}
+#fp-body img{pointer-events:none}
+#fp-watermark{
+  position:absolute; inset:0; pointer-events:none; overflow:hidden;
+  opacity:.14; z-index:2;
+}
+#fp-watermark span{
+  position:absolute; white-space:nowrap; font-size:13px; font-weight:700;
+  color:#fff; transform:rotate(-28deg); user-select:none;
+}
+#fp-blur-guard{
+  display:none; position:absolute; inset:0; z-index:5;
+  background:rgba(10,10,10,.97); color:#aaa; font-size:13px;
+  align-items:center; justify-content:center; text-align:center; padding:24px;
+}
+#fp-blur-guard.show{display:flex}
+#fp-footer{
+  padding:10px 18px; border-top:1px solid var(--border,#333); flex-shrink:0;
+  font-size:11px; color:var(--dim,#777); text-align:center;
+}
+@media print{ #full-preview-overlay{display:none !important} }
+</style>
+<div id="full-preview-overlay" oncontextmenu="return false">
+  <div id="fp-panel">
+    <div id="fp-header">
+      <div class="t">🔒 Full Paper — View Only</div>
+      <button id="fp-close" onclick="closeFullPreview()">✕</button>
+    </div>
+    <div id="fp-body-wrap">
+      <div id="fp-body" onselectstart="return false" ondragstart="return false">Loading full paper…</div>
+      <div id="fp-watermark"></div>
+      <div id="fp-blur-guard">Preview hidden while this tab isn't focused.<br>Screen recording isn't supported here.</div>
+    </div>
+    <div id="fp-footer">This is a view-only preview watermarked to your account. Copying, printing, and downloading are disabled until you unlock the full paper.</div>
   </div>
 </div>
 
@@ -3084,6 +3191,82 @@ async function downloadLegal(){
   }catch(e){ alert('Download failed. Please try again.'); }
   finally{ btn.disabled=false; btn.innerHTML='⬇ Download Draft (.docx)'; }
 }
+
+// ── Full-paper protected preview ────────────────────────────────────────
+// Deterrents only: disables copy/print/select and blurs on tab-blur.
+// No web page can block OS screenshots, phone cameras, or screen recorders —
+// the watermark (tied to the viewer's account) is the real backstop, since
+// a leaked screenshot still identifies who took it.
+let fpKeyHandler = null, fpBlurHandler = null, fpFocusHandler = null;
+
+function fpBuildWatermark(text){
+  const wm = document.getElementById('fp-watermark');
+  wm.innerHTML = '';
+  const rows = 10, cols = 3;
+  for(let r=0;r<rows;r++){
+    for(let c=0;c<cols;c++){
+      const s = document.createElement('span');
+      s.textContent = text;
+      s.style.top  = (r*11 - 5) + '%';
+      s.style.left = (c*38 - 10) + '%';
+      wm.appendChild(s);
+    }
+  }
+}
+
+async function openFullPreview(){
+  const overlay = document.getElementById('full-preview-overlay');
+  const body = document.getElementById('fp-body');
+  overlay.classList.add('open');
+  body.textContent = 'Loading full paper…';
+  document.body.style.overflow = 'hidden';
+
+  try{
+    const r = await fetch('/api/full-preview/'+jobId, {headers:{'Authorization':'Bearer '+token}});
+    const d = await r.json();
+    if(!d.success){ body.textContent = d.message || 'Full preview unavailable.'; return; }
+    body.textContent = d.full_text || 'Full preview unavailable.';
+    const stamp = new Date().toLocaleString();
+    fpBuildWatermark((d.watermark||'RDXper') + '  ·  ' + stamp);
+  }catch(e){
+    body.textContent = 'Connection error loading preview.';
+  }
+
+  // Block copy / cut / print / save / view-source / devtools shortcuts while open.
+  fpKeyHandler = function(e){
+    const k = e.key ? e.key.toLowerCase() : '';
+    const blocked =
+      (e.ctrlKey || e.metaKey) && ['p','s','u','c','x'].includes(k) ||
+      k === 'f12' ||
+      (e.ctrlKey || e.metaKey) && e.shiftKey && ['i','j','c'].includes(k) ||
+      k === 'escape';
+    if(k === 'escape'){ closeFullPreview(); return; }
+    if(blocked){ e.preventDefault(); e.stopPropagation(); }
+  };
+  document.addEventListener('keydown', fpKeyHandler, true);
+  body.addEventListener('copy', e=>e.preventDefault());
+  body.addEventListener('cut', e=>e.preventDefault());
+  body.addEventListener('contextmenu', e=>e.preventDefault());
+
+  // Blur the content if the tab loses focus (deters screen-recording apps
+  // running in another window) — best-effort only, not a guarantee.
+  const guard = document.getElementById('fp-blur-guard');
+  fpBlurHandler = ()=> guard.classList.add('show');
+  fpFocusHandler = ()=> guard.classList.remove('show');
+  window.addEventListener('blur', fpBlurHandler);
+  window.addEventListener('focus', fpFocusHandler);
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.hidden) fpBlurHandler(); else fpFocusHandler();
+  });
+}
+
+function closeFullPreview(){
+  document.getElementById('full-preview-overlay').classList.remove('open');
+  document.body.style.overflow = '';
+  if(fpKeyHandler) document.removeEventListener('keydown', fpKeyHandler, true);
+  if(fpBlurHandler) window.removeEventListener('blur', fpBlurHandler);
+  if(fpFocusHandler) window.removeEventListener('focus', fpFocusHandler);
+}
 </script>
 </body>
 </html>"""
@@ -3334,9 +3517,10 @@ def generate_paper():
             jobs[jid].update({'status': 'done', 'progress': 100,
                               'message': 'Research paper ready!', 'file_path': path})
             preview_text = jobs[jid].get('preview', '')
+            full_text    = jobs[jid].get('full_text', '')
             with get_db() as db:
-                db.execute('UPDATE papers SET file_path=?, preview_text=? WHERE id=?',
-                          (path, preview_text, jid))
+                db.execute('UPDATE papers SET file_path=?, preview_text=?, full_text=? WHERE id=?',
+                          (path, preview_text, full_text, jid))
         except Exception as e:
             import traceback; traceback.print_exc()
             jobs[jid].update({'status': 'error', 'message': str(e)})
@@ -3385,6 +3569,37 @@ def get_preview(jid):
 
     return jsonify({'success': True, 'preview': preview, 'topic': topic,
                     'paid': paid, 'price': PAPER_PRICE_INR})
+
+
+@app.route('/api/full-preview/<jid>')
+def get_full_preview(jid):
+    """Returns the ENTIRE assembled paper for the protected, view-only
+    full-preview window. Rendering is view-only by design (watermarked,
+    copy/print blocked client-side) — this endpoint intentionally does NOT
+    gate on payment, since letting people read (not copy or download) the
+    full paper before paying is the point of the feature. Still requires
+    auth + ownership so a job id can't be read by another user."""
+    tok = request.headers.get('Authorization', '').replace('Bearer ', '')
+    sess = session_get(tok)
+    if not sess:
+        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+
+    user_id = sess.get('user_id', sess.get('email'))
+    with get_db() as db:
+        paper = db.execute('SELECT topic, full_text, paid, user_id FROM papers WHERE id=?', (jid,)).fetchone()
+    if not paper:
+        return jsonify({'success': False, 'message': 'Job not found'}), 404
+    if paper['user_id'] != user_id:
+        return jsonify({'success': False, 'message': 'Forbidden'}), 403
+
+    job  = jobs.get(jid)
+    full = (job.get('full_text') if job else None) or paper['full_text'] or ''
+    if not full:
+        return jsonify({'success': False, 'message': 'Full preview not ready yet.'}), 404
+
+    return jsonify({'success': True, 'full_text': full, 'topic': paper['topic'] or '',
+                    'watermark': sess.get('email', user_id),
+                    'paid': bool(paper['paid']) or is_admin(sess)})
 
 
 @app.route('/api/pay/create-order/<jid>', methods=['POST'])
