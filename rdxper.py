@@ -2156,7 +2156,12 @@ textarea::placeholder{color:#bbb;font-size:12px}
 .fab svg{width:24px;height:24px;stroke:#fff;stroke-width:2.5;stroke-linecap:round}
 .fab-tooltip{position:fixed;bottom:44px;right:100px;background:#111;border-radius:6px;padding:7px 12px;font-size:12px;color:#fff;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .2s;z-index:99}
 .fab:hover ~ .fab-tooltip{opacity:1}
-@media(max-width:600px){.fab{bottom:24px;right:20px}.papers-grid{grid-template-columns:1fr}}
+.dash-center{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:56vh;gap:20px}
+.fab-xl{position:static;width:84px;height:84px;box-shadow:0 6px 22px rgba(0,0,0,.3)}
+.fab-xl svg{width:34px;height:34px}
+.fab-xl:hover{transform:scale(1.08) translateY(-3px);box-shadow:0 10px 32px rgba(0,0,0,.4)}
+.dash-center-tag{font-size:15px;font-weight:700;color:var(--muted,#666);letter-spacing:.02em}
+@media(max-width:600px){.fab{bottom:24px;right:20px}.papers-grid{grid-template-columns:1fr}.dash-center{min-height:44vh}}
 /* ── Responsive ── */
 @media(max-width:480px){
   .wrap{padding:0 12px}
@@ -2266,24 +2271,12 @@ textarea::placeholder{color:#bbb;font-size:12px}
     <div class="dash-title" id="dash-name-title">Researcher</div>
   </div>
 
-  <div style="display:flex;align-items:center;justify-content:space-between;margin:28px 0 8px">
-    <div style="font-size:16px;font-weight:700">Your Research Papers</div>
-    <button class="nav-btn" onclick="loadDashboard()" style="font-size:11px">↻ Refresh</button>
+  <div class="dash-center">
+    <button class="fab fab-xl" onclick="startNewPaper()" title="New Research Paper">
+      <svg viewBox="0 0 24 24" fill="none"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </button>
+    <div class="dash-center-tag">Start Researching</div>
   </div>
-
-  <div id="dash-papers-wrap">
-    <div class="dash-empty">
-      <div class="dash-empty-icon">📄</div>
-      <div class="dash-empty-txt">No papers yet</div>
-      <div class="dash-empty-sub">Press <strong style="color:var(--accent)">+</strong> below to generate your first research paper</div>
-    </div>
-  </div>
-
-  <!-- Floating Action Button -->
-  <button class="fab" onclick="startNewPaper()" title="New Research Paper">
-    <svg viewBox="0 0 24 24" fill="none"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-  </button>
-  <div class="fab-tooltip">New Research Paper</div>
 </div>
 
 <!-- GENERATE — 5-Step Questionnaire -->
@@ -2767,26 +2760,6 @@ async function loadDashboard(){
   try{
     const r=await fetch('/api/profile',{headers:{'Authorization':'Bearer '+token}});
     if(r.status===401){forceLogout();return;}
-    const d=await r.json();
-    if(!d.success) return;
-    const papers=d.papers||[];
-    const wrap=document.getElementById('dash-papers-wrap');
-    if(papers.length===0){
-      wrap.innerHTML=`<div class="dash-empty">
-        <div class="dash-empty-icon">📄</div>
-        <div class="dash-empty-txt">No papers yet</div>
-        <div class="dash-empty-sub">Press <strong style="color:var(--accent)">+</strong> below to generate your first research paper</div>
-      </div>`;
-    } else {
-      wrap.innerHTML='<div class="papers-grid">'+papers.map(p=>`
-        <div class="paper-card">
-          <div class="paper-card-topic">${escHtml(p.topic||'Untitled')}</div>
-          <div class="paper-card-meta">
-            <span class="paper-card-date">${(p.created_at||'').slice(0,10)}</span>
-            <span class="paper-card-badge ${p.file_path?'badge-done':'badge-pending'}">${p.file_path?'✓ Done':'Pending'}</span>
-          </div>
-        </div>`).join('')+'</div>';
-    }
   }catch(e){console.error('Dashboard load error',e);}
 }
 
