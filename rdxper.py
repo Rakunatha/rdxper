@@ -2262,7 +2262,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
 <!-- DASHBOARD -->
 <div class="screen" id="s-dashboard">
   <div class="dash-header">
-    <div class="dash-greeting">Welcome back</div>
+    <div class="dash-greeting">Greetings</div>
     <div class="dash-title" id="dash-name-title">Researcher</div>
   </div>
 
