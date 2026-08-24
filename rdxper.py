@@ -16,7 +16,7 @@ Usage:
   python rdxper.py
 """
 
-import os, uuid, time, threading, smtplib, secrets, io, random, re, json, hmac, hashlib, sqlite3
+import os, uuid, time, threading, smtplib, secrets, io, random, re, json, hmac, hashlib, sqlite3, base64
 import urllib.request, urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import matplotlib
@@ -92,7 +92,7 @@ def init_db():
             pass
         # Guarded migration for DBs created before the full-preview feature existed
         try:
-            db.execute("ALTER TABLE papers ADD COLUMN full_text TEXT")
+            db.execute("ALTER TABLE papers ADD COLUMN full_blocks TEXT")
         except Exception:
             pass
 
@@ -1233,6 +1233,22 @@ def _spss_clustered_chart(question, xvar, groups, series, matrix):
     return buf
 
 
+def chart_legend_text(spec: dict, fig_num: int) -> str:
+    """Descriptive legend text for a chart, shared by the docx builder and
+    the full-preview modal so captions match exactly in both places."""
+    if spec.get('question') and spec.get('xvar'):
+        return (f"The given figure represents the {spec['xvar'].lower()}-wise distribution of "
+                f"respondents' responses to the statement/question: \"{spec['question']}\".")
+    title = spec.get('title', '')
+    if ' by ' in title:
+        subject     = title.split(' by ')[0].strip()
+        demographic = title.split(' by ')[-1].strip()
+        return (f'The given figure represents the {demographic.lower()}-wise distribution of '
+                f'respondents and their views on {subject.lower()}.')
+    return (f'The given figure represents respondents\' responses to '
+            f'{title.lower()} and displays the percentage distribution across all categories.')
+
+
 def make_chart(spec: dict) -> io.BytesIO:
     return _spss_clustered_chart(
         spec.get('question', spec.get('title', '')),
@@ -1834,37 +1850,66 @@ class PaperGenerator:
             text = ' '.join(words[:max_words]) + ' …'
         return text
 
-    def _build_full_text(self, topic: str, sections: dict) -> str:
-        """Full paper assembled as plain text, for the protected in-browser
-        full-preview window. Mirrors the docx section order. This is shown
-        on-screen only (view-only, watermarked, copy/print blocked) — never
-        offered as a downloadable/copyable file pre-payment."""
-        def block(title, body):
-            body = (body or '').strip()
-            return f"{title.upper()}\n\n{body}" if body else ''
+    def _build_full_preview_blocks(self, topic: str, sections: dict,
+                                     specs: list, charts: list) -> list:
+        """Full paper assembled as an ordered list of blocks (heading / text /
+        image) for the protected in-browser full-preview window — this is
+        what lets the preview show actual chart snippets, not just prose.
+        View-only (watermarked, copy/print blocked client-side) — never
+        offered as a downloadable/copyable asset pre-payment."""
+        blocks = [{'type': 'title', 'text': topic.strip()}]
+
+        def add_text(heading, key):
+            body = (sections.get(key) or '').strip()
+            if body:
+                blocks.append({'type': 'heading', 'text': heading})
+                blocks.append({'type': 'text', 'text': body})
+
+        kw = (sections.get('keywords') or '').strip()
+        if kw:
+            blocks.append({'type': 'heading', 'text': 'Keywords'})
+            blocks.append({'type': 'text', 'text': kw})
+
+        add_text('Abstract', 'abstract')
+        add_text('1. Introduction', 'introduction')
+        add_text('2. Objectives', 'objectives')
+        add_text('3. Literature Review', 'literature_review')
+        add_text('4. Methodology', 'methodology')
+
+        # ── Chart snippets — matches the docx's "Data Analysis and
+        # Interpretation" section, so the preview shows real figures. ──
+        if specs and charts:
+            blocks.append({'type': 'heading', 'text': '5. Data Analysis and Interpretation'})
+            for i, (spec, buf) in enumerate(zip(specs, charts), 1):
+                try:
+                    img_b64 = base64.b64encode(buf.getvalue()).decode('ascii')
+                except Exception:
+                    continue
+                blocks.append({
+                    'type': 'image',
+                    'caption': f'FIGURE {i}',
+                    'legend': chart_legend_text(spec, i),
+                    'image_b64': img_b64,
+                })
+
+        add_text('6. Results', 'results')
+        add_text('7. Discussion', 'discussion')
+        add_text('8. Limitations', 'limitations')
+        add_text('9. Suggestions for Future Work', 'suggestions')
+        add_text('10. Conclusion', 'conclusion')
 
         refs = sections.get('references', [])
         if sections.get('use_ai_references') and sections.get('ai_references'):
             refs_text = sections['ai_references'].strip()
         else:
             refs_text = '\n'.join(refs) if isinstance(refs, list) else str(refs or '')
+        if refs_text.strip():
+            blocks.append({'type': 'heading', 'text': 'References'})
+            blocks.append({'type': 'text', 'text': refs_text.strip()})
 
-        parts = [
-            topic.strip().upper(),
-            block('Keywords', sections.get('keywords')),
-            block('Abstract', sections.get('abstract')),
-            block('1. Introduction', sections.get('introduction')),
-            block('2. Objectives', sections.get('objectives')),
-            block('3. Literature Review', sections.get('literature_review')),
-            block('4. Methodology', sections.get('methodology')),
-            block('5. Results', sections.get('results')),
-            block('6. Discussion', sections.get('discussion')),
-            block('7. Limitations', sections.get('limitations')),
-            block('8. Suggestions for Future Work', sections.get('suggestions')),
-            block('9. Conclusion', sections.get('conclusion')),
-            block('References', refs_text),
-        ]
-        return '\n\n'.join(p for p in parts if p).strip()
+        return blocks
+
+
 
     def generate(self, topic: str, nfigs: int, author: str, inst: str, email: str,
                  questionnaire: dict = None, co_author_info: dict = None) -> str:
@@ -1932,11 +1977,6 @@ class PaperGenerator:
         # pre-payment preview screen.
         self.jobs[self.jid]['preview'] = self._build_preview(sections)
 
-        # Stash the full assembled paper for the protected, view-only
-        # full-preview window (watermarked, copy/print/screenshot-deterred —
-        # see /api/full-preview and the full-preview modal in the frontend).
-        self.jobs[self.jid]['full_text'] = self._build_full_text(topic, sections)
-
         # ── Step 3: Parse chart specs from AI's <charts> block ───────────────
         self.prog(78, 'Parsing chart specs...')
         specs = writer.parse_chart_specs(nfigs)
@@ -1946,6 +1986,14 @@ class PaperGenerator:
         # ── Step 4: Render charts ────────────────────────────────────────────
         self.prog(82, f'Rendering {len(specs)} SPSS-style charts...')
         charts = [make_chart(sp) for sp in specs]
+
+        # Stash the full assembled paper (including chart snippets) for the
+        # protected, view-only full-preview window (watermarked,
+        # copy/print/screenshot-deterred — see /api/full-preview and the
+        # full-preview modal in the frontend). Built after charts render so
+        # the preview can embed the actual figure images, not just prose.
+        self.jobs[self.jid]['full_blocks'] = self._build_full_preview_blocks(
+            topic, sections, specs, charts)
 
         # ── Step 5: Build DOCX ───────────────────────────────────────────────
         self.prog(90, 'Assembling Word document...')
@@ -3199,6 +3247,36 @@ async function downloadLegal(){
 // a leaked screenshot still identifies who took it.
 let fpKeyHandler = null, fpBlurHandler = null, fpFocusHandler = null;
 
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// Renders the ordered block list (heading/text/image) returned by
+// /api/full-preview into sanitized HTML. Chart images are rendered as
+// non-draggable, right-click-disabled <img> tags — a deterrent, not a
+// guarantee (see the note above openFullPreview about screenshots).
+function renderFullPreviewBlocks(blocks){
+  let html = '';
+  for(const b of blocks){
+    if(b.type === 'title'){
+      html += `<div style="font-size:16px;font-weight:800;text-align:center;margin:0 0 18px">${escapeHtml(b.text||'')}</div>`;
+    }else if(b.type === 'heading'){
+      html += `<div style="font-size:12.5px;font-weight:800;letter-spacing:.04em;margin:20px 0 8px;color:var(--accent,#fff)">${escapeHtml((b.text||'').toUpperCase())}</div>`;
+    }else if(b.type === 'text'){
+      html += `<div style="margin-bottom:6px">${escapeHtml(b.text||'')}</div>`;
+    }else if(b.type === 'image'){
+      html += `<div style="margin:14px 0 18px;text-align:center">
+        <div style="font-weight:700;text-align:left;margin-bottom:6px">${escapeHtml(b.caption||'')}:</div>
+        <img src="data:image/png;base64,${b.image_b64}" draggable="false"
+             oncontextmenu="return false" ondragstart="return false"
+             style="max-width:90%;height:auto;pointer-events:none;user-select:none;border-radius:4px" />
+        <div style="text-align:left;margin-top:6px"><b>LEGEND:</b> ${escapeHtml(b.legend||'')}</div>
+      </div>`;
+    }
+  }
+  return html;
+}
+
 function fpBuildWatermark(text){
   const wm = document.getElementById('fp-watermark');
   wm.innerHTML = '';
@@ -3218,18 +3296,21 @@ async function openFullPreview(){
   const overlay = document.getElementById('full-preview-overlay');
   const body = document.getElementById('fp-body');
   overlay.classList.add('open');
-  body.textContent = 'Loading full paper…';
+  body.innerHTML = 'Loading full paper…';
   document.body.style.overflow = 'hidden';
 
   try{
     const r = await fetch('/api/full-preview/'+jobId, {headers:{'Authorization':'Bearer '+token}});
     const d = await r.json();
-    if(!d.success){ body.textContent = d.message || 'Full preview unavailable.'; return; }
-    body.textContent = d.full_text || 'Full preview unavailable.';
+    if(!d.success || !d.blocks || !d.blocks.length){
+      body.innerHTML = escapeHtml(d.message || 'Full preview unavailable.');
+      return;
+    }
+    body.innerHTML = renderFullPreviewBlocks(d.blocks);
     const stamp = new Date().toLocaleString();
     fpBuildWatermark((d.watermark||'RDXper') + '  ·  ' + stamp);
   }catch(e){
-    body.textContent = 'Connection error loading preview.';
+    body.innerHTML = 'Connection error loading preview.';
   }
 
   // Block copy / cut / print / save / view-source / devtools shortcuts while open.
@@ -3517,10 +3598,10 @@ def generate_paper():
             jobs[jid].update({'status': 'done', 'progress': 100,
                               'message': 'Research paper ready!', 'file_path': path})
             preview_text = jobs[jid].get('preview', '')
-            full_text    = jobs[jid].get('full_text', '')
+            full_blocks  = jobs[jid].get('full_blocks', [])
             with get_db() as db:
-                db.execute('UPDATE papers SET file_path=?, preview_text=?, full_text=? WHERE id=?',
-                          (path, preview_text, full_text, jid))
+                db.execute('UPDATE papers SET file_path=?, preview_text=?, full_blocks=? WHERE id=?',
+                          (path, preview_text, json.dumps(full_blocks), jid))
         except Exception as e:
             import traceback; traceback.print_exc()
             jobs[jid].update({'status': 'error', 'message': str(e)})
@@ -3573,11 +3654,12 @@ def get_preview(jid):
 
 @app.route('/api/full-preview/<jid>')
 def get_full_preview(jid):
-    """Returns the ENTIRE assembled paper for the protected, view-only
-    full-preview window. Rendering is view-only by design (watermarked,
-    copy/print blocked client-side) — this endpoint intentionally does NOT
-    gate on payment, since letting people read (not copy or download) the
-    full paper before paying is the point of the feature. Still requires
+    """Returns the ENTIRE assembled paper — including chart image snippets —
+    as an ordered list of blocks for the protected, view-only full-preview
+    window. Rendering is view-only by design (watermarked, copy/print
+    blocked client-side) — this endpoint intentionally does NOT gate on
+    payment, since letting people read (not copy or download) the full
+    paper before paying is the point of the feature. Still requires
     auth + ownership so a job id can't be read by another user."""
     tok = request.headers.get('Authorization', '').replace('Bearer ', '')
     sess = session_get(tok)
@@ -3586,18 +3668,24 @@ def get_full_preview(jid):
 
     user_id = sess.get('user_id', sess.get('email'))
     with get_db() as db:
-        paper = db.execute('SELECT topic, full_text, paid, user_id FROM papers WHERE id=?', (jid,)).fetchone()
+        paper = db.execute('SELECT topic, full_blocks, paid, user_id FROM papers WHERE id=?', (jid,)).fetchone()
     if not paper:
         return jsonify({'success': False, 'message': 'Job not found'}), 404
     if paper['user_id'] != user_id:
         return jsonify({'success': False, 'message': 'Forbidden'}), 403
 
-    job  = jobs.get(jid)
-    full = (job.get('full_text') if job else None) or paper['full_text'] or ''
-    if not full:
+    job = jobs.get(jid)
+    blocks = job.get('full_blocks') if job else None
+    if blocks is None:
+        raw = paper['full_blocks'] or ''
+        try:
+            blocks = json.loads(raw) if raw else []
+        except Exception:
+            blocks = []
+    if not blocks:
         return jsonify({'success': False, 'message': 'Full preview not ready yet.'}), 404
 
-    return jsonify({'success': True, 'full_text': full, 'topic': paper['topic'] or '',
+    return jsonify({'success': True, 'blocks': blocks, 'topic': paper['topic'] or '',
                     'watermark': sess.get('email', user_id),
                     'paid': bool(paper['paid']) or is_admin(sess)})
 
