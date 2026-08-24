@@ -2026,6 +2026,7 @@ HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>rdxper</title>
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Segoe UI',Arial,sans-serif;background:#ffffff;color:#111111;min-height:100vh}
@@ -2252,7 +2253,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
   </div>
   <div class="card">
     <div class="ct">Sign in to continue</div>
-    <div class="cs">Enter your name and email to get started</div>
+    <div class="cs">Sign in with your Google account to get started</div>
     <div id="n-login" class="notif"></div>
     <div id="g-btn-wrap" style="display:flex;justify-content:center;min-height:44px;align-items:center"></div>
   </div>
@@ -2485,7 +2486,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
         <div id="preview-fade" style="position:absolute;left:0;right:0;bottom:0;height:90px;background:linear-gradient(to bottom, rgba(245,245,245,0), var(--surface2))"></div>
       </div>
 
-      <button class="btn btn-s" id="btn-full-preview" onclick="openFullPreview()" style="margin-bottom:8px">🔍 View Full Paper (protected preview)</button>
+      <button class="btn btn-s" id="btn-full-preview" onclick="openFullPreview()" style="margin-bottom:8px">🔍 Preview</button>
 
       <div id="pay-box">
         <button class="btn btn-dl" id="btn-pay" onclick="payAndUnlock()">🔒 Pay ₹__PAPER_PRICE__ &amp; Unlock Download</button>
@@ -2700,55 +2701,51 @@ const G_CLIENT='__GOOGLE_CLIENT_ID__';
   }catch(e){}
 })();
 
-// Simple sign-in — name + email, no password, no OTP
-window.addEventListener('load', function(){
-  document.getElementById('g-btn-wrap').innerHTML=`
-    <div style="width:100%">
-      <div class="fg" style="margin-bottom:10px">
-        <label style="font-size:13px;font-weight:600">Your Name</label>
-        <input type="text" id="si-name" placeholder="e.g. Rakunatha Khrishanth"
-          style="background:#f9f9f9;border:1.5px solid #d0d0d0;border-radius:8px;padding:10px 14px;color:#111;width:100%;font-size:14px;outline:none"
-          onkeydown="if(event.key==='Enter')document.getElementById('si-email').focus()">
-      </div>
-      <div class="fg" style="margin-bottom:18px">
-        <label style="font-size:13px;font-weight:600">Email Address</label>
-        <input type="email" id="si-email" placeholder="you@email.com"
-          style="background:#f9f9f9;border:1.5px solid #d0d0d0;border-radius:8px;padding:10px 14px;color:#111;width:100%;font-size:14px;outline:none"
-          onkeydown="if(event.key==='Enter')simpleSignIn()">
-      </div>
-      <button class="btn btn-p" id="btn-signin" onclick="simpleSignIn()" style="margin-bottom:0">Sign In →</button>
-    </div>`;
-});
-
-async function simpleSignIn(){
-  const name  = (document.getElementById('si-name')||{value:''}).value.trim();
-  const email = (document.getElementById('si-email')||{value:''}).value.trim();
-  const n = document.getElementById('n-login');
-  if(!email || !email.includes('@')){
-    n.className='notif error show'; n.textContent='Please enter a valid email address.'; return;
+// Google Identity Services sign-in — renders the official Google button
+// and exchanges the returned ID token with the backend for a session.
+function initGoogleSignIn(){
+  if(!window.google || !google.accounts || !google.accounts.id){
+    // GSI script hasn't loaded yet — retry shortly.
+    setTimeout(initGoogleSignIn, 200);
+    return;
   }
-  const btn = document.getElementById('btn-signin');
-  btn.disabled=true; btn.textContent='Signing in...';
+  if(!G_CLIENT){
+    document.getElementById('g-btn-wrap').innerHTML =
+      '<div class="notif error show" style="position:static">Google sign-in is not configured on the server.</div>';
+    return;
+  }
+  google.accounts.id.initialize({
+    client_id: G_CLIENT,
+    callback: handleGoogleCredential,
+  });
+  google.accounts.id.renderButton(
+    document.getElementById('g-btn-wrap'),
+    { theme: 'outline', size: 'large', shape: 'pill', text: 'signin_with', width: 280 }
+  );
+}
+window.addEventListener('load', initGoogleSignIn);
+
+async function handleGoogleCredential(response){
+  const n = document.getElementById('n-login');
   try{
-    const r = await fetch('/api/auth/login',{method:'POST',
+    const r = await fetch('/api/auth/google',{method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({name: name||email.split('@')[0], email})});
+      body:JSON.stringify({id_token: response.credential})});
     const d = await r.json();
     if(!d.success){
-      n.className='notif error show'; n.textContent=d.message||'Sign in failed.';
-      btn.disabled=false; btn.textContent='Sign In →'; return;
+      n.className='notif error show'; n.textContent=d.message||'Google sign-in failed.'; return;
     }
-    token=d.token; userEmail=d.email; userName=d.name; userPicture='';
+    token=d.token; userEmail=d.email; userName=d.name; userPicture=d.picture||'';
     try{
       localStorage.setItem('rx_tok',token); localStorage.setItem('rx_em',userEmail);
-      localStorage.setItem('rx_nm',userName); localStorage.setItem('rx_pic','');
+      localStorage.setItem('rx_nm',userName); localStorage.setItem('rx_pic',userPicture);
     }catch(e){}
     onLoggedIn();
   }catch(e){
     n.className='notif error show'; n.textContent='Connection error. Try again.';
-    btn.disabled=false; btn.textContent='Sign In →';
   }
 }
+
 
 
 
