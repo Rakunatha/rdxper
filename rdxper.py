@@ -90,11 +90,6 @@ def init_db():
             db.execute("ALTER TABLE papers ADD COLUMN preview_text TEXT")
         except Exception:
             pass
-        # Guarded migration for DBs created before the full-preview feature existed
-        try:
-            db.execute("ALTER TABLE papers ADD COLUMN full_blocks TEXT")
-        except Exception:
-            pass
 
 init_db()
 os.makedirs('generated', exist_ok=True)
@@ -1163,44 +1158,77 @@ def _spss_clustered_chart(question, xvar, groups, series, matrix):
     """Render a two-variable clustered bar chart matching SPSS Chart Builder's
     default output: light-grey plot area, solid black frame, no gridlines,
     thin black bar outlines, boxed % data labels, and a right-hand legend
-    headed by the survey question text (all series shown, even zero ones)."""
+    headed by the survey question text (all series shown, even zero ones).
+
+    Each series always occupies the same relative slot within every group
+    (SPSS keeps bar positions/widths consistent across categories even when
+    a value is zero and its bar is omitted) — this keeps the cluster widths
+    and bar widths identical across all categories instead of "compacting"
+    around whichever series happen to be non-zero in a given group."""
     n_groups = len(groups)
     n_series = len(series)
     colors   = [SPSS_COLORS[i % len(SPSS_COLORS)] for i in range(n_series)]
 
-    fig, ax = plt.subplots(figsize=(4.6, 3.75))
+    # Scale the canvas to the amount of content so bars/labels/legend never
+    # feel cramped: wider for more categories, taller for more legend rows.
+    fig_w = min(9.5, max(4.8, 0.95 * n_groups + 2.6))
+    fig_h = min(6.4, max(3.85, 0.30 * n_series + 2.7))
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
 
-    group_width = 0.62
+    # Narrower bars (and smaller label text) as more series get packed into
+    # one cluster, so labels never overlap their neighbours.
+    if n_series <= 4:
+        group_width, label_fs, pad = 0.60, 7.0, 0.24
+    elif n_series <= 6:
+        group_width, label_fs, pad = 0.68, 6.2, 0.20
+    elif n_series <= 8:
+        group_width, label_fs, pad = 0.74, 5.4, 0.16
+    else:
+        group_width, label_fs, pad = 0.80, 4.7, 0.12
+    bw = group_width / n_series
+    # Once bars get this narrow, a horizontal label box is wider than the
+    # gap between neighbouring bars and adjacent labels start to collide —
+    # rotating them vertical keeps each one within its own bar's width.
+    rotate_labels = n_series > 6
+
+    flat = [v for row in matrix for v in row if v]
+    max_val = max(flat) if flat else 10
+
     for gi in range(n_groups):
-        active = [(si, matrix[gi][si]) for si in range(n_series) if matrix[gi][si] and matrix[gi][si] > 0]
-        if not active:
-            continue
-        k     = len(active)
-        bw    = group_width / k
         start = gi - group_width / 2
-        for j, (si, val) in enumerate(active):
-            xpos = start + bw * j + bw / 2
-            ax.bar(xpos, val, width=bw * 0.94, color=colors[si],
-                   edgecolor='black', linewidth=0.8, zorder=3)
-            label_y = val * 0.9 if val > 4 else val
-            va      = 'top' if val > 4 else 'bottom'
-            ax.annotate(f'{val:.2f}%', xy=(xpos, label_y), ha='center', va=va,
-                        fontsize=6.3, color='#222222',
-                        bbox=dict(boxstyle='square,pad=0.22', fc='white', ec='black', lw=0.6),
-                        zorder=4)
+        for si in range(n_series):
+            val = matrix[gi][si] if si < len(matrix[gi]) else 0
+            if not val or val <= 0:
+                continue
+            xpos = start + bw * si + bw / 2
+            ax.bar(xpos, val, width=bw * 0.90, color=colors[si],
+                   edgecolor='black', linewidth=0.7, zorder=3)
+            ax.annotate(f'{val:.2f}%', xy=(xpos, val), xytext=(0, 4),
+                        textcoords='offset points',
+                        ha='center', va='bottom',
+                        rotation=90 if rotate_labels else 0,
+                        rotation_mode='anchor',
+                        fontsize=label_fs, color='#1a1a1a',
+                        bbox=dict(boxstyle=f'square,pad={pad}', fc='white',
+                                  ec='black', lw=0.5),
+                        zorder=4, clip_on=False)
 
     ax.set_xlim(-0.5, n_groups - 0.5)
     ax.set_xticks(range(n_groups))
     max_len = max((len(g) for g in groups), default=0)
     crowded = max_len > 9 or n_groups >= 5
     ax.set_xticklabels(
-        groups, fontsize=7.3 if crowded else 8, color='#111111',
-        rotation=18 if crowded else 0,
+        [_wrap(g, 14) if not crowded else g for g in groups],
+        fontsize=7.6 if crowded else 8.4, color='#111111',
+        rotation=20 if crowded else 0,
         ha='right' if crowded else 'center',
     )
 
-    flat = [v for row in matrix for v in row if v]
-    ymax = (max(flat) if flat else 10) * 1.3 + 3
+    # Headroom above the tallest bar leaves room for its label plus the
+    # small offset/box, so nothing gets clipped at the top of the axes.
+    # Rotated (vertical) labels need noticeably more vertical clearance.
+    headroom_factor = 1.34 if rotate_labels else 1.16
+    ymax = max_val * headroom_factor + max(4, max_val * 0.12)
     ax.set_ylim(0, ymax)
 
     # SPSS look: light-grey plot area, solid black frame, no gridlines
@@ -1214,28 +1242,27 @@ def _spss_clustered_chart(question, xvar, groups, series, matrix):
     ax.yaxis.grid(False)
     ax.set_axisbelow(True)
     ax.tick_params(colors='#111111', labelsize=8, length=3)
-    ax.set_ylabel('Percent', fontsize=9, fontweight='bold', color='#111111')
-    ax.set_xlabel(xvar, fontsize=9, fontweight='bold', color='#111111')
+    ax.set_ylabel('Percent', fontsize=9.5, fontweight='bold', color='#111111')
+    ax.set_xlabel(xvar, fontsize=9.5, fontweight='bold', color='#111111')
 
     handles = [plt.Rectangle((0, 0), 1, 1, fc=colors[i], ec='black', linewidth=0.6) for i in range(n_series)]
-    leg = ax.legend(handles, series, title=_wrap(question, 15),
+    leg = ax.legend(handles, series, title=_wrap(question, 24),
                      loc='upper left', bbox_to_anchor=(1.02, 1.02), frameon=False,
-                     fontsize=6.5, title_fontsize=6.8, handlelength=1.0, handleheight=1.0,
-                     labelspacing=0.3, borderaxespad=0)
+                     fontsize=7.0, title_fontsize=7.4, handlelength=1.1, handleheight=1.1,
+                     labelspacing=0.38, borderaxespad=0)
     leg._legend_box.align = 'left'
     leg.get_title().set_ha('left')
 
-    plt.tight_layout()
+    fig.tight_layout()
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=170, bbox_inches='tight', facecolor='white')
+    fig.savefig(buf, format='png', dpi=220, bbox_inches='tight', facecolor='white')
     plt.close(fig)
     buf.seek(0)
     return buf
 
 
 def chart_legend_text(spec: dict, fig_num: int) -> str:
-    """Descriptive legend text for a chart, shared by the docx builder and
-    the full-preview modal so captions match exactly in both places."""
+    """Descriptive legend text for a chart, used in the docx builder."""
     if spec.get('question') and spec.get('xvar'):
         return (f"The given figure represents the {spec['xvar'].lower()}-wise distribution of "
                 f"respondents' responses to the statement/question: \"{spec['question']}\".")
@@ -1850,66 +1877,6 @@ class PaperGenerator:
             text = ' '.join(words[:max_words]) + ' …'
         return text
 
-    def _build_full_preview_blocks(self, topic: str, sections: dict,
-                                     specs: list, charts: list) -> list:
-        """Full paper assembled as an ordered list of blocks (heading / text /
-        image) for the protected in-browser full-preview window — this is
-        what lets the preview show actual chart snippets, not just prose.
-        View-only (watermarked, copy/print blocked client-side) — never
-        offered as a downloadable/copyable asset pre-payment."""
-        blocks = [{'type': 'title', 'text': topic.strip()}]
-
-        def add_text(heading, key):
-            body = (sections.get(key) or '').strip()
-            if body:
-                blocks.append({'type': 'heading', 'text': heading})
-                blocks.append({'type': 'text', 'text': body})
-
-        kw = (sections.get('keywords') or '').strip()
-        if kw:
-            blocks.append({'type': 'heading', 'text': 'Keywords'})
-            blocks.append({'type': 'text', 'text': kw})
-
-        add_text('Abstract', 'abstract')
-        add_text('1. Introduction', 'introduction')
-        add_text('2. Objectives', 'objectives')
-        add_text('3. Literature Review', 'literature_review')
-        add_text('4. Methodology', 'methodology')
-
-        # ── Chart snippets — matches the docx's "Data Analysis and
-        # Interpretation" section, so the preview shows real figures. ──
-        if specs and charts:
-            blocks.append({'type': 'heading', 'text': '5. Data Analysis and Interpretation'})
-            for i, (spec, buf) in enumerate(zip(specs, charts), 1):
-                try:
-                    img_b64 = base64.b64encode(buf.getvalue()).decode('ascii')
-                except Exception:
-                    continue
-                blocks.append({
-                    'type': 'image',
-                    'caption': f'FIGURE {i}',
-                    'legend': chart_legend_text(spec, i),
-                    'image_b64': img_b64,
-                })
-
-        add_text('6. Results', 'results')
-        add_text('7. Discussion', 'discussion')
-        add_text('8. Limitations', 'limitations')
-        add_text('9. Suggestions for Future Work', 'suggestions')
-        add_text('10. Conclusion', 'conclusion')
-
-        refs = sections.get('references', [])
-        if sections.get('use_ai_references') and sections.get('ai_references'):
-            refs_text = sections['ai_references'].strip()
-        else:
-            refs_text = '\n'.join(refs) if isinstance(refs, list) else str(refs or '')
-        if refs_text.strip():
-            blocks.append({'type': 'heading', 'text': 'References'})
-            blocks.append({'type': 'text', 'text': refs_text.strip()})
-
-        return blocks
-
-
 
     def generate(self, topic: str, nfigs: int, author: str, inst: str, email: str,
                  questionnaire: dict = None, co_author_info: dict = None) -> str:
@@ -1986,14 +1953,6 @@ class PaperGenerator:
         # ── Step 4: Render charts ────────────────────────────────────────────
         self.prog(82, f'Rendering {len(specs)} SPSS-style charts...')
         charts = [make_chart(sp) for sp in specs]
-
-        # Stash the full assembled paper (including chart snippets) for the
-        # protected, view-only full-preview window (watermarked,
-        # copy/print/screenshot-deterred — see /api/full-preview and the
-        # full-preview modal in the frontend). Built after charts render so
-        # the preview can embed the actual figure images, not just prose.
-        self.jobs[self.jid]['full_blocks'] = self._build_full_preview_blocks(
-            topic, sections, specs, charts)
 
         # ── Step 5: Build DOCX ───────────────────────────────────────────────
         self.prog(90, 'Assembling Word document...')
@@ -2239,7 +2198,6 @@ textarea::placeholder{color:#bbb;font-size:12px}
   </div>
   <div class="nav-links" id="nav-auth" style="display:none">
     <button class="nav-btn" onclick="showProfile()">👤 Profile</button>
-    <button class="nav-btn" onclick="show('s-legal')">⚖️ Legal</button>
     <div id="admin-link" style="display:none"><button class="nav-btn" onclick="showAdmin()">⚙️ Admin</button></div>
     <div class="user-chip" onclick="showProfile()">
       <img id="nav-avatar" src="" onerror="this.style.display='none'" style="display:none">
@@ -2479,8 +2437,6 @@ textarea::placeholder{color:#bbb;font-size:12px}
         <div id="preview-fade" style="position:absolute;left:0;right:0;bottom:0;height:90px;background:linear-gradient(to bottom, rgba(245,245,245,0), var(--surface2))"></div>
       </div>
 
-      <button class="btn btn-s" id="btn-full-preview" onclick="openFullPreview()" style="margin-bottom:8px">🔍 Preview</button>
-
       <div id="pay-box">
         <button class="btn btn-dl" id="btn-pay" onclick="payAndUnlock()">🔒 Pay ₹__PAPER_PRICE__ &amp; Unlock Download</button>
         <div style="font-size:11px;color:var(--dim);margin-top:6px">Secure payment via Razorpay</div>
@@ -2490,69 +2446,6 @@ textarea::placeholder{color:#bbb;font-size:12px}
       <button class="btn btn-s" onclick="again()" style="margin-top:8px">Generate another paper</button>
       <button class="btn btn-s" onclick="loadDashboard();show('s-dashboard')" style="margin-top:6px;opacity:.7">← Back to Dashboard</button>
     </div>
-  </div>
-</div>
-
-<!-- FULL PREVIEW MODAL — view-only protected reader.
-     NOTE: this deters casual copying/printing; it cannot block OS-level
-     screenshots, phone cameras, or screen recorders — no web page can. -->
-<style>
-#full-preview-overlay{
-  display:none; position:fixed; inset:0; z-index:9999;
-  background:rgba(0,0,0,.75); backdrop-filter:blur(2px);
-}
-#full-preview-overlay.open{display:flex; align-items:center; justify-content:center; padding:20px}
-#fp-panel{
-  position:relative; width:100%; max-width:760px; height:86vh;
-  background:var(--surface2,#1a1a1a); border:1px solid var(--border,#333); border-radius:14px;
-  display:flex; flex-direction:column; overflow:hidden;
-}
-#fp-header{
-  display:flex; align-items:center; justify-content:space-between;
-  padding:14px 18px; border-bottom:1px solid var(--border,#333); flex-shrink:0;
-}
-#fp-header .t{font-size:14px;font-weight:700}
-#fp-close{background:none;border:none;color:var(--muted,#999);font-size:22px;cursor:pointer;line-height:1;padding:4px 8px}
-#fp-body-wrap{position:relative; flex:1; overflow:hidden}
-#fp-body{
-  position:absolute; inset:0; overflow-y:auto; padding:24px 28px 90px;
-  font-size:13.5px; line-height:1.8; white-space:pre-wrap; color:var(--text,#eee);
-  user-select:none; -webkit-user-select:none; -moz-user-select:none; -ms-user-select:none;
-  -webkit-touch-callout:none;
-}
-#fp-body img{pointer-events:none}
-#fp-watermark{
-  position:absolute; inset:0; pointer-events:none; overflow:hidden;
-  opacity:.14; z-index:2;
-}
-#fp-watermark span{
-  position:absolute; white-space:nowrap; font-size:13px; font-weight:700;
-  color:#fff; transform:rotate(-28deg); user-select:none;
-}
-#fp-blur-guard{
-  display:none; position:absolute; inset:0; z-index:5;
-  background:rgba(10,10,10,.97); color:#aaa; font-size:13px;
-  align-items:center; justify-content:center; text-align:center; padding:24px;
-}
-#fp-blur-guard.show{display:flex}
-#fp-footer{
-  padding:10px 18px; border-top:1px solid var(--border,#333); flex-shrink:0;
-  font-size:11px; color:var(--dim,#777); text-align:center;
-}
-@media print{ #full-preview-overlay{display:none !important} }
-</style>
-<div id="full-preview-overlay" oncontextmenu="return false">
-  <div id="fp-panel">
-    <div id="fp-header">
-      <div class="t">🔒 Full Paper — View Only</div>
-      <button id="fp-close" onclick="closeFullPreview()">✕</button>
-    </div>
-    <div id="fp-body-wrap">
-      <div id="fp-body" onselectstart="return false" ondragstart="return false">Loading full paper…</div>
-      <div id="fp-watermark"></div>
-      <div id="fp-blur-guard">Preview hidden while this tab isn't focused.<br>Screen recording isn't supported here.</div>
-    </div>
-    <div id="fp-footer">This is a view-only preview watermarked to your account. Copying, printing, and downloading are disabled until you unlock the full paper.</div>
   </div>
 </div>
 
@@ -2611,59 +2504,6 @@ textarea::placeholder{color:#bbb;font-size:12px}
       <tbody id="adm-payments-list"></tbody></table></div>
     </div>
     <button class="btn btn-s" onclick="loadDashboard();show('s-dashboard')" style="max-width:180px;margin-top:12px">← Back</button>
-  </div>
-</div>
-
-<!-- LEGAL DRAFTING -->
-<div class="screen" id="s-legal">
-  <div style="padding-top:28px;max-width:700px;margin:0 auto">
-    <div style="margin-bottom:16px;display:flex;align-items:center;gap:12px">
-      <button class="btn btn-s" style="width:auto;padding:8px 16px;font-size:12px" onclick="loadDashboard();show('s-dashboard')">← Dashboard</button>
-      <div style="font-size:20px;font-weight:900;color:#111">⚖️ AI Legal Drafting</div>
-    </div>
-    <div class="cs" style="margin-bottom:20px">Describe the document you need and the details to include, and RDXper's AI will draft it for you or upload a format/sample document and we'll follow its structure using your data.</div>
-
-    <!-- Mode tabs -->
-    <div class="tabs" id="legal-tabs">
-      <button class="tab active" onclick="legalSwitchTab('custom',this)">✍️ Describe &amp; Generate</button>
-      <button class="tab" onclick="legalSwitchTab('format',this)">📎 Use My Own Format</button>
-    </div>
-
-    <div id="n-legal" class="notif"></div>
-
-    <!-- Custom description form -->
-    <div id="legal-form-custom">
-      <div class="fg"><label>What kind of drafting do you need?</label>
-        <input type="text" id="ld-doctype" placeholder="e.g. Rental Agreement, NDA, Employment Contract, Power of Attorney, Trademark Licence">
-      </div>
-      <div class="fg"><label>Details &amp; data for the draft</label>
-        <textarea id="ld-details" rows="10" placeholder="Provide everything the document needs — party names & addresses, dates, amounts, terms, obligations, governing law, jurisdiction, special clauses, etc.&#10;&#10;Example: Landlord: Rohan Mehta, 12 MG Road, Pune. Tenant: Aisha Khan, 45 Park St, Pune. Property: 2BHK Flat No. 301, Green Meadows, Baner, Pune. Monthly rent: ₹28,000, payable by the 5th of every month. Security deposit: ₹1,00,000. Lease term: 11 months from 1 August 2026. Notice period: 1 month for termination by either party."></textarea>
-      </div>
-      <button class="btn btn-p" id="btn-legal-gen" onclick="generateLegalDoc()">⬇ Generate</button>
-    </div>
-
-    <!-- Upload-your-own-format form -->
-    <div id="legal-form-format" style="display:none">
-      <div class="fg"><label>Upload a format / sample document</label>
-        <input type="file" id="ld-format-file" accept=".docx,.txt" style="width:100%;padding:10px;border:1.5px dashed #b0b0b0;border-radius:8px;background:#fafafa;font-size:13px">
-        <div style="font-size:11px;color:#999;margin-top:4px">Accepted: .docx or .txt. We'll follow its structure and clauses.</div>
-      </div>
-      <div class="fg"><label>Data to fill into that format</label>
-        <textarea id="ld-format-details" rows="9" placeholder="Provide the specific data that should replace the placeholders/details in the uploaded format, party names, dates, amounts, terms, etc."></textarea>
-      </div>
-      <button class="btn btn-p" id="btn-legal-gen-format" onclick="generateLegalDocFromFormat()">⬇ Generate</button>
-    </div>
-
-   
-
-    <!-- Done state -->
-    <div id="legal-done" style="display:none;text-align:center;padding:32px 0">
-      <div style="font-size:48px;margin-bottom:12px">✅</div>
-      <div class="ct">Draft ready!</div>
-      <div class="cs" id="legal-done-sub">Your document has been generated.</div>
-      <button class="btn btn-dl" id="btn-legal-dl" onclick="downloadLegal()" style="max-width:360px;margin:16px auto 8px">⬇ Download Draft (.docx)</button>
-      <button class="btn btn-s" onclick="resetLegal()" style="max-width:200px;margin:0 auto">Generate Another</button>
-    </div>
   </div>
 </div>
 
@@ -3104,220 +2944,6 @@ function admTab(name,el){
   });
 }
 
-// ── LEGAL DRAFTING ────────────────────────────────────────────────────────────
-let legalJobId = '';
-let legalDlName = 'RDXper_Legal_Draft.docx';
-
-function legalSwitchTab(mode, btn){
-  document.querySelectorAll('#legal-tabs .tab').forEach(t=>t.classList.remove('active'));
-  btn.classList.add('active');
-  document.getElementById('legal-form-custom').style.display = mode==='custom' ? 'block' : 'none';
-  document.getElementById('legal-form-format').style.display = mode==='format' ? 'block' : 'none';
-  document.getElementById('legal-done').style.display='none';
-  const n=document.getElementById('n-legal'); n.classList.remove('show');
-}
-
-function resetLegal(){
-  legalJobId='';
-  document.getElementById('legal-done').style.display='none';
-  document.getElementById('legal-form-custom').style.display='block';
-  document.getElementById('legal-form-format').style.display='none';
-  document.querySelectorAll('#legal-tabs .tab').forEach((t,i)=>t.classList.toggle('active', i===0));
-  ['ld-doctype','ld-details','ld-format-details'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
-  const fEl=document.getElementById('ld-format-file'); if(fEl) fEl.value='';
-  document.getElementById('n-legal').classList.remove('show');
-}
-
-function legalShowError(msg){
-  const n=document.getElementById('n-legal');
-  n.className='notif error show'; n.textContent=msg;
-}
-
-async function generateLegalDoc(){
-  const g = id => (document.getElementById(id)||{}).value.trim()||'';
-  const doc_type = g('ld-doctype'), details = g('ld-details');
-  if(!doc_type || !details){
-    legalShowError('Please enter the type of document and the details/data for the draft.');
-    return;
-  }
-  const btn=document.getElementById('btn-legal-gen');
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span> Drafting with AI...';
-  document.getElementById('n-legal').classList.remove('show');
-  try{
-    const r = await fetch('/api/legal/generate',{
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
-      body:JSON.stringify({mode:'custom', doc_type, details})
-    });
-    const d = await r.json();
-    if(!d.success){ legalShowError(d.message||'Generation failed.'); return; }
-    legalJobId = d.job_id;
-    legalDlName = (doc_type.replace(/[^\w\-]+/g,'_')||'RDXper_Legal_Draft') + '.docx';
-    document.getElementById('legal-done-sub').textContent = 'Your ' + doc_type + ' has been generated.';
-    document.getElementById('legal-form-custom').style.display='none';
-    document.getElementById('legal-form-format').style.display='none';
-    document.getElementById('legal-done').style.display='block';
-  }catch(e){
-    legalShowError('Connection error. Please try again.');
-  }finally{
-    btn.disabled=false; btn.innerHTML='⬇ Generate Draft (.docx)';
-  }
-}
-
-async function generateLegalDocFromFormat(){
-  const details = (document.getElementById('ld-format-details')||{}).value.trim()||'';
-  const fileEl = document.getElementById('ld-format-file');
-  const file = fileEl && fileEl.files && fileEl.files[0];
-  if(!file){ legalShowError('Please upload a format/sample document (.docx or .txt).'); return; }
-  if(!details){ legalShowError('Please enter the data to fill into the uploaded format.'); return; }
-  const btn=document.getElementById('btn-legal-gen-format');
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span> Drafting with AI...';
-  document.getElementById('n-legal').classList.remove('show');
-  try{
-    const fd = new FormData();
-    fd.append('mode','format');
-    fd.append('details', details);
-    fd.append('format_file', file);
-    const r = await fetch('/api/legal/generate',{
-      method:'POST',
-      headers:{'Authorization':'Bearer '+token},
-      body: fd
-    });
-    const d = await r.json();
-    if(!d.success){ legalShowError(d.message||'Generation failed.'); return; }
-    legalJobId = d.job_id;
-    legalDlName = 'RDXper_Legal_Draft.docx';
-    document.getElementById('legal-done-sub').textContent = 'Your document has been generated from the uploaded format.';
-    document.getElementById('legal-form-custom').style.display='none';
-    document.getElementById('legal-form-format').style.display='none';
-    document.getElementById('legal-done').style.display='block';
-  }catch(e){
-    legalShowError('Connection error. Please try again.');
-  }finally{
-    btn.disabled=false; btn.innerHTML='⬇ Generate Draft (.docx)';
-  }
-}
-
-async function downloadLegal(){
-  const btn=document.getElementById('btn-legal-dl');
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span> Downloading...';
-  try{
-    const r = await fetch('/api/download/'+legalJobId,{headers:{'Authorization':'Bearer '+token}});
-    if(!r.ok) throw new Error('failed');
-    const blob=await r.blob(), url=URL.createObjectURL(blob), a=document.createElement('a');
-    a.href=url; a.download=legalDlName; a.click(); URL.revokeObjectURL(url);
-  }catch(e){ alert('Download failed. Please try again.'); }
-  finally{ btn.disabled=false; btn.innerHTML='⬇ Download Draft (.docx)'; }
-}
-
-// ── Full-paper protected preview ────────────────────────────────────────
-// Deterrents only: disables copy/print/select and blurs on tab-blur.
-// No web page can block OS screenshots, phone cameras, or screen recorders —
-// the watermark (tied to the viewer's account) is the real backstop, since
-// a leaked screenshot still identifies who took it.
-let fpKeyHandler = null, fpBlurHandler = null, fpFocusHandler = null;
-
-function escapeHtml(s){
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
-// Renders the ordered block list (heading/text/image) returned by
-// /api/full-preview into sanitized HTML. Chart images are rendered as
-// non-draggable, right-click-disabled <img> tags — a deterrent, not a
-// guarantee (see the note above openFullPreview about screenshots).
-function renderFullPreviewBlocks(blocks){
-  let html = '';
-  for(const b of blocks){
-    if(b.type === 'title'){
-      html += `<div style="font-size:16px;font-weight:800;text-align:center;margin:0 0 18px">${escapeHtml(b.text||'')}</div>`;
-    }else if(b.type === 'heading'){
-      html += `<div style="font-size:12.5px;font-weight:800;letter-spacing:.04em;margin:20px 0 8px;color:var(--accent,#fff)">${escapeHtml((b.text||'').toUpperCase())}</div>`;
-    }else if(b.type === 'text'){
-      html += `<div style="margin-bottom:6px">${escapeHtml(b.text||'')}</div>`;
-    }else if(b.type === 'image'){
-      html += `<div style="margin:14px 0 18px;text-align:center">
-        <div style="font-weight:700;text-align:left;margin-bottom:6px">${escapeHtml(b.caption||'')}:</div>
-        <img src="data:image/png;base64,${b.image_b64}" draggable="false"
-             oncontextmenu="return false" ondragstart="return false"
-             style="max-width:90%;height:auto;pointer-events:none;user-select:none;border-radius:4px" />
-        <div style="text-align:left;margin-top:6px"><b>LEGEND:</b> ${escapeHtml(b.legend||'')}</div>
-      </div>`;
-    }
-  }
-  return html;
-}
-
-function fpBuildWatermark(text){
-  const wm = document.getElementById('fp-watermark');
-  wm.innerHTML = '';
-  const rows = 10, cols = 3;
-  for(let r=0;r<rows;r++){
-    for(let c=0;c<cols;c++){
-      const s = document.createElement('span');
-      s.textContent = text;
-      s.style.top  = (r*11 - 5) + '%';
-      s.style.left = (c*38 - 10) + '%';
-      wm.appendChild(s);
-    }
-  }
-}
-
-async function openFullPreview(){
-  const overlay = document.getElementById('full-preview-overlay');
-  const body = document.getElementById('fp-body');
-  overlay.classList.add('open');
-  body.innerHTML = 'Loading full paper…';
-  document.body.style.overflow = 'hidden';
-
-  try{
-    const r = await fetch('/api/full-preview/'+jobId, {headers:{'Authorization':'Bearer '+token}});
-    const d = await r.json();
-    if(!d.success || !d.blocks || !d.blocks.length){
-      body.innerHTML = escapeHtml(d.message || 'Full preview unavailable.');
-      return;
-    }
-    body.innerHTML = renderFullPreviewBlocks(d.blocks);
-    const stamp = new Date().toLocaleString();
-    fpBuildWatermark((d.watermark||'RDXper') + '  ·  ' + stamp);
-  }catch(e){
-    body.innerHTML = 'Connection error loading preview.';
-  }
-
-  // Block copy / cut / print / save / view-source / devtools shortcuts while open.
-  fpKeyHandler = function(e){
-    const k = e.key ? e.key.toLowerCase() : '';
-    const blocked =
-      (e.ctrlKey || e.metaKey) && ['p','s','u','c','x'].includes(k) ||
-      k === 'f12' ||
-      (e.ctrlKey || e.metaKey) && e.shiftKey && ['i','j','c'].includes(k) ||
-      k === 'escape';
-    if(k === 'escape'){ closeFullPreview(); return; }
-    if(blocked){ e.preventDefault(); e.stopPropagation(); }
-  };
-  document.addEventListener('keydown', fpKeyHandler, true);
-  body.addEventListener('copy', e=>e.preventDefault());
-  body.addEventListener('cut', e=>e.preventDefault());
-  body.addEventListener('contextmenu', e=>e.preventDefault());
-
-  // Blur the content if the tab loses focus (deters screen-recording apps
-  // running in another window) — best-effort only, not a guarantee.
-  const guard = document.getElementById('fp-blur-guard');
-  fpBlurHandler = ()=> guard.classList.add('show');
-  fpFocusHandler = ()=> guard.classList.remove('show');
-  window.addEventListener('blur', fpBlurHandler);
-  window.addEventListener('focus', fpFocusHandler);
-  document.addEventListener('visibilitychange', ()=>{
-    if(document.hidden) fpBlurHandler(); else fpFocusHandler();
-  });
-}
-
-function closeFullPreview(){
-  document.getElementById('full-preview-overlay').classList.remove('open');
-  document.body.style.overflow = '';
-  if(fpKeyHandler) document.removeEventListener('keydown', fpKeyHandler, true);
-  if(fpBlurHandler) window.removeEventListener('blur', fpBlurHandler);
-  if(fpFocusHandler) window.removeEventListener('focus', fpFocusHandler);
-}
 </script>
 </body>
 </html>"""
@@ -3568,10 +3194,9 @@ def generate_paper():
             jobs[jid].update({'status': 'done', 'progress': 100,
                               'message': 'Research paper ready!', 'file_path': path})
             preview_text = jobs[jid].get('preview', '')
-            full_blocks  = jobs[jid].get('full_blocks', [])
             with get_db() as db:
-                db.execute('UPDATE papers SET file_path=?, preview_text=?, full_blocks=? WHERE id=?',
-                          (path, preview_text, json.dumps(full_blocks), jid))
+                db.execute('UPDATE papers SET file_path=?, preview_text=? WHERE id=?',
+                          (path, preview_text, jid))
         except Exception as e:
             import traceback; traceback.print_exc()
             jobs[jid].update({'status': 'error', 'message': str(e)})
@@ -3620,44 +3245,6 @@ def get_preview(jid):
 
     return jsonify({'success': True, 'preview': preview, 'topic': topic,
                     'paid': paid, 'price': PAPER_PRICE_INR})
-
-
-@app.route('/api/full-preview/<jid>')
-def get_full_preview(jid):
-    """Returns the ENTIRE assembled paper — including chart image snippets —
-    as an ordered list of blocks for the protected, view-only full-preview
-    window. Rendering is view-only by design (watermarked, copy/print
-    blocked client-side) — this endpoint intentionally does NOT gate on
-    payment, since letting people read (not copy or download) the full
-    paper before paying is the point of the feature. Still requires
-    auth + ownership so a job id can't be read by another user."""
-    tok = request.headers.get('Authorization', '').replace('Bearer ', '')
-    sess = session_get(tok)
-    if not sess:
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
-
-    user_id = sess.get('user_id', sess.get('email'))
-    with get_db() as db:
-        paper = db.execute('SELECT topic, full_blocks, paid, user_id FROM papers WHERE id=?', (jid,)).fetchone()
-    if not paper:
-        return jsonify({'success': False, 'message': 'Job not found'}), 404
-    if paper['user_id'] != user_id:
-        return jsonify({'success': False, 'message': 'Forbidden'}), 403
-
-    job = jobs.get(jid)
-    blocks = job.get('full_blocks') if job else None
-    if blocks is None:
-        raw = paper['full_blocks'] or ''
-        try:
-            blocks = json.loads(raw) if raw else []
-        except Exception:
-            blocks = []
-    if not blocks:
-        return jsonify({'success': False, 'message': 'Full preview not ready yet.'}), 404
-
-    return jsonify({'success': True, 'blocks': blocks, 'topic': paper['topic'] or '',
-                    'watermark': sess.get('email', user_id),
-                    'paid': bool(paper['paid']) or is_admin(sess)})
 
 
 @app.route('/api/pay/create-order/<jid>', methods=['POST'])
@@ -3774,442 +3361,6 @@ def download_paper(jid):
     return send_file(fp, as_attachment=True,
                      download_name=f'rdxper_{slug}.docx',
                      mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
-
-
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  AI LEGAL DRAFTING
-# ═══════════════════════════════════════════════════════════════════════════════
-
-RDXPER_WATERMARK_TEXT = 'RDXper - A Rakunatha Khrishanth Manathra Creation'
-
-
-def add_watermark(doc, text: str = RDXPER_WATERMARK_TEXT):
-    """Insert a diagonal, semi-transparent watermark into the header of every
-    section (the classic Word VML watermark technique), plus a small text
-    credit line in the footer as a reliable fallback for viewers that don't
-    render VML shapes."""
-    from docx.enum.text import WD_ALIGN_PARAGRAPH as _ALIGN
-
-    from docx.oxml import parse_xml
-    import xml.sax.saxutils as _sax
-
-    safe_text = _sax.escape(text, {'"': '&quot;'})
-
-    watermark_xml = (
-        '<w:pict xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
-        'xmlns:v="urn:schemas-microsoft-com:vml" '
-        'xmlns:o="urn:schemas-microsoft-com:office:office">'
-        '<v:shapetype id="_x0000_t136" coordsize="1600,21600" o:spt="136" adj="10800" '
-        'path="m@7,0l@8,0m@5,21600l@6,21600e">'
-        '<v:formulas>'
-        '<v:f eqn="sum #0 0 10800"/><v:f eqn="prod #0 2 1"/><v:f eqn="sum 21600 0 #0"/>'
-        '<v:f eqn="sum 0 0 #1"/><v:f eqn="prod #1 2 1"/><v:f eqn="sum 21600 0 #1"/>'
-        '<v:f eqn="if #0 #3 0"/><v:f eqn="if #0 21600 #1"/><v:f eqn="if #3 21600 #2"/>'
-        '<v:f eqn="if #3 #1 21600"/><v:f eqn="mid #4 #5"/><v:f eqn="mid #6 #7"/><v:f eqn="val #0"/>'
-        '</v:formulas>'
-        '<v:path textpathok="t" o:connecttype="custom" '
-        'o:connectlocs="@9,0;@10,10800;@9,21600;@8,10800" o:connectangles="270,180,90,0"/>'
-        '<v:textpath on="t" fitshape="t"/>'
-        '</v:shapetype>'
-        '<v:shape id="RDXperWatermark" o:spid="_x0000_s2049" type="#_x0000_t136" '
-        'style="position:absolute;margin-left:0;margin-top:0;width:520pt;height:110pt;'
-        'rotation:315;z-index:-251654144;mso-position-horizontal:center;'
-        'mso-position-horizontal-relative:margin;mso-position-vertical:center;'
-        'mso-position-vertical-relative:margin" o:allowincell="f" fillcolor="#D8D8D8" stroked="f">'
-        '<v:fill opacity=".45"/>'
-        f'<v:textpath style="font-family:\'Calibri\';font-size:1pt" string="{safe_text}"/>'
-        '</v:shape>'
-        '</w:pict>'
-    )
-
-    for section in doc.sections:
-        # ── Diagonal watermark shape in the header ──────────────────────────
-        header = section.header
-        header.is_linked_to_previous = False
-        h_para = header.paragraphs[0] if header.paragraphs else header.add_paragraph()
-        h_para.text = ''
-        h_para.alignment = _ALIGN.CENTER
-        run = h_para.add_run()
-        r_el = run._r
-        pict = parse_xml(watermark_xml)
-        r_el.append(pict)
-
-        # ── Small credit line in the footer (reliable fallback) ────────────
-        footer = section.footer
-        footer.is_linked_to_previous = False
-        f_para = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
-        f_para.text = ''
-        f_para.alignment = _ALIGN.CENTER
-        f_run = f_para.add_run(text)
-        f_run.font.size = Pt(8)
-        f_run.font.color.rgb = RGBColor(0xA0, 0xA0, 0xA0)
-        f_run.italic = True
-
-
-def build_ai_legal_docx(doc_type: str, ai_text: str) -> str:
-    """Convert the AI-drafted plain-text legal document into a formatted,
-    watermarked .docx file."""
-    doc = Document()
-    for sec in doc.sections:
-        sec.page_width    = Inches(8.5)
-        sec.page_height   = Inches(11)
-        sec.top_margin    = Inches(1)
-        sec.bottom_margin = Inches(1)
-        sec.left_margin   = Inches(1.25)
-        sec.right_margin  = Inches(1.25)
-
-    TNR = 'Times New Roman'
-    lines = [ln.rstrip() for ln in ai_text.strip().split('\n')]
-
-    numbered_re   = re.compile(r'^\s*(\d{1,3})[\.\)]\s+(.*)$')
-    title_written = False
-
-    for ln in lines:
-        stripped = ln.strip()
-        if not stripped:
-            continue
-        # Skip stray markdown fences/asterisked bold markers from the LLM
-        clean = stripped.strip('#').strip()
-        clean = re.sub(r'^\*\*(.*)\*\*$', r'\1', clean).strip()
-        clean = clean.lstrip('*').strip()
-        if not clean:
-            continue
-
-        m = numbered_re.match(clean)
-        if not title_written and not m:
-            p = doc.add_paragraph()
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p.paragraph_format.space_after = Pt(16)
-            r = p.add_run(clean.upper())
-            r.bold = True; r.font.size = Pt(16); r.font.name = TNR
-            title_written = True
-            continue
-
-        if m:
-            num, body = m.group(1), m.group(2)
-            p = doc.add_paragraph()
-            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            p.paragraph_format.space_before = Pt(4)
-            p.paragraph_format.space_after  = Pt(4)
-            p.paragraph_format.left_indent  = Inches(0.5)
-            p.paragraph_format.first_line_indent = Inches(-0.5)
-            r_num = p.add_run(f'{num}.  ')
-            r_num.bold = True; r_num.font.size = Pt(12); r_num.font.name = TNR
-            r_body = p.add_run(body)
-            r_body.font.size = Pt(12); r_body.font.name = TNR
-        elif clean.isupper() and len(clean) < 80:
-            # Section heading in caps, e.g. "WITNESSETH", "THE SCHEDULE"
-            p = doc.add_paragraph()
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p.paragraph_format.space_before = Pt(10)
-            p.paragraph_format.space_after  = Pt(8)
-            r = p.add_run(clean)
-            r.bold = True; r.font.size = Pt(13); r.font.name = TNR
-        else:
-            p = doc.add_paragraph()
-            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            p.paragraph_format.space_before = Pt(6)
-            p.paragraph_format.space_after  = Pt(6)
-            r = p.add_run(clean)
-            r.font.size = Pt(12); r.font.name = TNR
-
-    add_watermark(doc, RDXPER_WATERMARK_TEXT)
-
-    os.makedirs('generated', exist_ok=True)
-    safe = re.sub(r'[^\w\-]', '_', (doc_type or 'Legal_Draft')[:40]) or 'Legal_Draft'
-    out  = os.path.abspath(f'generated/{safe}_{uuid.uuid4().hex[:8]}.docx')
-    doc.save(out)
-    return out
-
-
-def extract_text_from_upload(file_storage) -> str:
-    """Extract plain text from an uploaded .docx or .txt reference format file."""
-    filename = (file_storage.filename or '').lower()
-    if filename.endswith('.docx'):
-        tmp_path = os.path.abspath(f'generated/_upload_{uuid.uuid4().hex[:8]}.docx')
-        os.makedirs('generated', exist_ok=True)
-        file_storage.save(tmp_path)
-        try:
-            src = Document(tmp_path)
-            text = '\n'.join(p.text for p in src.paragraphs if p.text.strip())
-            for tbl in src.tables:
-                for row in tbl.rows:
-                    text += '\n' + ' | '.join(c.text for c in row.cells)
-            return text
-        finally:
-            try: os.remove(tmp_path)
-            except OSError: pass
-    elif filename.endswith('.txt'):
-        raw = file_storage.read()
-        try:
-            return raw.decode('utf-8')
-        except UnicodeDecodeError:
-            return raw.decode('latin-1', errors='ignore')
-    else:
-        raise ValueError('Unsupported file type — please upload a .docx or .txt file.')
-
-
-def ai_draft_legal_document(doc_type: str, details: str, reference_text: str = '') -> str:
-    """Call the AI model to draft a full legal document as plain text."""
-    system = (
-        'You are an expert legal drafter. Draft complete, professional, ready-to-use legal '
-        'documents in plain text (no markdown, no asterisks, no code fences). '
-        'Structure: a centred ALL-CAPS title on the first line, then the preamble/recitals '
-        'as plain paragraphs, then the operative clauses as a numbered list ("1. ", "2. ", ...), '
-        'and finally a signature block. Use precise, formal legal language appropriate for the '
-        'jurisdiction implied by the details given. Do not include any commentary, explanations, '
-        'or notes outside the document itself — output ONLY the document text.'
-    )
-    if reference_text:
-        prompt = (
-            f'Use the following document as the FORMAT/STRUCTURE reference — follow its layout, '
-            f'clause structure and drafting style closely, but replace all names, dates, amounts '
-            f'and other details with the DATA provided below. Fill in any gaps sensibly.\n\n'
-            f'--- FORMAT REFERENCE ---\n{reference_text[:6000]}\n\n'
-            f'--- DATA TO USE ---\n{details}\n\n'
-            f'Now produce the complete final document text.'
-        )
-    else:
-        prompt = (
-            f'Draft a "{doc_type}" document using the following details and data:\n\n'
-            f'{details}\n\n'
-            f'Produce the complete, professional, ready-to-use document text.'
-        )
-    return ai_generate(prompt, system=system, temperature=0.4)
-
-
-@app.route('/api/legal/generate', methods=['POST'])
-def gen_ai_legal_draft():
-    tok = request.headers.get('Authorization', '').replace('Bearer ', '')
-    sess = session_get(tok)
-    if not sess:
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
-
-    if not os.environ.get('GROQ_API_KEY', '').strip():
-        return jsonify({'success': False,
-                        'message': 'GROQ_API_KEY not set. Get a free key at https://console.groq.com'}), 400
-
-    is_multipart = request.content_type and 'multipart/form-data' in request.content_type
-    mode = (request.form.get('mode') if is_multipart else (request.json or {}).get('mode')) or 'custom'
-
-    try:
-        if mode == 'format':
-            details = (request.form.get('details') or '').strip()
-            if not details:
-                return jsonify({'success': False, 'message': 'Please provide the data to fill into the format.'}), 400
-            file_storage = request.files.get('format_file')
-            if not file_storage or not file_storage.filename:
-                return jsonify({'success': False, 'message': 'Please upload a format/sample document.'}), 400
-            reference_text = extract_text_from_upload(file_storage)
-            doc_type = 'Legal Draft'
-            ai_text = ai_draft_legal_document(doc_type, details, reference_text=reference_text)
-        else:
-            data = request.json or {}
-            doc_type = (data.get('doc_type') or '').strip()
-            details  = (data.get('details') or '').strip()
-            if not doc_type or not details:
-                return jsonify({'success': False, 'message': 'Please provide the document type and details.'}), 400
-            ai_text = ai_draft_legal_document(doc_type, details)
-
-        path = build_ai_legal_docx(doc_type, ai_text)
-        jid  = uuid.uuid4().hex
-        jobs[jid] = {'status': 'done', 'file_path': path, 'topic': doc_type}
-        return jsonify({'success': True, 'job_id': jid})
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  LEGAL DRAFTING — TRADEMARK LICENSE GENERATOR (legacy structured template,
-#  still available programmatically via /api/legal/trademark-license)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def build_trademark_license_docx(data: dict) -> str:
-    """Generate a Licence to Use Trade Mark agreement as a .docx file."""
-    from docx import Document
-    from docx.shared import Inches, Pt, RGBColor
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-
-    doc = Document()
-    for sec in doc.sections:
-        sec.page_width    = Inches(8.5)
-        sec.page_height   = Inches(11)
-        sec.top_margin    = Inches(1)
-        sec.bottom_margin = Inches(1)
-        sec.left_margin   = Inches(1.25)
-        sec.right_margin  = Inches(1.25)
-
-    TNR = 'Times New Roman'
-
-    def para(text, bold=False, sz=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY, sp_b=6, sp_a=6, center=False):
-        p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.CENTER if center else align
-        p.paragraph_format.space_before = Pt(sp_b)
-        p.paragraph_format.space_after  = Pt(sp_a)
-        r = p.add_run(text)
-        r.bold = bold
-        r.font.size = Pt(sz)
-        r.font.name = TNR
-        return p
-
-    def clause(number, text, sp_b=4, sp_a=4):
-        p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-        p.paragraph_format.space_before = Pt(sp_b)
-        p.paragraph_format.space_after  = Pt(sp_a)
-        p.paragraph_format.left_indent  = Inches(0.5)
-        p.paragraph_format.first_line_indent = Inches(-0.5)
-        r_num = p.add_run(f'{number}.  ')
-        r_num.bold = True
-        r_num.font.size = Pt(12)
-        r_num.font.name = TNR
-        r_body = p.add_run(text)
-        r_body.font.size = Pt(12)
-        r_body.font.name = TNR
-        return p
-
-    # ── Title ──────────────────────────────────────────────────────────────────
-    para('LICENCE TO USE TRADE MARK', bold=True, sz=16, center=True, sp_b=0, sp_a=16)
-
-    # ── Preamble ───────────────────────────────────────────────────────────────
-    deed_date   = data.get('deed_date', '').strip()
-    if not deed_date:
-        from datetime import datetime
-        deed_date = datetime.now().strftime('%-d %B %Y')  # e.g. "7 April 2026"
-    licensor_name = data.get('licensor_name', '[Licensor Name]')
-    licensee_name = data.get('licensee_name', '[Licensee Name]')
-    trademark     = data.get('trademark', '[TRADE MARK]')
-    goods_services= data.get('goods_services', '[goods/services]')
-    territory     = data.get('territory', '[Territory]')
-    licence_fee_pct = data.get('licence_fee_pct', '10')
-    # Auto-filled / boilerplate — not collected from user
-    payment_dates = '30th June and 31st December'
-    notice_period = '3'
-
-    preamble = (
-        f'THIS DEED OF LICENCE is made on this {deed_date} between {licensor_name}, '
-        f'hereinafter called the LICENSOR (which term shall unless excluded '
-        f'by or repugnant to the context include its successors and assigns) of the one part '
-        f'and {licensee_name}, '
-        f'hereinafter referred to as the LICENSEE (which term '
-        f'shall unless excluded by or repugnant to the context include its permitted nominees) '
-        f'of the other part.'
-    )
-    para(preamble, sp_b=0, sp_a=10)
-
-    recitals = [
-        (f'WHEREAS the LICENSOR is the manufacturer of and dealer in {goods_services} and holds '
-         f'the registered Trade Mark {trademark} in respect of {goods_services}.'),
-        (f'AND WHEREAS the LICENSOR intends to expand its business and sell its products under its '
-         f'Trade Mark in {territory}.'),
-        (f'AND WHEREAS the LICENSEE has a manufacturing/trading unit to deal in {goods_services}.'),
-        (f'AND WHEREAS the LICENSEE has approached the LICENSOR to grant licence to use the '
-         f"LICENSOR's Trade Mark {trademark} for sale of the products/services of the LICENSEE."),
-        (f'AND WHEREAS the LICENSOR has agreed to allow the LICENSEE to use its said Trade Mark '
-         f'{trademark} to sell/provide the LICENSEE\'s {goods_services} on certain terms and conditions.'),
-    ]
-    for rec in recitals:
-        para(rec, sp_b=4, sp_a=4)
-
-    para('NOW THEREFORE THESE PRESENTS witnesseth and the parties hereby agree as follows:', bold=True, sp_b=10, sp_a=8)
-
-    clauses = [
-        (1, f'The LICENSOR hereby doth grant to the LICENSEE non-exclusive right to use the '
-            f"LICENSOR's Trade Mark {trademark} in {territory} for sale/provision of its "
-            f'{goods_services} under the Trade Name {trademark}.'),
-        (2, f'The use of the Trade Mark by the LICENSEE shall be confined only to the items/services '
-            f'that may be manufactured or provided by the LICENSEE at its own premises or through '
-            f'its authorised channels. The LICENSEE shall pay half-yearly to the LICENSOR a licence '
-            f'fee at the rate of {licence_fee_pct}% on the turnover of business of the LICENSEE, '
-            f'such payment to be made by {payment_dates} every year.'),
-        (3, f'The LICENSEE shall comply with the requirements and provisions of all laws, rules and '
-            f'regulations in relation to the manufacture, sale or provision of {goods_services} '
-            f'under the said Trade Mark of the LICENSOR.'),
-        (4, f'The LICENSEE shall manufacture and sell/provide {goods_services} under the said Trade '
-            f'Mark {trademark} in accordance with the specifications, make-up, brand and packing that '
-            f'the LICENSOR may from time to time intimate to the LICENSEE.'),
-        (5, f"The LICENSOR shall have access to the LICENSEE's manufacturing/service unit and to "
-            f"inspect the LICENSEE's books of accounts and other records at all reasonable times on "
-            f'giving prior notice.'),
-        (6, f'The LICENSEE agrees, declares and covenants not to use the said Trade Mark or advertise '
-            f'or publish in newspapers, journals, labels or any other documents or packages or do '
-            f'anything having the effect of diluting the distinctiveness of the Trade Mark of the '
-            f'LICENSOR. The LICENSEE shall give indications either visually or phonetically to the '
-            f'purchasing public that the LICENSEE is using the Trade Mark {trademark} as the licensee '
-            f'of the LICENSOR.'),
-        (7, f'The LICENSEE undertakes to compensate the LICENSOR and keep the LICENSOR harmless from '
-            f'and indemnified against all claims, proceedings, losses, costs and expenses for any '
-            f'wilful or negligent conduct of the LICENSEE in relation to the use of the Trade Mark '
-            f'of the LICENSOR.'),
-        (8, f'The LICENSEE shall not acquire any right of registration of the Trade Mark by virtue '
-            f'of the LICENSEE manufacturing, selling or providing {goods_services} as user of the '
-            f'Trade Mark {trademark} for any number of years or after termination of the licence or otherwise.'),
-        (9, f"The LICENSEE shall inform the LICENSOR of any infringement of the LICENSOR's Trade "
-            f'Mark {trademark} with particulars of the infringement or passing off and the names and '
-            f'addresses of the offenders.'),
-        (10, f'The LICENSOR shall take and/or permit the LICENSEE to take all possible legal steps '
-             f'for the protection and preservation of the Trade Mark and prevention of its '
-             f'infringement or passing off by any person.'),
-        (11, f'This agreement is terminable by giving {notice_period} months\' notice from either side.'),
-        (12, f'In any legal proceedings or in any action against the infringement or passing off in '
-             f'relation to the Trade Mark of the goods/services covered by the Licence, the LICENSEE '
-             f'will take appropriate steps to protect the interests of the LICENSOR and allow the '
-             f'LICENSOR to take any legal action or steps and to join the LICENSEE as a party therein.'),
-    ]
-    for num, text in clauses:
-        clause(num, text)
-
-    # ── Signature block ────────────────────────────────────────────────────────
-    para('', sp_b=8, sp_a=0)
-    para('THE SCHEDULE', bold=True, center=True, sp_b=8, sp_a=8)
-    para('IN WITNESS WHEREOF the parties herein have executed these presents on the day, month and '
-         'year first above-written.', sp_b=0, sp_a=16)
-
-    para('Signed, sealed and delivered by', sp_b=0, sp_a=4)
-    para(f'The authorised representative of {licensor_name} in the presence of:', sp_b=0, sp_a=12)
-
-    sig_p = doc.add_paragraph()
-    sig_p.paragraph_format.space_before = Pt(8)
-    sig_p.paragraph_format.space_after  = Pt(4)
-    tab = sig_p.paragraph_format.tab_stops
-    r1 = sig_p.add_run('1. ________________________')
-    r1.font.name = TNR; r1.font.size = Pt(12)
-    r1 = sig_p.add_run('\t\t\tSignature: ________________________')
-    r1.font.name = TNR; r1.font.size = Pt(12)
-
-    sig_p2 = doc.add_paragraph()
-    sig_p2.paragraph_format.space_before = Pt(8)
-    sig_p2.paragraph_format.space_after  = Pt(4)
-    r2 = sig_p2.add_run('2. ________________________')
-    r2.font.name = TNR; r2.font.size = Pt(12)
-    r2b = sig_p2.add_run('\t\t\tDate: ________________________')
-    r2b.font.name = TNR; r2b.font.size = Pt(12)
-
-    os.makedirs('generated', exist_ok=True)
-    safe = re.sub(r'[^\w\-]', '_', f'TM_Licence_{licensor_name[:25]}')
-    out  = os.path.abspath(f'generated/{safe}_{uuid.uuid4().hex[:8]}.docx')
-    doc.save(out)
-    return out
-
-
-@app.route('/api/legal/trademark-license', methods=['POST'])
-def gen_trademark_license():
-    tok = request.headers.get('Authorization', '').replace('Bearer ', '')
-    sess = session_get(tok)
-    if not sess:
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
-    data = request.json or {}
-    try:
-        path = build_trademark_license_docx(data)
-        jid  = uuid.uuid4().hex
-        jobs[jid] = {'status': 'done', 'file_path': path, 'topic': 'Trademark License Agreement'}
-        return jsonify({'success': True, 'job_id': jid})
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        return jsonify({'success': False, 'message': str(e)}), 500
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
