@@ -594,23 +594,43 @@ def resolve_demographic(raw: str):
 
 
 def sparse_percent_matrix(rng: random.Random, n_groups: int, n_series: int) -> list:
-    """Build a groups × series percentage matrix that sums to ~100%, with only
-    a handful of nonzero cells per group (and some groups left empty) — this
-    mirrors how a real SPSS crosstab of a convenience sample looks, rather
-    than an evenly-filled synthetic grid."""
-    weights = [[0.0] * n_series for _ in range(n_groups)]
+    """Build a groups × series percentage matrix that mirrors a genuine SPSS
+    row-percent crosstab (pandas' `normalize="index"`, the same math used for
+    real uploaded data in va_make_bar_chart): each demographic group's active
+    response options sum to ~100% *within that row*, with only a handful of
+    nonzero cells per group and some groups left empty entirely.
+
+    Previously this normalized across the WHOLE matrix at once, so with
+    several groups the total 100% got divided up between all of them —
+    individual bars ended up in the low single digits, which doesn't match
+    how a real crosstab looks (each demographic slice sums to 100% on its
+    own) and rendered as tiny, hard-to-read bars."""
+    matrix = [[0.0] * n_series for _ in range(n_groups)]
+    # Cap how many groups can come up empty (rather than an independent coin
+    # flip per group) so a 5-group chart doesn't randomly end up with only
+    # one or two populated bars — real crosstabs occasionally have a
+    # negligible-turnout category, but not most of them.
+    max_empty = max(0, (n_groups - 2) // 3) if n_groups > 2 else 0
+    empty_groups = set(rng.sample(range(n_groups), rng.randint(0, max_empty))) if max_empty else set()
     any_active = False
     for g in range(n_groups):
-        if n_groups > 2 and rng.random() < 0.18:
+        if g in empty_groups:
             continue  # this demographic category had zero/negligible respondents
-        k = rng.randint(1, min(3, n_series))
-        for i in rng.sample(range(n_series), k):
-            weights[g][i] = rng.uniform(8, 32)
-            any_active = True
+        # At least 2 response options per active group (when available) so a
+        # row never collapses into a single unrealistic 100% spike — real
+        # respondents in a group virtually always split across options.
+        lo = min(2, n_series)
+        hi = min(4, n_series)
+        k = rng.randint(lo, hi) if hi >= lo else n_series
+        idx = rng.sample(range(n_series), k)
+        raw = [rng.uniform(3, 10) for _ in idx]
+        row_total = sum(raw) or 1.0
+        for i, v in zip(idx, raw):
+            matrix[g][i] = round(v / row_total * 100, 2)
+        any_active = True
     if not any_active:
-        weights[rng.randrange(n_groups)][rng.randrange(n_series)] = 20.0
-    total = sum(sum(row) for row in weights) or 1.0
-    return [[round(v / total * 100, 2) for v in row] for row in weights]
+        matrix[rng.randrange(n_groups)][rng.randrange(n_series)] = 100.0
+    return matrix
 
 
 def _make_spec(question: str, xvar: str, groups: list, series: list, matrix: list) -> dict:
@@ -1283,7 +1303,11 @@ def va_make_bar_chart(df, iv, dv):
     if rotate:
         fig_h += 0.6
 
-    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=80)
+    # dpi=80 previously — far too low to stay crisp once printed at a
+    # readable size in the document; 200 keeps text/labels sharp instead of
+    # blurry/pixelated when the chart is displayed larger (see picture
+    # insertion fix below).
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=200)
     try:
         fig.patch.set_facecolor("white")
         ax.set_facecolor(VA_SPSS_BG)
@@ -1348,7 +1372,7 @@ def va_make_bar_chart(df, iv, dv):
         plt.tight_layout()
 
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
+        fig.savefig(buf, format="png", dpi=200, bbox_inches="tight", facecolor="white")
         buf.seek(0)
         return buf.getvalue(), ct
     finally:
@@ -1676,6 +1700,45 @@ def make_chart(spec: dict) -> io.BytesIO:
 #  DOCX BUILDER
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _png_pixel_size(png_bytes: bytes):
+    """Read (width_px, height_px) straight out of a PNG's IHDR chunk — no
+    Pillow dependency needed, just the fixed PNG header layout."""
+    import struct
+    if not png_bytes or png_bytes[:8] != b'\x89PNG\r\n\x1a\n':
+        return None
+    try:
+        w, h = struct.unpack('>II', png_bytes[16:24])
+        return (w, h) if w and h else None
+    except Exception:
+        return None
+
+
+def _docx_picture_width(png_bytes: bytes, page_width_in: float = 6.27,
+                         max_height_in: float = 7.5, min_width_in: float = 4.4) -> Inches:
+    """Pick a display width for a chart image based on its own aspect ratio,
+    instead of forcing every chart to a single fixed width.
+
+    Previously every figure — whether a simple 2-category chart or a wide
+    clustered SPSS chart with a 10-item legend — was squeezed into the same
+    3.2" box. python-docx preserves the aspect ratio when only a width is
+    given, so a wide/short chart at 3.2" wide came out only ~1" tall: bar
+    labels, axis text and the legend became illegibly small. This instead
+    fills as much of the usable page width (8.27" A4 minus 1" margins each
+    side = 6.27") as the chart's own proportions allow, capped so a
+    tall/narrow chart never runs off the bottom of the page, and never
+    shrunk below a size where text stays readable."""
+    dims = _png_pixel_size(png_bytes)
+    if not dims:
+        return Inches(6.0)
+    px_w, px_h = dims
+    aspect_h_over_w = px_h / px_w
+    width_in = page_width_in
+    if width_in * aspect_h_over_w > max_height_in:
+        width_in = max_height_in / aspect_h_over_w
+    width_in = max(width_in, min(min_width_in, page_width_in))
+    return Inches(round(width_in, 2))
+
+
 def _set_cell_bg(cell, color: str):
     tc  = cell._tc
     pr  = tc.get_or_add_tcPr()
@@ -1998,12 +2061,16 @@ class DocBuilder:
             r_lbl = p_lbl.add_run(f'FIGURE {fig_num}:')
             r_lbl.bold = True; r_lbl.font.size = Pt(12); r_lbl.font.name = TNR
 
-            # Chart image — centered, ~3.2" wide matching sample dimensions
+            # Chart image — centered, sized to fill the usable page width
+            # while respecting this chart's own aspect ratio (see
+            # _docx_picture_width) so bars/labels/legend stay readable
+            # instead of being crushed into a fixed 3.2" thumbnail.
+            png_bytes = buf.getvalue()
             p_img = doc.add_paragraph()
             p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
             p_img.paragraph_format.space_before = Pt(0)
             p_img.paragraph_format.space_after  = Pt(4)
-            p_img.add_run().add_picture(buf, width=Inches(3.20))
+            p_img.add_run().add_picture(buf, width=_docx_picture_width(png_bytes))
 
             # LEGEND: bold label + normal description text — same paragraph
             p_leg = doc.add_paragraph()
