@@ -195,6 +195,21 @@ _GROQ_PREFERRED_MODELS = [
     "openai/gpt-oss-20b",
 ]
 
+# Reasoning-capable models (openai/gpt-oss-*, deepseek-r1 distills, qwen3,
+# etc.) think out loud before answering. Unless told otherwise, Groq's
+# default is to include that chain-of-thought/planning text inline in the
+# same `content` field as the final answer — and that text often echoes our
+# own prompt instructions back (e.g. mentions "<abstract>" while discussing
+# the format), which could get mistaken by the tag-extraction regex below
+# for real section content. For these models we explicitly hide reasoning
+# so `content` only ever contains the final answer.
+_REASONING_MODEL_MARKERS = ("gpt-oss", "deepseek-r1", "deepseek-reasoner", "qwen3", "reasoning")
+
+
+def _is_reasoning_model(model_id: str) -> bool:
+    m = (model_id or "").lower()
+    return any(marker in m for marker in _REASONING_MODEL_MARKERS)
+
 
 def _get_groq_models(api_key, requests_module):
     """Return active Groq models visible to the current API key/project."""
@@ -255,6 +270,47 @@ def _select_groq_models(api_key, requests_module):
     return list(dict.fromkeys(selected)), discovery_error
 
 
+def _strip_think_blocks(text: str) -> str:
+    """Strip any <think>...</think> / <reasoning>...</reasoning> wrapper some
+    models add around chain-of-thought even when not asked to — belt-and-
+    suspenders alongside the reasoning_format='hidden' request above."""
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<reasoning>.*?</reasoning>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    return text.strip()
+
+
+_LEAK_MARKERS = (
+    'deconstruct', 'let me ', 'i need to', 'the prompt says', 'i should',
+    'count rigorously', 'count meticulously', "here's the plan", 'plan:',
+    'exactly 250 words', 'no more, no fewer', 'target exactly',
+    'begin with 2 sentences', 'constraints & plan', 'constraints and plan',
+)
+
+
+def _looks_like_leaked_reasoning(text: str) -> bool:
+    """Defense-in-depth guard for the tag-extraction below: catches cases
+    where a reasoning model's planning/chain-of-thought — which often
+    echoes our own prompt instructions back, sometimes even mentioning our
+    XML tag names — gets captured by the regex as if it were real section
+    content. Genuine academic prose never contains meta-commentary about
+    word counts or the prompt itself, so any of these markers is a reliable
+    tell that we grabbed the wrong text."""
+    if not text:
+        return False
+    low = text.lower()
+    if any(marker in low for marker in _LEAK_MARKERS):
+        return True
+    # Backtick-quoted tag mentions ("`<abstract>`") only ever show up when a
+    # model is talking ABOUT the tag format, never inside real prose.
+    if re.search(r'`\s*<\s*/?\s*[a-z_]+\s*>\s*`', low):
+        return True
+    # A numbered outline ("1. ... 2. ...") at the very start is planning,
+    # not the requested prose/keywords/objectives.
+    if re.match(r'^\s*\d+\s*[.\)]\s', text):
+        return True
+    return False
+
+
 def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
                 progress_cb=None, tracked_sections=None) -> str:
     """
@@ -302,6 +358,12 @@ def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
             "max_completion_tokens": 4096,
             "stream":      False,
         }
+        if _is_reasoning_model(model):
+            # Keep chain-of-thought out of `content` entirely (see marker
+            # comment above) and keep reasoning brief so it doesn't eat into
+            # the token budget meant for the actual section text.
+            payload["reasoning_format"] = "hidden"
+            payload["reasoning_effort"] = "low"
 
         # Retry up to 2 times on 429 with exponential backoff before giving up on this model
         for attempt in range(3):
@@ -368,6 +430,8 @@ def ai_generate(prompt: str, system: str = "", temperature: float = 0.7,
                 last_error = f"Unexpected shape from {model}: {e}"
                 print(f"[Groq] {last_error}")
                 break
+
+            text = _strip_think_blocks(text)
 
             if not text:
                 last_error = f"Empty content from {model}"
@@ -909,22 +973,27 @@ class GeminiWriter:
         # Parse Call A
         for tag in ('keywords', 'abstract', 'objectives'):
             m = re.search(rf'<{tag}>(.*?)</{tag}>', raw_A, re.DOTALL)
-            sections[tag] = m.group(1).strip() if m else ''
+            val = m.group(1).strip() if m else ''
+            sections[tag] = '' if _looks_like_leaked_reasoning(val) else val
 
         # Parse Call B
         m = re.search(r'<introduction>(.*?)</introduction>', raw_B, re.DOTALL)
-        sections['introduction'] = m.group(1).strip() if m else ''
+        val = m.group(1).strip() if m else ''
+        sections['introduction'] = '' if _looks_like_leaked_reasoning(val) else val
 
         # Parse Call C
         m = re.search(r'<literature_review>(.*?)</literature_review>', raw_C, re.DOTALL)
-        sections['literature_review'] = m.group(1).strip() if m else ''
+        val = m.group(1).strip() if m else ''
+        sections['literature_review'] = '' if _looks_like_leaked_reasoning(val) else val
         m_refs = re.search(r'<references>(.*?)</references>', raw_C, re.DOTALL)
-        sections['ai_references'] = m_refs.group(1).strip() if m_refs else ''
+        val_refs = m_refs.group(1).strip() if m_refs else ''
+        sections['ai_references'] = '' if _looks_like_leaked_reasoning(val_refs) else val_refs
 
         # Parse Call D
         for tag in ('methodology', 'results', 'discussion', 'limitations', 'suggestions', 'conclusion', 'charts'):
             m = re.search(rf'<{tag}>(.*?)</{tag}>', raw_D, re.DOTALL)
-            sections[tag] = m.group(1).strip() if m else ''
+            val = m.group(1).strip() if m else ''
+            sections[tag] = '' if _looks_like_leaked_reasoning(val) else val
 
         if progress_cb: progress_cb(74, "All sections written. Assembling Word document...")
 
