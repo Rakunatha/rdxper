@@ -1396,6 +1396,117 @@ def build_real_chart_specs(df, nfigs: int):
     return specs, charts
 
 
+# ── RESULT / DISCUSSION narrative generation (ported from app.py) ────────────
+# app.py (GraphGen Pro) writes a per-chart RESULT sentence and a per-chart
+# DISCUSSION sentence for every figure, each citing "(fig: N)". We reuse that
+# exact approach here for the research paper's RESULT/DISCUSSION sections —
+# it works identically whether self.specs came from real uploaded survey data
+# (Step 6 completed) or from the AI-simulated chart specs (Step 6 skipped),
+# since both share the same {groups, series, matrix} shape.
+
+def spec_top_pattern(spec: dict):
+    """Find the single group/category combination with the strongest
+    percentage in a chart spec — generalizes app.py's
+    `ct.max(axis=1).idxmax()` crosstab lookup to work on any spec's
+    groups x series percent matrix (real-data or AI-simulated)."""
+    groups = spec.get('groups') or []
+    series = spec.get('series') or []
+    matrix = spec.get('matrix') or []
+    best_group, best_cat, best_pct = None, None, -1.0
+    for gi, g in enumerate(groups):
+        row = matrix[gi] if gi < len(matrix) else []
+        for si, s in enumerate(series):
+            val = row[si] if si < len(row) else 0
+            if val and val > best_pct:
+                best_group, best_cat, best_pct = g, s, float(val)
+    if best_group is None:
+        return None, None, 0.0
+    return best_group, best_cat, best_pct
+
+
+def va_auto_result_sentence(spec: dict) -> str:
+    """Rule-based, offline 'Results'-style sentence for one chart (objective,
+    factual) — ported from app.py's auto_result_sentence, adapted to specs."""
+    dv = spec.get('question') or spec.get('title', 'this item')
+    iv = spec.get('xvar', 'the group')
+    top_group, top_cat, top_pct = spec_top_pattern(spec)
+    if top_group is None:
+        return f'The chart reports responses to \u201c{dv}\u201d across {iv} groups.'
+    return (f'According to the chart, {top_pct:.0f}% of {top_group} respondents selected '
+            f'\u201c{top_cat}\u201d for \u201c{dv}\u201d, the strongest single pattern across {iv} groups.')
+
+
+def va_auto_discussion_sentence(spec: dict) -> str:
+    """Rule-based, offline 'Discussion'-style sentence for one chart
+    (interpretive) — ported from app.py's auto_discussion_sentence."""
+    dv = spec.get('question') or spec.get('title', 'this item')
+    iv = spec.get('xvar', 'the group')
+    top_group, top_cat, top_pct = spec_top_pattern(spec)
+    if top_group is None:
+        return f'This points to a notable pattern in how {iv} groups responded to \u201c{dv}\u201d.'
+    return (f'This suggests {top_group} respondents feel most strongly about \u201c{dv}\u201d, '
+            f'with {top_pct:.0f}% converging on \u201c{top_cat}\u201d — a pattern worth weighing '
+            f'against the other {iv} groups shown.')
+
+
+def va_ai_chart_narrative(specs: list):
+    """One batched AI call that writes a Results-style and a Discussion-style
+    sentence per chart, in the same house style as app.py's
+    ai_generate_narrative — but using rdxper's own Groq REST helper
+    (ai_generate) instead of the `groq` SDK client app.py uses, since that's
+    the infra already wired up (model discovery, retries) in this file.
+    Returns (results_sentences, discussion_sentences) or None on any failure,
+    so the caller always has the rule-based sentences to fall back on."""
+    if not os.environ.get('GROQ_API_KEY', '').strip() or not specs:
+        return None
+
+    facts = []
+    for spec in specs:
+        top_group, top_cat, top_pct = spec_top_pattern(spec)
+        facts.append({
+            'iv': spec.get('xvar', ''),
+            'dv': spec.get('question', spec.get('title', '')),
+            'top_group':    top_group,
+            'top_category': top_cat,
+            'top_pct':      round(top_pct, 1) if top_group else None,
+        })
+
+    prompt = (
+        "You are writing the RESULT and DISCUSSION sections of an academic SPSS-style "
+        "survey report. Given the JSON chart_facts below (one entry per chart, in order), "
+        "respond with ONLY valid JSON (no markdown, no code fences) matching exactly this "
+        'shape:\n{"results_sentences": ["...", ...], "discussion_sentences": ["...", ...]}\n\n'
+        "Rules:\n"
+        "- Each list must have exactly one string per item in chart_facts, in the same order.\n"
+        "- results_sentences: an objective 1-2 sentence description of that chart's data "
+        "(cite the concrete top_group/top_category/top_pct). Do not add a figure citation "
+        "yourself — it is appended automatically afterward.\n"
+        "- discussion_sentences: a more interpretive 1-2 sentence take on what that chart's "
+        "pattern suggests. Do not add a citation.\n"
+        "- Do not invent numbers not present in the facts.\n\n"
+        f"chart_facts = {json.dumps(facts)}\n"
+    )
+    try:
+        raw = ai_generate(
+            prompt,
+            system="You write precise, concise, factual survey-analysis report sentences. "
+                   "Output strict JSON only.",
+            temperature=0.4,
+        ).strip()
+        if raw.startswith('```'):
+            raw = re.sub(r'^```[a-zA-Z]*\n?', '', raw)
+            raw = re.sub(r'```\s*$', '', raw).strip()
+        data    = json.loads(raw)
+        results = data.get('results_sentences')
+        discuss = data.get('discussion_sentences')
+        if (isinstance(results, list) and len(results) == len(specs)
+                and isinstance(discuss, list) and len(discuss) == len(specs)):
+            return results, discuss
+    except Exception as e:
+        print(f'[Visual analysis] AI narrative failed ({e}) — using rule-based sentences')
+    return None
+
+
 # In-memory store for uploaded survey files awaiting a /api/generate call.
 # One-time use: consumed (popped) as soon as generation starts.
 SURVEY_UPLOADS = {}
@@ -1407,6 +1518,7 @@ MAX_SURVEY_UPLOADS = 20
 # ═══════════════════════════════════════════════════════════════════════════════
 #  CHART RENDERING  (matplotlib SPSS-style)
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 # Default SPSS categorical palette, in legend order (1..10 / Strongly agree..Strongly disagree / etc.)
 SPSS_COLORS = [
@@ -1990,55 +2102,87 @@ class DocBuilder:
             )
 
         # ── RESULT ────────────────────────────────────────────────────────────
+        # Per-chart RESULT sentence for every figure — same approach as
+        # app.py (GraphGen Pro): one batched AI call for all charts at once,
+        # falling back to rule-based sentences if that call is unavailable.
+        # Works identically whether self.specs came from real uploaded survey
+        # data (Step 6 completed) or AI-simulated specs (Step 6 skipped).
         sec_head('RESULT', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
-        import re as _re_res
-        results_raw = self.sections.get('results', '').strip()
-        if results_raw:
-            # Results is ONE paragraph with inline **(fig: N)** markers — render with bold refs
+        narrative      = va_ai_chart_narrative(self.specs) if self.specs else None
+        ai_results, ai_discussion = narrative if narrative else (None, None)
+
+        if self.specs:
             p_res = doc.add_paragraph()
             p_res.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
             p_res.paragraph_format.space_before = Pt(12)
             p_res.paragraph_format.space_after  = Pt(0)
-            # Split on **(fig: N)** markers so we can bold them
-            segs = _re_res.split(r'(\*\*\(fig:\s*\d+\)\*\*)', results_raw)
-            for seg in segs:
-                if _re_res.match(r'\*\*\(fig:\s*\d+\)\*\*', seg):
-                    # Bold the (fig: N) reference, strip the ** markers
-                    ref_text = seg[2:-2]  # strip leading ** and trailing **
-                    r = p_res.add_run(ref_text)
-                    r.bold = True
-                else:
-                    r = p_res.add_run(seg)
-                    r.bold = False
-                r.font.size = Pt(12); r.font.name = TNR
+            for idx, spec in enumerate(self.specs, start=1):
+                sentence = (ai_results[idx - 1] if ai_results else va_auto_result_sentence(spec))
+                r1 = p_res.add_run(sentence.strip() + ' ')
+                r1.bold = False; r1.font.size = Pt(12); r1.font.name = TNR
+                r2 = p_res.add_run(f'(fig: {idx}) ')
+                r2.bold = True; r2.font.size = Pt(12); r2.font.name = TNR
+        else:
+            import re as _re_res
+            results_raw = self.sections.get('results', '').strip()
+            if results_raw:
+                # Results is ONE paragraph with inline **(fig: N)** markers — render with bold refs
+                p_res = doc.add_paragraph()
+                p_res.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+                p_res.paragraph_format.space_before = Pt(12)
+                p_res.paragraph_format.space_after  = Pt(0)
+                # Split on **(fig: N)** markers so we can bold them
+                segs = _re_res.split(r'(\*\*\(fig:\s*\d+\)\*\*)', results_raw)
+                for seg in segs:
+                    if _re_res.match(r'\*\*\(fig:\s*\d+\)\*\*', seg):
+                        # Bold the (fig: N) reference, strip the ** markers
+                        ref_text = seg[2:-2]  # strip leading ** and trailing **
+                        r = p_res.add_run(ref_text)
+                        r.bold = True
+                    else:
+                        r = p_res.add_run(seg)
+                        r.bold = False
+                    r.font.size = Pt(12); r.font.name = TNR
 
         # ── DISCUSSION ────────────────────────────────────────────────────────
         sec_head('DISCUSSION', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
-        import re as _re_disc
-        for para in self.sections.get('discussion', '').split('\n\n'):
-            para = para.strip()
-            if not para:
-                continue
-            # Strip any leading "FIGURE N" opener the AI may still produce
-            para = _re_disc.sub(r'^FIGURE\s+\d+[\.\:]?\s*', '', para, flags=_re_disc.IGNORECASE)
-            # Split off a trailing **(fig: N)** or (fig: N) reference to bold it
-            m_ref = _re_disc.search(r'(\*\*\(fig:\s*\d+\)\*\*|\(fig:\s*\d+\))\s*$', para)
-            p = doc.add_paragraph()
-            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            p.paragraph_format.space_before = Pt(12)
-            p.paragraph_format.space_after  = Pt(0)
-            if m_ref:
-                body_text = para[:m_ref.start()].rstrip()
-                ref_raw   = m_ref.group(1)
-                # Strip ** markers if present
-                ref_text  = _re_disc.sub(r'\*\*', '', ref_raw)
-                r1 = p.add_run(body_text + ' ')
+        if self.specs:
+            p_disc = doc.add_paragraph()
+            p_disc.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            p_disc.paragraph_format.space_before = Pt(12)
+            p_disc.paragraph_format.space_after  = Pt(0)
+            for idx, spec in enumerate(self.specs, start=1):
+                sentence = (ai_discussion[idx - 1] if ai_discussion else va_auto_discussion_sentence(spec))
+                r1 = p_disc.add_run(sentence.strip() + ' ')
                 r1.bold = False; r1.font.size = Pt(12); r1.font.name = TNR
-                r2 = p.add_run(ref_text)
+                r2 = p_disc.add_run(f'(fig: {idx}) ')
                 r2.bold = True; r2.font.size = Pt(12); r2.font.name = TNR
-            else:
-                r = p.add_run(para)
-                r.bold = False; r.font.size = Pt(12); r.font.name = TNR
+        else:
+            import re as _re_disc
+            for para in self.sections.get('discussion', '').split('\n\n'):
+                para = para.strip()
+                if not para:
+                    continue
+                # Strip any leading "FIGURE N" opener the AI may still produce
+                para = _re_disc.sub(r'^FIGURE\s+\d+[\.\:]?\s*', '', para, flags=_re_disc.IGNORECASE)
+                # Split off a trailing **(fig: N)** or (fig: N) reference to bold it
+                m_ref = _re_disc.search(r'(\*\*\(fig:\s*\d+\)\*\*|\(fig:\s*\d+\))\s*$', para)
+                p = doc.add_paragraph()
+                p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+                p.paragraph_format.space_before = Pt(12)
+                p.paragraph_format.space_after  = Pt(0)
+                if m_ref:
+                    body_text = para[:m_ref.start()].rstrip()
+                    ref_raw   = m_ref.group(1)
+                    # Strip ** markers if present
+                    ref_text  = _re_disc.sub(r'\*\*', '', ref_raw)
+                    r1 = p.add_run(body_text + ' ')
+                    r1.bold = False; r1.font.size = Pt(12); r1.font.name = TNR
+                    r2 = p.add_run(ref_text)
+                    r2.bold = True; r2.font.size = Pt(12); r2.font.name = TNR
+                else:
+                    r = p.add_run(para)
+                    r.bold = False; r.font.size = Pt(12); r.font.name = TNR
 
         # ── LIMITATIONS ───────────────────────────────────────────────────────
         sec_head('LIMITATIONS', sp_b=12, sp_a=12, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
