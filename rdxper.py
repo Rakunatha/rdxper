@@ -6,7 +6,9 @@ Pipeline:
   2. CrossRef API          → additional verified journal articles
   3. Wikipedia REST API    → background context & definitions
   4. Groq API (FREE)       → writes ALL prose sections using scraped data as context
-  5. python-docx           → assembles formatted .docx with SPSS-style charts
+  5. Visual Analysis (opt) → user-uploaded survey data → real SPSS-style charts
+                             (ported from GraphGen Pro / app.py), skippable
+  6. python-docx           → assembles formatted .docx with SPSS-style charts
 
 AI Provider:
   Groq (free tier) — https://console.groq.com
@@ -23,6 +25,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from datetime import datetime
 from flask import Flask, request, jsonify, send_file, Response
 from email.mime.text import MIMEText
@@ -1131,6 +1134,277 @@ class GeminiWriter:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  VISUAL ANALYSIS  (optional, skippable step — ported from GraphGen Pro / app.py)
+#  Lets a user upload their own survey spreadsheet (CSV/XLSX/XLS). If present,
+#  the "Render charts" step below uses REAL data-driven SPSS-style charts
+#  (computed here) instead of — or blended with — the AI-simulated ones.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+VA_IV_KEYWORDS = [
+    "age", "gender", "sex", "education", "qualification", "occupation",
+    "job", "income", "marital", "experience", "platform", "frequency of",
+    "region", "location", "designation", "year of study", "grade",
+]
+
+VA_LIKERT_SCALES = [
+    (["strongly disagree", "disagree", "neutral", "agree", "strongly agree"], 1),
+    (["strongly disagree", "disagree", "neutral", "agree", "strongly agree", "strongly"], 1),
+    (["very low", "low", "moderate", "high", "very high"], 1),
+    (["do not trust at all", "trust a little", "neutral", "trust"], 1),
+    (["never", "occasionally", "monthly", "weekly", "daily"], 1),
+    (["yes", "no", "maybe"], 1),
+    (["yes", "no"], 1),
+]
+
+VA_SPSS_PALETTE = [
+    "#3E58AC", "#2EB848", "#D3CE97", "#8C564B",
+    "#9467BD", "#17BECF", "#E377C2", "#BCBD22",
+]
+VA_SPSS_BG = "#F0F0F0"
+VA_BLANK_LIKE = {"", "nan", "none", "n/a", "na", "null", "-", "--", "prefer not to say"}
+
+
+def _va_norm(v):
+    return str(v).strip().lower()
+
+
+def va_classify_columns(df):
+    """Return (iv_cols, dv_cols) using simple, transparent heuristics.
+    Columns with too many unique values (free-text fields, IDs, emails,
+    "Other, please specify" boxes, etc.) are dropped entirely."""
+    MAX_IV_CATEGORIES = 15
+    MAX_DV_CATEGORIES = 10
+    n_rows = max(len(df), 1)
+
+    iv_cols, dv_cols = [], []
+    for col in df.columns:
+        lc = col.lower().strip()
+        if lc == "timestamp" or lc.startswith("unnamed"):
+            continue
+
+        nunique = df[col].nunique(dropna=True)
+        if nunique <= 1 or nunique > 0.5 * n_rows:
+            continue
+
+        if any(k in lc for k in VA_IV_KEYWORDS):
+            if nunique <= MAX_IV_CATEGORIES:
+                iv_cols.append(col)
+        else:
+            if nunique <= MAX_DV_CATEGORIES:
+                dv_cols.append(col)
+    return iv_cols, dv_cols
+
+
+def _va_is_blank_like(v):
+    return str(v).strip().lower() in VA_BLANK_LIKE
+
+
+def _va_clean_categories(sub, col, min_count=2):
+    """Drop blank/placeholder answers and categories with too few respondents."""
+    s = sub[col].astype(str).str.strip()
+    keep_mask = ~s.str.lower().isin(VA_BLANK_LIKE)
+    sub = sub[keep_mask]
+    counts = sub[col].value_counts()
+    keep_cats = counts[counts >= min_count].index
+    return sub[sub[col].isin(keep_cats)]
+
+
+def _va_try_numeric_order(values):
+    """If every value is/starts with a number, or is a common bracket phrase,
+    sort by that leading number. Returns None if any value doesn't fit."""
+    def key(v):
+        s = str(v).strip().lower()
+        if s.startswith(("under", "less than", "below")):
+            m = re.search(r"\d+(\.\d+)?", s.replace(",", ""))
+            return (float(m.group()) - 0.5) if m else None
+        m = re.match(r"\D*(\d+(\.\d+)?)", s.replace(",", ""))
+        if m:
+            return float(m.group(1))
+        return None
+
+    keys = [key(v) for v in values]
+    if values and all(k is not None for k in keys):
+        return [v for _, v in sorted(zip(keys, values), key=lambda p: p[0])]
+    return None
+
+
+def _va_ordered_categories(series, prefer_likert=True):
+    """Category order to plot in: recognized Likert order, then numeric/bracket
+    order, then first-appearance order."""
+    values = [v for v in series.dropna().unique().tolist()]
+    if prefer_likert:
+        norm_values = {_va_norm(v) for v in values}
+        for scale, _ in VA_LIKERT_SCALES:
+            if norm_values.issubset(set(scale)) and len(norm_values) >= 2:
+                ordered = [s for s in scale if s in norm_values]
+                lookup = {_va_norm(v): v for v in values}
+                return [lookup[o] for o in ordered if o in lookup]
+    numeric_order = _va_try_numeric_order(values)
+    if numeric_order is not None:
+        return numeric_order
+    return values
+
+
+def _va_wrap_label(text, width=18):
+    import textwrap
+    return "\n".join(textwrap.wrap(str(text), width=width)) or str(text)
+
+
+def va_make_bar_chart(df, iv, dv):
+    """Grouped bar chart from REAL survey data, styled to match native SPSS
+    output. Returns (png_bytes, crosstab_dataframe) or (None, None) if this
+    IV/DV pair isn't chartable. Ported from GraphGen Pro (app.py)."""
+    sub = df[[iv, dv]].dropna()
+    sub = _va_clean_categories(sub, iv, min_count=2)
+    sub = _va_clean_categories(sub, dv, min_count=2)
+    if sub.empty or sub[iv].nunique() < 2 or sub[dv].nunique() < 2:
+        return None, None
+    if sub[iv].nunique() > 15 or sub[dv].nunique() > 10:
+        return None, None
+
+    iv_order = _va_ordered_categories(sub[iv], prefer_likert=False)
+    dv_order = _va_ordered_categories(sub[dv], prefer_likert=True)
+
+    sub = sub.copy()
+    sub[iv] = pd.Categorical(sub[iv], categories=iv_order, ordered=True)
+    sub[dv] = pd.Categorical(sub[dv], categories=dv_order, ordered=True)
+
+    ct = pd.crosstab(sub[iv], sub[dv], normalize="index") * 100
+    ct = ct.reindex(columns=dv_order)
+    ct = ct.round(2)
+
+    n_cats = len(ct.columns)
+    n_groups = len(ct.index)
+
+    fig_w = min(max(6.2, 1.0 * n_groups + 0.55 * n_groups * max(n_cats, 1) ** 0.6), 13.5)
+    fig_h = 4.6
+    long_labels = any(len(str(c)) > 12 for c in ct.index)
+    rotate = n_groups > 5 or long_labels
+    if rotate:
+        fig_h += 0.6
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=80)
+    try:
+        fig.patch.set_facecolor("white")
+        ax.set_facecolor(VA_SPSS_BG)
+
+        x = np.arange(n_groups)
+        width = 0.82 / max(n_cats, 1)
+
+        total_bars = n_groups * n_cats
+        label_fontsize = 7 if n_cats <= 3 else (6.2 if n_cats <= 5 else 5.4)
+        decimals = 2 if n_cats <= 3 else (0 if n_cats >= 5 else 1)
+        label_floor = 0 if total_bars <= 20 else (1.0 if total_bars <= 40 else 2.0)
+
+        for i, cat in enumerate(ct.columns):
+            vals = ct[cat].values
+            offset = (i - (n_cats - 1) / 2) * width
+            bars = ax.bar(
+                x + offset, vals, width=width,
+                color=VA_SPSS_PALETTE[i % len(VA_SPSS_PALETTE)],
+                edgecolor="black", linewidth=0.6, label=str(cat),
+            )
+            for rect, v in zip(bars, vals):
+                if v <= label_floor:
+                    continue
+                ax.annotate(
+                    f"{v:.{decimals}f}%",
+                    xy=(rect.get_x() + rect.get_width() / 2, v),
+                    xytext=(0, 3), textcoords="offset points",
+                    ha="center", va="bottom", fontsize=label_fontsize,
+                    bbox=dict(boxstyle="square,pad=0.2", fc="white", ec="black", lw=0.5),
+                )
+
+        ax.set_xticks(x)
+        if rotate:
+            ax.set_xticklabels(
+                [str(c) for c in ct.index], fontsize=8.5, fontweight="bold",
+                rotation=30, ha="right",
+            )
+        else:
+            ax.set_xticklabels(
+                [_va_wrap_label(c, width=14) for c in ct.index],
+                fontsize=9, fontweight="bold",
+            )
+        ax.set_ylabel("Percent", fontsize=10, fontweight="bold")
+        ax.set_xlabel(str(iv), fontsize=10, fontweight="bold")
+        ymax = max(ct.values.max() * 1.25, 10) if ct.values.size else 10
+        ax.set_ylim(0, ymax)
+        ax.margins(x=0.02)
+
+        for spine in ax.spines.values():
+            spine.set_visible(True)
+            spine.set_color("black")
+            spine.set_linewidth(0.8)
+
+        legend = ax.legend(
+            title=_va_wrap_label(dv, width=16),
+            fontsize=8, title_fontsize=8,
+            bbox_to_anchor=(1.02, 1), loc="upper left",
+            frameon=False, borderaxespad=0,
+        )
+        legend.get_title().set_ha("left")
+
+        plt.tight_layout()
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
+        buf.seek(0)
+        return buf.getvalue(), ct
+    finally:
+        plt.close(fig)
+
+
+def read_survey_dataframe(file_bytes: bytes, filename: str):
+    """Parse an uploaded CSV/XLSX/XLS into a cleaned DataFrame, row-capped so
+    a huge spreadsheet can't blow up memory/time on a free-tier server."""
+    MAX_ROWS = int(os.environ.get('SURVEY_MAX_ROWS', 1500))
+    buf = io.BytesIO(file_bytes)
+    fname = filename.lower()
+    if fname.endswith('.csv'):
+        df = pd.read_csv(buf, nrows=MAX_ROWS)
+    else:
+        df = pd.read_excel(buf, nrows=MAX_ROWS)
+    df = df.dropna(axis=1, how='all')
+    df.columns = [' '.join(str(c).split()) for c in df.columns]
+    return df
+
+
+def build_real_chart_specs(df, nfigs: int):
+    """Turn real survey data into (spec, chart_bytesio) pairs compatible with
+    the existing DocBuilder/legend pipeline — one real SPSS-style chart per
+    chartable IV x DV pair, up to nfigs."""
+    iv_cols, dv_cols = va_classify_columns(df)
+    specs, charts = [], []
+    for dv in dv_cols:
+        for iv in iv_cols:
+            if len(specs) >= nfigs:
+                return specs, charts
+            png, ct = va_make_bar_chart(df, iv, dv)
+            if png is None:
+                continue
+            spec = {
+                'question': dv,
+                'xvar':     iv,
+                'title':    f'{dv} by {iv}',
+                'groups':   [str(g) for g in ct.index.tolist()],
+                'series':   [str(s) for s in ct.columns.tolist()],
+                'matrix':   ct.values.tolist(),
+            }
+            specs.append(spec)
+            charts.append(io.BytesIO(png))
+    return specs, charts
+
+
+# In-memory store for uploaded survey files awaiting a /api/generate call.
+# One-time use: consumed (popped) as soon as generation starts.
+SURVEY_UPLOADS = {}
+SURVEY_UPLOAD_LOCK = threading.Lock()
+MAX_SURVEY_FILE_BYTES = 8 * 1024 * 1024
+MAX_SURVEY_UPLOADS = 20
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  CHART RENDERING  (matplotlib SPSS-style)
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1879,7 +2153,8 @@ class PaperGenerator:
 
 
     def generate(self, topic: str, nfigs: int, author: str, inst: str, email: str,
-                 questionnaire: dict = None, co_author_info: dict = None) -> str:
+                 questionnaire: dict = None, co_author_info: dict = None,
+                 survey_upload_id: str = None) -> str:
         os.makedirs('generated', exist_ok=True)
         self.prog(5, 'Initializing...')
         ca = co_author_info or {}
@@ -1946,13 +2221,43 @@ class PaperGenerator:
 
         # ── Step 3: Parse chart specs from AI's <charts> block ───────────────
         self.prog(78, 'Parsing chart specs...')
-        specs = writer.parse_chart_specs(nfigs)
-        if not specs:
-            specs = writer._fallback_specs(nfigs)
+        ai_specs = writer.parse_chart_specs(nfigs)
+        if not ai_specs:
+            ai_specs = writer._fallback_specs(nfigs)
 
-        # ── Step 4: Render charts ────────────────────────────────────────────
-        self.prog(82, f'Rendering {len(specs)} SPSS-style charts...')
-        charts = [make_chart(sp) for sp in specs]
+        # ── Step 3.5: Visual Analysis (optional, skippable) ──────────────────
+        # If the user uploaded their own survey data in the wizard, use
+        # app.py's (GraphGen Pro's) real data-driven chart generation here
+        # instead of the AI-simulated charts. Any figures still needed beyond
+        # what the real data supports are filled in with AI-generated ones.
+        real_specs, real_charts = [], []
+        if survey_upload_id:
+            self.prog(80, 'Analyzing your uploaded survey data...')
+            with SURVEY_UPLOAD_LOCK:
+                upload = SURVEY_UPLOADS.pop(survey_upload_id, None)
+            if upload:
+                try:
+                    df = read_survey_dataframe(upload['bytes'], upload['filename'])
+                    real_specs, real_charts = build_real_chart_specs(df, nfigs)
+                    if real_specs:
+                        print(f'[Visual analysis] {len(real_specs)} real chart(s) generated from uploaded data')
+                    else:
+                        print('[Visual analysis] no chartable variable pairs found — falling back to AI charts')
+                except Exception as e:
+                    print(f'[Visual analysis] failed ({e}) — falling back to AI-generated charts')
+
+        # ── Step 4: Render charts — real data first, AI-generated fills the rest ──
+        self.prog(82, f'Rendering {nfigs} SPSS-style charts...')
+        if real_specs:
+            specs  = real_specs[:nfigs]
+            charts = real_charts[:nfigs]
+            if len(specs) < nfigs:
+                fill   = nfigs - len(specs)
+                specs  = specs  + ai_specs[:fill]
+                charts = charts + [make_chart(sp) for sp in ai_specs[:fill]]
+        else:
+            specs  = ai_specs
+            charts = [make_chart(sp) for sp in specs]
 
         # ── Step 5: Build DOCX ───────────────────────────────────────────────
         self.prog(90, 'Assembling Word document...')
@@ -2257,12 +2562,14 @@ textarea::placeholder{color:#bbb;font-size:12px}
   <div class="q-line"></div>
   <div class="q-step" id="qs-4" onclick="goStep(4)"><span class="q-num">5</span><span class="q-lbl">Statement</span></div>
   <div class="q-line"></div>
-  <div class="q-step" id="qs-5" onclick="goStep(5)"><span class="q-num">6</span><span class="q-lbl">Settings</span></div>
+  <div class="q-step" id="qs-5" onclick="goStep(5)"><span class="q-num">6</span><span class="q-lbl">Visuals</span></div>
+  <div class="q-line"></div>
+  <div class="q-step" id="qs-6" onclick="goStep(6)"><span class="q-num">7</span><span class="q-lbl">Settings</span></div>
 </div>
 
 <!-- ── Step 0: Problem Identification ───────────────────── -->
 <div class="q-panel active" id="qp-0">
-  <div class="q-badge">Step 1 of 6</div>
+  <div class="q-badge">Step 1 of 7</div>
   <div class="ct" style="margin-bottom:6px">Identification of the Problem</div>
   <div class="cs" style="margin-bottom:20px">What specific problem prompted this research? Describe it in your own words, AI will use this as the foundation. <strong style="color:var(--accent)">Optional — skip if you prefer AI to write this.</strong></div>
   <div class="q-hint">💡 Think about: What is wrong or missing? Who is affected? What is the scale of the problem? What are the consequences of not addressing it?</div>
@@ -2284,7 +2591,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
 
 <!-- ── Step 1: Literature Review ────────────────────────── -->
 <div class="q-panel" id="qp-1">
-  <div class="q-badge">Step 2 of 6</div>
+  <div class="q-badge">Step 2 of 7</div>
   <div class="ct" style="margin-bottom:6px">Literature Review</div>
   <div class="cs" style="margin-bottom:20px">What sources have you reviewed? List them and AI will expand into a full literature review. <strong style="color:var(--accent)">Optional — AI will find real papers automatically if you skip.</strong></div>
   <div class="q-hint">💡 Include: Author names and years, key arguments, relevant reports, laws, treaties, court cases, or books. Even brief notes are fine — AI will elaborate.</div>
@@ -2301,7 +2608,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
 
 <!-- ── Step 2: Research Gap ──────────────────────────────── -->
 <div class="q-panel" id="qp-2">
-  <div class="q-badge">Step 3 of 6</div>
+  <div class="q-badge">Step 3 of 7</div>
   <div class="ct" style="margin-bottom:6px">Research Gap</div>
   <div class="cs" style="margin-bottom:20px">What is missing from existing research? AI will use your answer as the gap statement. <strong style="color:var(--accent)">Optional — AI will identify a gap automatically if you skip.</strong></div>
   <div class="q-hint">💡 Ask yourself: What do existing studies not cover? What contradictions exist in the literature? What context or population has been ignored? What methodology hasn't been applied?</div>
@@ -2318,7 +2625,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
 
 <!-- ── Step 3: Objectives ────────────────────────────────── -->
 <div class="q-panel" id="qp-3">
-  <div class="q-badge">Step 4 of 6</div>
+  <div class="q-badge">Step 4 of 7</div>
   <div class="ct" style="margin-bottom:6px">Objectives of the Research</div>
   <div class="cs" style="margin-bottom:20px">List your research objectives — they will appear verbatim in your paper. <strong style="color:var(--accent)">Optional — AI will generate objectives aligned to your topic if you skip.</strong></div>
   <div class="q-hint">💡 Good objectives: Start with "To examine / To analyse / To evaluate / To compare / To propose". Be specific. You need 4–6 objectives. One per line.</div>
@@ -2335,7 +2642,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
 
 <!-- ── Step 4: Research Statement ───────────────────────── -->
 <div class="q-panel" id="qp-4">
-  <div class="q-badge">Step 5 of 6</div>
+  <div class="q-badge">Step 5 of 7</div>
   <div class="ct" style="margin-bottom:6px">Research Statement</div>
   <div class="cs" style="margin-bottom:20px">Your thesis in 2–4 sentences — what this research does, how, and why. <strong style="color:var(--accent)">Optional — AI will formulate a research statement if you skip.</strong></div>
   <div class="q-hint">💡 A good research statement: Names the topic, identifies the method (doctrinal/empirical/comparative), and states the significance. Typically 2–4 sentences.</div>
@@ -2346,13 +2653,31 @@ textarea::placeholder{color:#bbb;font-size:12px}
   <div style="display:flex;gap:10px;justify-content:space-between">
     <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(4)">← Back</button>
     <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(4)">Skip →</button>
-    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(4)">Next → Paper Settings</button>
+    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(4)">Next → Visual Analysis</button>
   </div>
 </div>
 
-<!-- ── Step 5: Settings + Generate ──────────────────────── -->
+<!-- ── Step 5: Visual Analysis (upload real survey data) ─── -->
 <div class="q-panel" id="qp-5">
-  <div class="q-badge">Step 6 of 6</div>
+  <div class="q-badge">Step 6 of 7</div>
+  <div class="ct" style="margin-bottom:6px">Visual Analysis</div>
+  <div class="cs" style="margin-bottom:20px">Upload your own survey data (CSV or Excel) and rdxper will generate real, data-driven SPSS-style charts from it instead of AI-simulated ones. <strong style="color:var(--accent)">Optional — skip to let AI generate the charts automatically.</strong></div>
+  <div class="q-hint">💡 Works best with survey exports (Google Forms, SurveyMonkey, Excel, etc.) that have demographic columns (age, gender, education, occupation...) alongside response columns (Likert-scale or categorical questions). If the file only covers some of your figures, AI fills in the rest.</div>
+  <div class="fg">
+    <label>Survey Data File <span style="color:var(--dim);font-weight:400">(.csv, .xlsx or .xls — optional, max 8MB)</span></label>
+    <input type="file" id="survey-file-in" accept=".csv,.xlsx,.xls" onchange="handleSurveyFile()">
+  </div>
+  <div id="survey-status" class="notif"></div>
+  <div style="display:flex;gap:10px;justify-content:space-between">
+    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(5)">← Back</button>
+    <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(5)">Skip →</button>
+    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(5)">Next → Paper Settings</button>
+  </div>
+</div>
+
+<!-- ── Step 6: Settings + Generate ──────────────────────── -->
+<div class="q-panel" id="qp-6">
+  <div class="q-badge">Step 7 of 7</div>
   <div class="ct" style="margin-bottom:6px">Paper Settings</div>
   <div class="cs" style="margin-bottom:20px">Final details for your paper. AI will now use all your inputs to generate a genuine research paper.</div>
   <div id="n-gen" class="notif"></div>
@@ -2390,7 +2715,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
       style="width:100%;accent-color:var(--accent)">
   </div>
   <div style="display:flex;gap:10px;justify-content:space-between">
-    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(5)">← Back</button>
+    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(6)">← Back</button>
     <button class="btn btn-p" id="btn-gen" onclick="generate()" style="flex:1">Generate Research Paper</button>
   </div>
 </div>
@@ -2621,6 +2946,11 @@ function startNewPaper(){
   });
   const aIn=document.getElementById('author-in');
   if(aIn) aIn.value=userName||'';
+  surveyUploadId=''; surveyUploadInfo=null;
+  const fIn=document.getElementById('survey-file-in');
+  if(fIn) fIn.value='';
+  const sSt=document.getElementById('survey-status');
+  if(sSt) sSt.className='notif';
   goStep(0);
   show('s-gen');
 }
@@ -2638,7 +2968,9 @@ function logout(){
 
 // ── QUESTIONNAIRE NAVIGATION ────────────────────────────────────────────────
 let currentStep = 0;
-const totalSteps = 6;
+const totalSteps = 7;
+let surveyUploadId = '';
+let surveyUploadInfo = null;
 
 function goStep(n){
   // Only allow going back to completed steps
@@ -2653,7 +2985,7 @@ function nextStep(from){
     alert('Please enter your research topic — this is the only required field.'); return;
   }
   currentStep = from + 1;
-  if(currentStep === 5) buildSummary();
+  if(currentStep === 6) buildSummary();
   renderStep();
 }
 
@@ -2688,6 +3020,9 @@ function buildSummary(){
   ];
   const s = document.getElementById('q-summary');
   if(!s) return;
+  const visualVal = surveyUploadId && surveyUploadInfo
+    ? `Custom survey data attached — ${surveyUploadInfo.n_rows} rows, up to ${surveyUploadInfo.max_charts} real chart(s)`
+    : '<span style="color:var(--dim)">Skipped — AI will generate simulated charts</span>';
   s.innerHTML = '<div style="font-size:13px;font-weight:700;margin-bottom:12px;color:var(--text)">📋 Your Research Inputs</div>' +
     items.map(item=>{
       const val = (document.getElementById(item.id)||{}).value||'';
@@ -2696,7 +3031,48 @@ function buildSummary(){
         <div class="q-summary-label">${item.label}</div>
         <div class="q-summary-val">${preview||'<span style="color:var(--dim)">Not filled</span>'}</div>
       </div>`;
-    }).join('');
+    }).join('') +
+    `<div class="q-summary-item">
+      <div class="q-summary-label">Visual Analysis</div>
+      <div class="q-summary-val">${visualVal}</div>
+    </div>`;
+}
+
+async function handleSurveyFile(){
+  const inp      = document.getElementById('survey-file-in');
+  const statusEl = document.getElementById('survey-status');
+  surveyUploadId = ''; surveyUploadInfo = null;
+  if(!inp.files || !inp.files[0]){ statusEl.className = 'notif'; return; }
+
+  const file = inp.files[0];
+  statusEl.textContent = 'Analyzing '+file.name+'...';
+  statusEl.className   = 'notif info show';
+
+  try{
+    const fd = new FormData();
+    fd.append('file', file);
+    const r = await fetch('/api/survey-data/upload', {
+      method: 'POST',
+      headers: {'Authorization': 'Bearer '+token},
+      body: fd
+    });
+    const d = await r.json();
+    if(r.status===401){forceLogout();return;}
+    if(!d.success){
+      statusEl.textContent = d.message || 'Could not read this file.';
+      statusEl.className   = 'notif error show';
+      inp.value = '';
+      return;
+    }
+    surveyUploadId   = d.upload_id;
+    surveyUploadInfo = d;
+    statusEl.textContent = `Detected ${d.iv_count} demographic and ${d.dv_count} response variable(s) across ${d.n_rows} rows — up to ${d.max_charts} real chart(s) will be used.`;
+    statusEl.className   = 'notif success show';
+  }catch(e){
+    statusEl.textContent = 'Upload failed. Please try again, or skip this step.';
+    statusEl.className   = 'notif error show';
+    inp.value = '';
+  }
 }
 
 async function generate(){
@@ -2726,7 +3102,8 @@ async function generate(){
         q_problem:qProblem, q_lit:qLit, q_gap:qGap,
         q_objectives:qObjectives, q_statement:qStatement,
         co_author_name:coName, co_author_title:coTitle,
-        co_author_inst:coInst, co_author_email:coEmail, co_author_phone:coPhone
+        co_author_inst:coInst, co_author_email:coEmail, co_author_phone:coPhone,
+        survey_data_upload_id: surveyUploadId
       })});
     const d=await r.json();
     if(r.status===401){btn.disabled=false;btn.innerHTML='Generate Research Paper';forceLogout();return;}
@@ -3123,6 +3500,63 @@ def verify_otp():
     del otp_store[email]
     return jsonify({'success': True, 'token': tok, 'email': email})
 
+@app.route('/api/survey-data/upload', methods=['POST'])
+def upload_survey_data():
+    """Visual Analysis step (optional/skippable): accepts a survey spreadsheet,
+    runs it through app.py's (GraphGen Pro's) column classification so the
+    wizard can show what will be charted, and stashes the raw bytes for the
+    upcoming /api/generate call to pick up via the returned upload_id."""
+    tok  = request.headers.get('Authorization', '').replace('Bearer ', '')
+    sess = session_get(tok)
+    if not sess:
+        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+
+    f = request.files.get('file')
+    if not f or not f.filename:
+        return jsonify({'success': False, 'message': 'No file uploaded'}), 400
+
+    fname = f.filename.lower()
+    if not (fname.endswith('.csv') or fname.endswith('.xlsx') or fname.endswith('.xls')):
+        return jsonify({'success': False, 'message': 'Please upload a .csv, .xlsx, or .xls file'}), 400
+
+    file_bytes = f.read()
+    if len(file_bytes) > MAX_SURVEY_FILE_BYTES:
+        return jsonify({'success': False, 'message': 'File too large — please keep it under 8 MB'}), 413
+
+    try:
+        df = read_survey_dataframe(file_bytes, fname)
+        if df.empty:
+            return jsonify({'success': False, 'message': 'The file has no usable data'}), 400
+        iv_cols, dv_cols = va_classify_columns(df)
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Could not read the file: {e}'}), 400
+
+    if not iv_cols or not dv_cols:
+        return jsonify({'success': False,
+                        'message': 'Could not automatically detect demographic (e.g. age, gender) and '
+                                   'response variables in this file. You can skip this step instead.'}), 400
+
+    upload_id = uuid.uuid4().hex
+    user_id   = sess.get('user_id', sess.get('email'))
+    with SURVEY_UPLOAD_LOCK:
+        SURVEY_UPLOADS[upload_id] = {
+            'bytes': file_bytes, 'filename': fname, 'user_id': user_id, 'created': time.time(),
+        }
+        if len(SURVEY_UPLOADS) > MAX_SURVEY_UPLOADS:
+            oldest = min(SURVEY_UPLOADS, key=lambda k: SURVEY_UPLOADS[k]['created'])
+            if oldest != upload_id:
+                SURVEY_UPLOADS.pop(oldest, None)
+
+    return jsonify({
+        'success':   True,
+        'upload_id': upload_id,
+        'n_rows':    int(len(df)),
+        'iv_count':  len(iv_cols),
+        'dv_count':  len(dv_cols),
+        'max_charts': len(iv_cols) * len(dv_cols),
+    })
+
+
 @app.route('/api/generate', methods=['POST'])
 def generate_paper():
     tok = request.headers.get('Authorization', '').replace('Bearer ', '')
@@ -3161,6 +3595,16 @@ def generate_paper():
 
     jid     = str(uuid.uuid4())
     user_id = sess.get('user_id', email)
+
+    # Optional Visual Analysis step — user-uploaded survey data (skippable).
+    # Only honor an upload_id that actually belongs to this user; otherwise
+    # silently fall back to AI-generated charts rather than erroring out.
+    survey_upload_id = (data.get('survey_data_upload_id') or '').strip()
+    if survey_upload_id:
+        with SURVEY_UPLOAD_LOCK:
+            _upload = SURVEY_UPLOADS.get(survey_upload_id)
+        if not _upload or _upload.get('user_id') != user_id:
+            survey_upload_id = ''
     jobs[jid] = {'status': 'queued', 'progress': 0,
                  'message': 'Queued...', 'file_path': None, 'topic': topic, 'user_id': user_id}
     with get_db() as db:
@@ -3190,7 +3634,8 @@ def generate_paper():
     def _run():
         try:
             g    = PaperGenerator(jid, jobs)
-            path = g.generate(topic, nfigs, author, inst, email, questionnaire, co_author_info)
+            path = g.generate(topic, nfigs, author, inst, email, questionnaire, co_author_info,
+                              survey_upload_id)
             jobs[jid].update({'status': 'done', 'progress': 100,
                               'message': 'Research paper ready!', 'file_path': path})
             preview_text = jobs[jid].get('preview', '')
