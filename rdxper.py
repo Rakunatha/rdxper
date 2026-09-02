@@ -1931,15 +1931,6 @@ class DocBuilder:
             r.font.name = TNR
             return p
 
-        # ── PAGE 1: Title + Authors right-aligned ───────────────────────────
-        p_text(self.topic.upper(), bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
-        p_blank()
-        author_line = self.author
-        if self.co_author:
-            author_line += f'\n{self.co_author}'
-        p_text(author_line, bold=True,
-               align=WD_ALIGN_PARAGRAPH.RIGHT, sp_b=12, sp_a=12)
-
         # ── ABSTRACT ──────────────────────────────────────────────────────────
         p_text('ABSTRACT', bold=True, align=WD_ALIGN_PARAGRAPH.LEFT, sp_b=0, sp_a=0)
         # Render abstract with inline bold labels (**Aim**, **Objective**, etc.)
