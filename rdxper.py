@@ -50,7 +50,7 @@ RAZORPAY_KEY_ID     = os.environ.get('RAZORPAY_KEY_ID', '').strip()
 RAZORPAY_KEY_SECRET = os.environ.get('RAZORPAY_KEY_SECRET', '').strip()
 razorpay_client = (razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
                     if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET else None)
-PAPER_PRICE_INR = 200
+PAPER_PRICE_INR = 270
 
 # ── SQLite DB ─────────────────────────────────────────────────────────────────
 DB_PATH = os.environ.get('DB_PATH', 'rdxper.db')
@@ -145,6 +145,28 @@ def is_admin(sess: dict) -> bool:
     """True if this session belongs to the admin account (see ADMIN_EMAIL).
     Admin bypasses payment — every paper is free for them."""
     return bool(sess) and sess.get('email', '').strip().lower() == ADMIN_EMAIL.strip().lower()
+
+
+# ── No-login mode ─────────────────────────────────────────────────────────────
+# The sign-in/landing page has been removed: the app opens straight to the
+# dashboard and every visitor shares one identity, so papers/payments are no
+# longer tied to individual accounts.
+ANON_USER_ID = 'anon'
+ANON_EMAIL   = 'guest@rdxper.local'
+ANON_NAME    = 'Guest'
+
+with get_db() as _db:
+    _db.execute(
+        'INSERT OR IGNORE INTO users (id, email, name, picture) VALUES (?, ?, ?, ?)',
+        (ANON_USER_ID, ANON_EMAIL, ANON_NAME, '')
+    )
+
+
+def current_session() -> dict:
+    """Every request uses this single shared identity now that sign-in has
+    been removed — replaces the old Authorization-header/session_get check
+    everywhere that check used to gate a route."""
+    return {'email': ANON_EMAIL, 'user_id': ANON_USER_ID, 'name': ANON_NAME, 'picture': ''}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -3745,10 +3767,7 @@ def upload_survey_data():
     wizard can show what will be charted, and stashes the raw bytes for the
     upcoming /api/generate call to pick up via the returned upload_id."""
     tok  = request.headers.get('Authorization', '').replace('Bearer ', '')
-    sess = session_get(tok)
-    if not sess:
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
-
+    sess = current_session()
     f = request.files.get('file')
     if not f or not f.filename:
         return jsonify({'success': False, 'message': 'No file uploaded'}), 400
@@ -3797,10 +3816,7 @@ def upload_survey_data():
 
 @app.route('/api/generate', methods=['POST'])
 def generate_paper():
-    tok = request.headers.get('Authorization', '').replace('Bearer ', '')
-    sess = session_get(tok)
-    if not sess:
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+    sess = current_session()
 
     data   = request.json
 
@@ -3889,9 +3905,6 @@ def generate_paper():
 
 @app.route('/api/status/<jid>')
 def job_status(jid):
-    tok = request.headers.get('Authorization', '').replace('Bearer ', '')
-    if not session_get(tok):
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
     job = jobs.get(jid)
     if not job:
         # Fall back to DB — server may have restarted mid-generation
@@ -3908,10 +3921,7 @@ def job_status(jid):
 @app.route('/api/preview/<jid>')
 def get_preview(jid):
     """Returns the free teaser text plus whether this paper has been paid for."""
-    tok = request.headers.get('Authorization', '').replace('Bearer ', '')
-    sess = session_get(tok)
-    if not sess:
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+    sess = current_session()
 
     user_id = sess.get('user_id', sess.get('email'))
     with get_db() as db:
@@ -3932,10 +3942,7 @@ def get_preview(jid):
 
 @app.route('/api/pay/create-order/<jid>', methods=['POST'])
 def create_order(jid):
-    tok = request.headers.get('Authorization', '').replace('Bearer ', '')
-    sess = session_get(tok)
-    if not sess:
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+    sess = current_session()
     if is_admin(sess):
         return jsonify({'success': True, 'already_paid': True})
     if not razorpay_client:
