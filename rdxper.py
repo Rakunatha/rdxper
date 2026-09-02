@@ -1931,40 +1931,7 @@ class DocBuilder:
             r.font.name = TNR
             return p
 
-        # ── TITLE PAGE (page 1) ───────────────────────────────────────────────
-        # Title: centered, bold, 12pt — ALL CAPS
-        p_text(self.topic.upper(), bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
-        p_blank()
-        p_blank()
-
-        # AUTHOR block — full spec fields
-        p_text('AUTHOR', bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
-        p_text(self.author, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
-        if self.inst:
-            p_text(self.inst, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
-        if self.email:
-            p_text(f'EMAIL: {self.email}', bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
-
-        p_blank()
-        p_blank()
-
-        # CO-AUTHOR block — matches sample paper exactly
-        p_text('CO-AUTHOR', bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, sp_b=12, sp_a=12)
-        if self.co_author:
-            p_text(self.co_author, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
-        if self.co_author_title:
-            p_text(self.co_author_title, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
-        if self.co_author_inst:
-            p_text(self.co_author_inst, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
-        if self.co_author_email:
-            p_text(f'Email Id - {self.co_author_email}', bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
-        if self.co_author_phone:
-            p_text(f'Phone number: {self.co_author_phone}', bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
-
-        p_blank()
-        p_blank()
-
-        # ── PAGE 2: Title repeat + Authors right-aligned ───────────────────────
+        # ── PAGE 1: Title + Authors right-aligned ───────────────────────────
         p_text(self.topic.upper(), bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
         p_blank()
         author_line = self.author
