@@ -163,9 +163,26 @@ with get_db() as _db:
 
 
 def current_session() -> dict:
-    """Every request uses this single shared identity now that sign-in has
-    been removed — replaces the old Authorization-header/session_get check
-    everywhere that check used to gate a route."""
+    """Resolve the identity for this request.
+
+    Generating/previewing/paying for a paper doesn't require signing in — by
+    default every anonymous visitor shares one guest identity so the app
+    keeps working with no login. But if the request carries a valid
+    Authorization Bearer token (from Google sign-in), that real identity is
+    used instead. This is what lets is_admin() recognize the admin account —
+    without it, admin status could never be detected — and it keeps the
+    user_id consistent across /api/generate, /api/preview, /api/pay/*, and
+    /api/download so a signed-in user's own papers resolve correctly."""
+    tok = request.headers.get('Authorization', '').replace('Bearer ', '').strip()
+    if tok:
+        sess = session_get(tok)
+        if sess:
+            return {
+                'email':   sess.get('email', ANON_EMAIL),
+                'user_id': sess.get('user_id', ANON_USER_ID),
+                'name':    sess.get('name', ''),
+                'picture': sess.get('picture', ''),
+            }
     return {'email': ANON_EMAIL, 'user_id': ANON_USER_ID, 'name': ANON_NAME, 'picture': ''}
 
 
@@ -3924,17 +3941,18 @@ def get_preview(jid):
     sess = current_session()
 
     user_id = sess.get('user_id', sess.get('email'))
+    admin   = is_admin(sess)
     with get_db() as db:
         paper = db.execute('SELECT topic, preview_text, paid, user_id FROM papers WHERE id=?', (jid,)).fetchone()
     if not paper:
         return jsonify({'success': False, 'message': 'Job not found'}), 404
-    if paper['user_id'] != user_id:
+    if paper['user_id'] != user_id and not admin:
         return jsonify({'success': False, 'message': 'Forbidden'}), 403
 
     job = jobs.get(jid)
     preview = (job.get('preview') if job else None) or paper['preview_text'] or ''
     topic   = (job.get('topic') if job else None) or paper['topic'] or ''
-    paid    = bool(paper['paid']) or is_admin(sess)
+    paid    = bool(paper['paid']) or admin
 
     return jsonify({'success': True, 'preview': preview, 'topic': topic,
                     'paid': paid, 'price': PAPER_PRICE_INR})
@@ -3980,10 +3998,7 @@ def create_order(jid):
 
 @app.route('/api/pay/verify', methods=['POST'])
 def verify_payment():
-    tok = request.headers.get('Authorization', '').replace('Bearer ', '')
-    sess = session_get(tok)
-    if not sess:
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+    sess = current_session()
     if not razorpay_client:
         return jsonify({'success': False, 'message': 'Payments are not configured on the server.'}), 500
 
@@ -4025,19 +4040,18 @@ def verify_payment():
 
 @app.route('/api/download/<jid>')
 def download_paper(jid):
-    tok = request.headers.get('Authorization', '').replace('Bearer ', '')
-    sess = session_get(tok)
-    if not sess:
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+    sess = current_session()
 
     user_id = sess.get('user_id', sess.get('email'))
     with get_db() as db:
         paper = db.execute('SELECT file_path, topic, user_id, paid FROM papers WHERE id=?', (jid,)).fetchone()
     if not paper:
         return jsonify({'success': False, 'message': 'Job not found'}), 404
-    if paper['user_id'] != user_id:
+    admin = is_admin(sess)
+    # Admin can download any paper (e.g. for QA) — everyone else only their own.
+    if paper['user_id'] != user_id and not admin:
         return jsonify({'success': False, 'message': 'Forbidden'}), 403
-    if not paper['paid'] and not is_admin(sess):
+    if not paper['paid'] and not admin:
         return jsonify({'success': False, 'message': f'Payment required — pay ₹{PAPER_PRICE_INR} to unlock this download.'}), 402
 
     job = jobs.get(jid)
