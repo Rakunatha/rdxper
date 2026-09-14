@@ -2793,7 +2793,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
 <div class="screen active" id="s-home">
   <div class="hero">
     
-    <h1>Generate <em>Genuine</em><br>Research Papers</h1>
+    <h1>Your<em>Research</em><br>Workspace</h1>
     
   </div>
   <div class="card">
