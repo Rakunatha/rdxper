@@ -52,6 +52,10 @@ razorpay_client = (razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
                     if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET else None)
 PAPER_PRICE_INR = 270
 
+# Promo codes that unlock a paper's download without going through Razorpay.
+# Stored lower-cased; matching is case-insensitive.
+PROMO_CODES = {'rdxperman'}
+
 # ── SQLite DB ─────────────────────────────────────────────────────────────────
 DB_PATH = os.environ.get('DB_PATH', 'rdxper.db')
 
@@ -2828,7 +2832,6 @@ textarea::placeholder{color:#bbb;font-size:12px}
 <!-- TITLE WINDOW — pops up first, before the questionnaire -->
 <div class="modal-overlay" id="title-modal">
   <div class="modal-box" style="max-width:520px">
-    <div class="q-badge">Step 1 of 7 · Identification of the Problem</div>
     <div class="ct" style="margin-bottom:6px">What are you researching?</div>
     <div class="cs" style="margin-bottom:20px">Give your paper a title and, if you like, describe the problem behind it. AI will use this as the foundation for everything else. Once you continue, we'll move straight into the Literature Review.</div>
     <div class="q-hint">💡 Think about: What is wrong or missing? Who is affected? What is the scale of the problem? What are the consequences of not addressing it?</div>
@@ -3051,6 +3054,15 @@ textarea::placeholder{color:#bbb;font-size:12px}
       <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:8px;letter-spacing:.06em">PREVIEW</div>
       <div id="preview-text" style="font-size:13px;line-height:1.65;white-space:pre-wrap;color:var(--text)">Loading preview…</div>
       <div id="preview-fade" style="position:absolute;left:0;right:0;bottom:0;height:90px;background:linear-gradient(to bottom, rgba(245,245,245,0), var(--surface2))"></div>
+    </div>
+
+    <div id="promo-box" style="text-align:left;margin-bottom:14px">
+      <label style="font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.04em;text-transform:uppercase">Promo Code</label>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <input type="text" id="promo-in" placeholder="Have a code?" style="flex:1;background:#f9f9f9;border:1.5px solid #d0d0d0;border-radius:8px;padding:10px 12px;font-size:13px;outline:none;color:#111">
+        <button class="btn btn-s" id="btn-promo" style="width:auto;padding:10px 16px" onclick="applyPromo()">Apply</button>
+      </div>
+      <div id="promo-msg" class="notif"></div>
     </div>
 
     <div id="pay-box">
@@ -3483,19 +3495,50 @@ async function loadPreview(){
 
 function updatePayUI(){
   const payBox=document.getElementById('pay-box');
+  const promoBox=document.getElementById('promo-box');
   const dlBtn=document.getElementById('btn-dl');
   const sub=document.getElementById('done-sub');
   const fade=document.getElementById('preview-fade');
   if(paperPaid){
     if(payBox)payBox.style.display='none';
+    if(promoBox)promoBox.style.display='none';
     if(fade)fade.style.display='none';
     if(dlBtn)dlBtn.style.display='block';
     if(sub)sub.textContent='Your paper is unlocked and ready to download';
   }else{
     if(payBox)payBox.style.display='block';
+    if(promoBox)promoBox.style.display='block';
     if(fade)fade.style.display='block';
     if(dlBtn)dlBtn.style.display='none';
     if(sub)sub.textContent='Preview it below, then unlock the full download';
+  }
+}
+
+async function applyPromo(){
+  const input = document.getElementById('promo-in');
+  const code  = input.value.trim();
+  if(!code){ notify('promo-msg','Enter a promo code.','error'); return; }
+  const btn = document.getElementById('btn-promo');
+  btn.disabled = true; const orig = btn.textContent; btn.textContent = '...';
+  try{
+    const r = await fetch('/api/pay/promo/'+jobId, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json','Authorization':'Bearer '+token},
+      body: JSON.stringify({code})
+    });
+    const d = await r.json();
+    if(r.status===401){forceLogout();return;}
+    if(!d.success){
+      notify('promo-msg', d.message||'Invalid code.', 'error');
+      btn.disabled=false; btn.textContent=orig;
+      return;
+    }
+    paperPaid = true;
+    notify('promo-msg', d.message||'Promo applied — download unlocked!', 'success');
+    updatePayUI();
+  }catch(e){
+    notify('promo-msg','Could not apply code. Try again.','error');
+    btn.disabled=false; btn.textContent=orig;
   }
 }
 
@@ -3557,6 +3600,9 @@ async function download(){
 function again(){
   jobId='';curTopic='';paperPaid=false;
   closePreviewModal();
+  const promoIn=document.getElementById('promo-in'); if(promoIn) promoIn.value='';
+  const promoMsg=document.getElementById('promo-msg'); if(promoMsg) promoMsg.className='notif';
+  const promoBtn=document.getElementById('btn-promo'); if(promoBtn){promoBtn.disabled=false;promoBtn.textContent='Apply';}
   ['topic-in','inst-in','q-problem','q-lit','q-gap','q-objectives','q-statement',
    'co-author-name','co-author-title','co-author-inst','co-author-email','co-author-phone'].forEach(id=>{
     const el=document.getElementById(id);if(el) el.value='';
@@ -4077,6 +4123,38 @@ def verify_payment():
         db.execute('UPDATE papers SET paid=1, amount=? WHERE id=?', (PAPER_PRICE_INR, jid))
 
     return jsonify({'success': True, 'message': 'Payment verified — your download is unlocked.'})
+
+
+@app.route('/api/pay/promo/<jid>', methods=['POST'])
+def apply_promo(jid):
+    """Lets a user type a promo code instead of paying. Valid codes mark the
+    paper as paid the same way a real payment would, so /api/download just
+    works afterwards — no client-side-only trickery."""
+    sess = current_session()
+    data = request.json or {}
+    code = (data.get('code') or '').strip().lower()
+    if not code:
+        return jsonify({'success': False, 'message': 'Enter a promo code.'}), 400
+    if code not in PROMO_CODES:
+        return jsonify({'success': False, 'message': 'Invalid promo code.'}), 400
+
+    user_id = sess.get('user_id', sess.get('email'))
+    with get_db() as db:
+        paper = db.execute('SELECT id, user_id, paid FROM papers WHERE id=?', (jid,)).fetchone()
+    if not paper or paper['user_id'] != user_id:
+        return jsonify({'success': False, 'message': 'Paper not found'}), 404
+    if paper['paid']:
+        return jsonify({'success': True, 'already_paid': True, 'message': 'Already unlocked.'})
+
+    pay_id = uuid.uuid4().hex
+    with get_db() as db:
+        db.execute(
+            'INSERT INTO payments (id, user_id, paper_id, amount, status) VALUES (?,?,?,?,?)',
+            (pay_id, user_id, jid, 0, f'promo:{code}')
+        )
+        db.execute('UPDATE papers SET paid=1, amount=0 WHERE id=?', (jid,))
+
+    return jsonify({'success': True, 'message': 'Promo code applied — download unlocked.'})
 
 
 @app.route('/api/download/<jid>')
