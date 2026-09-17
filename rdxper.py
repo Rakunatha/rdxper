@@ -2660,6 +2660,12 @@ footer{text-align:center;padding:32px 0;color:#999;font-size:12px;border-top:1.5
 .q-line{flex:1;height:2px;background:#d0d0d0;margin:0 4px;margin-bottom:14px;transition:background .3s}
 .q-line.done{background:#111}
 .q-panel{display:none}.q-panel.active{display:block}
+/* Modals (Title Window / Preview Window) */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:200;align-items:center;justify-content:center;padding:20px;overflow-y:auto}
+.modal-overlay.active{display:flex}
+.modal-box{position:relative;background:#fff;border:1.5px solid #d0d0d0;border-radius:var(--r);padding:32px;max-width:440px;width:100%;max-height:90vh;overflow-y:auto;margin:auto}
+.modal-close{position:absolute;top:14px;right:14px;width:30px;height:30px;border-radius:50%;border:1.5px solid #d0d0d0;background:#fff;color:#666;font-size:16px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
+.modal-close:hover{background:#f5f5f5;color:#111}
 .q-badge{font-size:11px;color:#888;font-family:Consolas,monospace;letter-spacing:1px;margin-bottom:8px;font-weight:700;text-transform:uppercase}
 .q-hint{background:#f9f9f9;border:1.5px solid #d0d0d0;border-radius:8px;padding:10px 14px;font-size:12px;color:#555;margin-bottom:16px;line-height:1.5}
 textarea{width:100%;background:#f9f9f9;border:1.5px solid #d0d0d0;border-radius:8px;padding:10px 14px;color:#111;font-size:13px;outline:none;transition:border-color .2s;resize:vertical;font-family:'Segoe UI',Arial,sans-serif;line-height:1.6}
@@ -2819,7 +2825,29 @@ textarea::placeholder{color:#bbb;font-size:12px}
   </div>
 </div>
 
-<!-- GENERATE — 5-Step Questionnaire -->
+<!-- TITLE WINDOW — pops up first, before the questionnaire -->
+<div class="modal-overlay" id="title-modal">
+  <div class="modal-box" style="max-width:520px">
+    <div class="q-badge">Step 1 of 7 · Identification of the Problem</div>
+    <div class="ct" style="margin-bottom:6px">What are you researching?</div>
+    <div class="cs" style="margin-bottom:20px">Give your paper a title and, if you like, describe the problem behind it. AI will use this as the foundation for everything else. Once you continue, we'll move straight into the Literature Review.</div>
+    <div class="q-hint">💡 Think about: What is wrong or missing? Who is affected? What is the scale of the problem? What are the consequences of not addressing it?</div>
+    <div class="fg">
+      <label>Research Topic / Title *</label>
+      <input type="text" id="topic-in" placeholder="e.g. Legal Frameworks for Environmental Restoration in Post-War Reconstruction">
+    </div>
+    <div class="fg">
+      <label>Problem Statement <span style="color:var(--dim);font-weight:400">(optional)</span></label>
+      <textarea id="q-problem" rows="5" placeholder="Describe the core problem your research addresses. What issue exists? What are its consequences? Why does it need to be studied now?&#10;&#10;Example: Armed conflicts inflict devastating environmental damage that persists long after hostilities cease. Existing legal frameworks under the Geneva Conventions and Rome Statute fail to adequately address post-war ecological restoration, leaving affected communities without legal recourse or environmental remediation. This gap in international humanitarian law creates a vacuum where neither state nor non-state actors are held accountable for long-term environmental harm..."></textarea>
+    </div>
+    <div id="n-title" class="notif"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="startResearch()">Next → Literature Review</button>
+    </div>
+  </div>
+</div>
+
+<!-- GENERATE — 6-Step Questionnaire (title collected above in the Title Window) -->
 <div class="screen" id="s-gen">
 <div style="padding-top:28px;max-width:700px;margin:0 auto">
 
@@ -2829,114 +2857,85 @@ textarea::placeholder{color:#bbb;font-size:12px}
 
 <!-- Step indicator -->
 <div class="q-steps" id="q-steps">
-  <div class="q-step active" id="qs-0" onclick="goStep(0)"><span class="q-num">1</span><span class="q-lbl">Problem</span></div>
+  <div class="q-step active" id="qs-0" onclick="goStep(0)"><span class="q-num">1</span><span class="q-lbl">Literature</span></div>
   <div class="q-line"></div>
-  <div class="q-step" id="qs-1" onclick="goStep(1)"><span class="q-num">2</span><span class="q-lbl">Literature</span></div>
+  <div class="q-step" id="qs-1" onclick="goStep(1)"><span class="q-num">2</span><span class="q-lbl">Gap</span></div>
   <div class="q-line"></div>
-  <div class="q-step" id="qs-2" onclick="goStep(2)"><span class="q-num">3</span><span class="q-lbl">Gap</span></div>
+  <div class="q-step" id="qs-2" onclick="goStep(2)"><span class="q-num">3</span><span class="q-lbl">Objectives</span></div>
   <div class="q-line"></div>
-  <div class="q-step" id="qs-3" onclick="goStep(3)"><span class="q-num">4</span><span class="q-lbl">Objectives</span></div>
+  <div class="q-step" id="qs-3" onclick="goStep(3)"><span class="q-num">4</span><span class="q-lbl">Statement</span></div>
   <div class="q-line"></div>
-  <div class="q-step" id="qs-4" onclick="goStep(4)"><span class="q-num">5</span><span class="q-lbl">Statement</span></div>
+  <div class="q-step" id="qs-4" onclick="goStep(4)"><span class="q-num">5</span><span class="q-lbl">Visuals</span></div>
   <div class="q-line"></div>
-  <div class="q-step" id="qs-5" onclick="goStep(5)"><span class="q-num">6</span><span class="q-lbl">Visuals</span></div>
-  <div class="q-line"></div>
-  <div class="q-step" id="qs-6" onclick="goStep(6)"><span class="q-num">7</span><span class="q-lbl">Settings</span></div>
+  <div class="q-step" id="qs-5" onclick="goStep(5)"><span class="q-num">6</span><span class="q-lbl">Settings</span></div>
 </div>
 
-<!-- ── Step 0: Problem Identification ───────────────────── -->
+<!-- ── Step 0: Literature Review ────────────────────────── -->
 <div class="q-panel active" id="qp-0">
-  <div class="q-badge">Step 1 of 7</div>
-  <div class="ct" style="margin-bottom:6px">Identification of the Problem</div>
-  <div class="cs" style="margin-bottom:20px">What specific problem prompted this research? Describe it in your own words, AI will use this as the foundation. <strong style="color:var(--accent)">Optional — skip if you prefer AI to write this.</strong></div>
-  <div class="q-hint">💡 Think about: What is wrong or missing? Who is affected? What is the scale of the problem? What are the consequences of not addressing it?</div>
-  <div class="fg">
-    <label>Research Topic / Title *</label>
-    <input type="text" id="topic-in" placeholder="e.g. Legal Frameworks for Environmental Restoration in Post-War Reconstruction">
-  </div>
-  <div class="fg">
-    <label>Problem Statement <span style="color:var(--dim);font-weight:400">(optional)</span></label>
-    <textarea id="q-problem" rows="5" placeholder="Describe the core problem your research addresses. What issue exists? What are its consequences? Why does it need to be studied now?&#10;&#10;Example: Armed conflicts inflict devastating environmental damage that persists long after hostilities cease. Existing legal frameworks under the Geneva Conventions and Rome Statute fail to adequately address post-war ecological restoration, leaving affected communities without legal recourse or environmental remediation. This gap in international humanitarian law creates a vacuum where neither state nor non-state actors are held accountable for long-term environmental harm..."></textarea>
-  </div>
-  <div style="display:flex;gap:10px;justify-content:flex-end">
-    <div style="display:flex;gap:10px;justify-content:flex-end">
-      <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="nextStep(0)">Skip →</button>
-      <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(0)">Next → Literature Review</button>
-    </div>
-  </div>
-</div>
-
-<!-- ── Step 1: Literature Review ────────────────────────── -->
-<div class="q-panel" id="qp-1">
-  <div class="q-badge">Step 2 of 7</div>
+  <div class="q-badge">Step 1 of 6</div>
   <div class="ct" style="margin-bottom:6px">Literature Review</div>
-  <div class="cs" style="margin-bottom:20px">What sources have you reviewed? List them and AI will expand into a full literature review. <strong style="color:var(--accent)">Optional — AI will find real papers automatically if you skip.</strong></div>
+  <div class="cs" style="margin-bottom:20px">What sources have you reviewed? List them and AI will expand into a full literature review. <strong style="color:var(--accent)">Optional — AI will find real papers automatically if you leave this blank.</strong></div>
   <div class="q-hint">💡 Include: Author names and years, key arguments, relevant reports, laws, treaties, court cases, or books. Even brief notes are fine — AI will elaborate.</div>
   <div class="fg">
     <label>Key Sources & Their Main Arguments *</label>
     <textarea id="q-lit" rows="8" placeholder="List the sources you have reviewed and what they say. Examples:&#10;&#10;- Geneva Conventions (1949) & Additional Protocol I (1977) — establish basic environmental protections during armed conflict but lack post-war restoration obligations&#10;- UNEP (2009) From Conflict to Peacebuilding — documents how environmental damage sustains conflict cycles&#10;- Bothe, Bruch & Jensen (2010) — argue existing IHL is inadequate for modern environmental warfare&#10;- Rome Statute Art. 8 — criminalises widespread environmental damage but enforcement is rare&#10;- UN Compensation Commission (Kuwait, 1991) — first successful precedent for war environmental claims..."></textarea>
   </div>
-  <div style="display:flex;gap:10px;justify-content:space-between">
-    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(1)">← Back</button>
-    <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(1)">Skip →</button>
-    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(1)">Next → Research Gap</button>
+  <div style="display:flex;gap:10px;justify-content:flex-end">
+    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(0)">Next → Research Gap</button>
   </div>
 </div>
 
-<!-- ── Step 2: Research Gap ──────────────────────────────── -->
-<div class="q-panel" id="qp-2">
-  <div class="q-badge">Step 3 of 7</div>
+<!-- ── Step 1: Research Gap ──────────────────────────────── -->
+<div class="q-panel" id="qp-1">
+  <div class="q-badge">Step 2 of 6</div>
   <div class="ct" style="margin-bottom:6px">Research Gap</div>
-  <div class="cs" style="margin-bottom:20px">What is missing from existing research? AI will use your answer as the gap statement. <strong style="color:var(--accent)">Optional — AI will identify a gap automatically if you skip.</strong></div>
+  <div class="cs" style="margin-bottom:20px">What is missing from existing research? AI will use your answer as the gap statement. <strong style="color:var(--accent)">Optional — AI will identify a gap automatically if you leave this blank.</strong></div>
   <div class="q-hint">💡 Ask yourself: What do existing studies not cover? What contradictions exist in the literature? What context or population has been ignored? What methodology hasn't been applied?</div>
   <div class="fg">
     <label>The Research Gap <span style="color:var(--dim);font-weight:400">(optional)</span></label>
     <textarea id="q-gap" rows="5" placeholder="Describe what is missing from current research and why your study is needed.&#10;&#10;Example: While significant scholarship exists on environmental protection during armed conflict, there is a critical gap in research on post-war environmental restoration obligations. Existing studies either focus on pre-conflict prevention or general humanitarian law without addressing the specific legal mechanisms required for ecological recovery. Furthermore, no comparative study has examined how different post-conflict nations (Iraq, Kosovo, Lebanon, Ukraine) have implemented or failed to implement environmental restoration under international law..."></textarea>
   </div>
   <div style="display:flex;gap:10px;justify-content:space-between">
-    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(2)">← Back</button>
-    <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(2)">Skip →</button>
-    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(2)">Next → Objectives</button>
+    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(1)">← Back</button>
+    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(1)">Next → Objectives</button>
   </div>
 </div>
 
-<!-- ── Step 3: Objectives ────────────────────────────────── -->
-<div class="q-panel" id="qp-3">
-  <div class="q-badge">Step 4 of 7</div>
+<!-- ── Step 2: Objectives ────────────────────────────────── -->
+<div class="q-panel" id="qp-2">
+  <div class="q-badge">Step 3 of 6</div>
   <div class="ct" style="margin-bottom:6px">Objectives of the Research</div>
-  <div class="cs" style="margin-bottom:20px">List your research objectives — they will appear verbatim in your paper. <strong style="color:var(--accent)">Optional — AI will generate objectives aligned to your topic if you skip.</strong></div>
+  <div class="cs" style="margin-bottom:20px">List your research objectives — they will appear verbatim in your paper. <strong style="color:var(--accent)">Optional — AI will generate objectives aligned to your topic if you leave this blank.</strong></div>
   <div class="q-hint">💡 Good objectives: Start with "To examine / To analyse / To evaluate / To compare / To propose". Be specific. You need 4–6 objectives. One per line.</div>
   <div class="fg">
     <label>Research Objectives <span style="color:var(--dim);font-weight:400">(optional — one per line)</span></label>
     <textarea id="q-objectives" rows="7" placeholder="To examine the existing international legal frameworks governing environmental restoration in post-war reconstruction&#10;To analyse compensation mechanisms including liability determination, reparations, and restoration funding&#10;To evaluate practical challenges such as political instability, limited resources, and technical capacity gaps&#10;To compare legal approaches from different post-conflict contexts including Iraq, Kosovo, Lebanon, and Ukraine&#10;To propose recommendations for strengthening enforcement mechanisms and legal accountability for wartime environmental harm"></textarea>
   </div>
   <div style="display:flex;gap:10px;justify-content:space-between">
-    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(3)">← Back</button>
-    <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(3)">Skip →</button>
-    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(3)">Next → Research Statement</button>
+    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(2)">← Back</button>
+    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(2)">Next → Research Statement</button>
   </div>
 </div>
 
-<!-- ── Step 4: Research Statement ───────────────────────── -->
-<div class="q-panel" id="qp-4">
-  <div class="q-badge">Step 5 of 7</div>
+<!-- ── Step 3: Research Statement ───────────────────────── -->
+<div class="q-panel" id="qp-3">
+  <div class="q-badge">Step 4 of 6</div>
   <div class="ct" style="margin-bottom:6px">Research Statement</div>
-  <div class="cs" style="margin-bottom:20px">Your thesis in 2–4 sentences — what this research does, how, and why. <strong style="color:var(--accent)">Optional — AI will formulate a research statement if you skip.</strong></div>
+  <div class="cs" style="margin-bottom:20px">Your thesis in 2–4 sentences — what this research does, how, and why. <strong style="color:var(--accent)">Optional — AI will formulate a research statement if you leave this blank.</strong></div>
   <div class="q-hint">💡 A good research statement: Names the topic, identifies the method (doctrinal/empirical/comparative), and states the significance. Typically 2–4 sentences.</div>
   <div class="fg">
     <label>Research Statement <span style="color:var(--dim);font-weight:400">(optional)</span></label>
     <textarea id="q-statement" rows="5" placeholder="This study investigates the legal frameworks governing environmental restoration in post-war reconstruction, focusing on obligations, compensation mechanisms, and practical implementation challenges. Through a comparative doctrinal analysis of international instruments and empirical case studies from four post-conflict regions, this research identifies critical gaps in existing law and proposes actionable reforms to strengthen ecological restoration as an integral component of sustainable peace-building."></textarea>
   </div>
   <div style="display:flex;gap:10px;justify-content:space-between">
-    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(4)">← Back</button>
-    <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(4)">Skip →</button>
-    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(4)">Next → Visual Analysis</button>
+    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(3)">← Back</button>
+    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(3)">Next → Visual Analysis</button>
   </div>
 </div>
 
-<!-- ── Step 5: Visual Analysis (upload real survey data) ─── -->
-<div class="q-panel" id="qp-5">
-  <div class="q-badge">Step 6 of 7</div>
+<!-- ── Step 4: Visual Analysis (upload real survey data) ─── -->
+<div class="q-panel" id="qp-4">
+  <div class="q-badge">Step 5 of 6</div>
   <div class="ct" style="margin-bottom:6px">Visual Analysis</div>
   <div class="cs" style="margin-bottom:20px">Upload your own survey data (CSV or Excel) and rdxper will generate real, data-driven SPSS-style charts from it instead of AI-simulated ones. <strong style="color:var(--accent)">Optional — skip to let AI generate the charts automatically.</strong></div>
   <div class="q-hint">💡 Works best with survey exports (Google Forms, SurveyMonkey, Excel, etc.) that have demographic columns (age, gender, education, occupation...) alongside response columns (Likert-scale or categorical questions). If the file only covers some of your figures, AI fills in the rest.</div>
@@ -2946,15 +2945,15 @@ textarea::placeholder{color:#bbb;font-size:12px}
   </div>
   <div id="survey-status" class="notif"></div>
   <div style="display:flex;gap:10px;justify-content:space-between">
-    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(5)">← Back</button>
-    <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(5)">Skip →</button>
-    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(5)">Next → Paper Settings</button>
+    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(4)">← Back</button>
+    <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(4)">Skip →</button>
+    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(4)">Next → Paper Settings</button>
   </div>
 </div>
 
-<!-- ── Step 6: Settings + Generate ──────────────────────── -->
-<div class="q-panel" id="qp-6">
-  <div class="q-badge">Step 7 of 7</div>
+<!-- ── Step 5: Settings + Generate ──────────────────────── -->
+<div class="q-panel" id="qp-5">
+  <div class="q-badge">Step 6 of 6</div>
   <div class="ct" style="margin-bottom:6px">Paper Settings</div>
   <div class="cs" style="margin-bottom:20px">Final details for your paper. AI will now use all your inputs to generate a genuine research paper.</div>
   <div id="n-gen" class="notif"></div>
@@ -2992,7 +2991,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
       style="width:100%;accent-color:var(--accent)">
   </div>
   <div style="display:flex;gap:10px;justify-content:space-between">
-    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(6)">← Back</button>
+    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(5)">← Back</button>
     <button class="btn btn-p" id="btn-gen" onclick="generate()" style="flex:1">Generate Research Paper</button>
   </div>
 </div>
@@ -3020,7 +3019,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
     <div class="card" style="text-align:center">
       <div style="font-size:48px;margin-bottom:12px">✅</div>
       <div class="ct">Paper ready!</div>
-      <div class="cs" id="done-sub">Preview it below, then unlock the full download</div>
+      <div class="cs">Preview it, then unlock the full download</div>
       <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:16px;margin:16px 0;text-align:left">
         <div style="display:flex;justify-content:space-between;margin-bottom:8px">
           <span style="color:var(--muted);font-size:13px">Topic</span>
@@ -3033,21 +3032,32 @@ textarea::placeholder{color:#bbb;font-size:12px}
           <span style="font-size:13px" id="d-time"></span></div>
       </div>
 
-      <div style="position:relative;text-align:left;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:16px;margin:16px 0;max-height:260px;overflow:hidden">
-        <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:8px;letter-spacing:.06em">PREVIEW</div>
-        <div id="preview-text" style="font-size:13px;line-height:1.65;white-space:pre-wrap;color:var(--text)">Loading preview…</div>
-        <div id="preview-fade" style="position:absolute;left:0;right:0;bottom:0;height:90px;background:linear-gradient(to bottom, rgba(245,245,245,0), var(--surface2))"></div>
-      </div>
-
-      <div id="pay-box">
-        <button class="btn btn-dl" id="btn-pay" onclick="payAndUnlock()">🔒 Pay ₹__PAPER_PRICE__ &amp; Unlock Download</button>
-        <div style="font-size:11px;color:var(--dim);margin-top:6px">Secure payment via Razorpay</div>
-      </div>
-      <button class="btn btn-dl" id="btn-dl" onclick="download()" style="display:none">⬇ Download Research Paper (.docx)</button>
+      <button class="btn btn-dl" id="btn-open-preview" onclick="openPreviewModal()">📄 Preview &amp; Unlock Paper</button>
 
       <button class="btn btn-s" onclick="again()" style="margin-top:8px">Generate another paper</button>
       <button class="btn btn-s" onclick="loadDashboard();show('s-dashboard')" style="margin-top:6px;opacity:.7">← Back to Dashboard</button>
     </div>
+  </div>
+</div>
+
+<!-- PREVIEW WINDOW — pops up with partial paper content + the payment button -->
+<div class="modal-overlay" id="preview-modal">
+  <div class="modal-box" style="max-width:520px">
+    <button class="modal-close" onclick="closePreviewModal()" title="Close">×</button>
+    <div class="ct">Paper Preview</div>
+    <div class="cs" id="done-sub">Preview it below, then unlock the full download</div>
+
+    <div style="position:relative;text-align:left;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:16px;margin:16px 0;max-height:260px;overflow:hidden">
+      <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:8px;letter-spacing:.06em">PREVIEW</div>
+      <div id="preview-text" style="font-size:13px;line-height:1.65;white-space:pre-wrap;color:var(--text)">Loading preview…</div>
+      <div id="preview-fade" style="position:absolute;left:0;right:0;bottom:0;height:90px;background:linear-gradient(to bottom, rgba(245,245,245,0), var(--surface2))"></div>
+    </div>
+
+    <div id="pay-box">
+      <button class="btn btn-dl" id="btn-pay" onclick="payAndUnlock()">🔒 Pay ₹__PAPER_PRICE__ &amp; Unlock Download</button>
+      <div style="font-size:11px;color:var(--dim);margin-top:6px">Secure payment via Razorpay</div>
+    </div>
+    <button class="btn btn-dl" id="btn-dl" onclick="download()" style="display:none">⬇ Download Research Paper (.docx)</button>
   </div>
 </div>
 
@@ -3216,7 +3226,7 @@ function forceLogout(){
 function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
 function startNewPaper(){
-  // Reset questionnaire state then navigate
+  // Reset questionnaire state, then pop up the Title Window first
   ['topic-in','inst-in','q-problem','q-lit','q-gap','q-objectives','q-statement',
    'co-author-name','co-author-title','co-author-inst','co-author-email','co-author-phone'].forEach(id=>{
     const el=document.getElementById(id);if(el) el.value='';
@@ -3228,7 +3238,30 @@ function startNewPaper(){
   if(fIn) fIn.value='';
   const sSt=document.getElementById('survey-status');
   if(sSt) sSt.className='notif';
-  goStep(0);
+  const nT=document.getElementById('n-title');
+  if(nT) nT.className='notif';
+  openTitleModal();
+}
+
+function openTitleModal(){
+  document.getElementById('title-modal').classList.add('active');
+  setTimeout(()=>{const t=document.getElementById('topic-in');if(t)t.focus();},50);
+}
+
+function closeTitleModal(){
+  document.getElementById('title-modal').classList.remove('active');
+}
+
+function startResearch(){
+  // Identification of the Problem (title + optional problem statement) — then
+  // straight into the questionnaire, starting at Literature Review.
+  if(!document.getElementById('topic-in').value.trim()){
+    notify('n-title','Please enter your research topic — this is the only required field.','error');
+    return;
+  }
+  closeTitleModal();
+  currentStep = 0;
+  renderStep();
   show('s-gen');
 }
 
@@ -3244,25 +3277,22 @@ function logout(){
 }
 
 // ── QUESTIONNAIRE NAVIGATION ────────────────────────────────────────────────
+// Title (topic + problem statement) is collected in the Title Window modal
+// before this questionnaire ever opens. The questionnaire itself starts at
+// Literature Review, and every core input tab can be freely navigated —
+// clicking any step in the tab bar jumps straight there, in either direction.
 let currentStep = 0;
-const totalSteps = 7;
+const totalSteps = 6;
 let surveyUploadId = '';
 let surveyUploadInfo = null;
 
 function goStep(n){
-  // Only allow going back to completed steps
-  if(n > currentStep) return;
   currentStep = n;
   renderStep();
 }
 
 function nextStep(from){
-  // Only validate the topic (required), everything else is optional
-  if(from===0 && !document.getElementById('topic-in').value.trim()){
-    alert('Please enter your research topic — this is the only required field.'); return;
-  }
   currentStep = from + 1;
-  if(currentStep === 6) buildSummary();
   renderStep();
 }
 
@@ -3284,6 +3314,7 @@ function renderStep(){
     const lines = document.querySelectorAll('.q-line');
     lines.forEach((l,li)=>{ l.classList.toggle('done', li < currentStep); });
   }
+  if(currentStep === totalSteps - 1) buildSummary();
   window.scrollTo({top:0,behavior:'smooth'});
 }
 
@@ -3419,6 +3450,7 @@ function pollStatus(){
         document.getElementById('d-time').textContent=new Date().toLocaleTimeString();
         show('s-done');
         loadPreview();
+        openPreviewModal();
       }else if(d.status==='error'){
         clearInterval(poll);
         const btn=document.getElementById('btn-gen');btn.disabled=false;btn.innerHTML='✦ Generate Paper (Free AI)';
@@ -3429,6 +3461,14 @@ function pollStatus(){
 }
 
 let paperPaid = false;
+
+function openPreviewModal(){
+  document.getElementById('preview-modal').classList.add('active');
+}
+
+function closePreviewModal(){
+  document.getElementById('preview-modal').classList.remove('active');
+}
 
 async function loadPreview(){
   try{
@@ -3516,6 +3556,7 @@ async function download(){
 
 function again(){
   jobId='';curTopic='';paperPaid=false;
+  closePreviewModal();
   ['topic-in','inst-in','q-problem','q-lit','q-gap','q-objectives','q-statement',
    'co-author-name','co-author-title','co-author-inst','co-author-email','co-author-phone'].forEach(id=>{
     const el=document.getElementById(id);if(el) el.value='';
