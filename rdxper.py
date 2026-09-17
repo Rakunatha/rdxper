@@ -2653,16 +2653,11 @@ tr:hover td{background:#f9f9f9}
 .page-sub{font-size:14px;color:#666;margin-bottom:24px}
 footer{text-align:center;padding:32px 0;color:#999;font-size:12px;border-top:1.5px solid #d0d0d0;margin-top:40px}
 /* Questionnaire */
-.q-steps{display:flex;align-items:center;margin-bottom:28px;padding:0 4px}
-.q-step{display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;min-width:56px}
-.q-num{width:28px;height:28px;border-radius:50%;background:#f5f5f5;border:2px solid #d0d0d0;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#999;transition:all .3s}
-.q-lbl{font-size:10px;color:#999;transition:color .3s;white-space:nowrap}
-.q-step.active .q-num{background:#111;border-color:#111;color:#fff}
-.q-step.active .q-lbl{color:#111;font-weight:700}
-.q-step.done .q-num{background:#555;border-color:#555;color:#fff}
-.q-step.done .q-lbl{color:#555}
-.q-line{flex:1;height:2px;background:#d0d0d0;margin:0 4px;margin-bottom:14px;transition:background .3s}
-.q-line.done{background:#111}
+.q-steps{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:28px}
+.q-step{display:flex;align-items:center;justify-content:center;cursor:pointer;flex:1 1 140px;padding:16px 14px;border-radius:12px;border:1.5px solid #d0d0d0;background:#f9f9f9;color:#555;font-size:15px;font-weight:700;text-align:center;transition:all .2s;user-select:none}
+.q-step:hover{border-color:#999;color:#111}
+.q-step.active{background:#111;border-color:#111;color:#fff}
+.q-step.done{background:#eee;border-color:#bbb;color:#333}
 .q-panel{display:none}.q-panel.active{display:block}
 /* Modals (Title Window / Preview Window) */
 .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:200;align-items:center;justify-content:center;padding:20px;overflow-y:auto}
@@ -2680,7 +2675,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
 .q-summary-item:last-child{margin-bottom:0;padding-bottom:0;border-bottom:none}
 .q-summary-label{color:#111;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
 .q-summary-val{color:#444;line-height:1.5;max-height:60px;overflow:hidden;text-overflow:ellipsis}
-@media(max-width:600px){.q-lbl{display:none}.q-steps{gap:0}.q-step{min-width:36px}}
+@media(max-width:600px){.q-steps{gap:8px}.q-step{flex:1 1 100px;padding:13px 10px;font-size:13px}}
 @media(max-width:600px){.sections-grid{grid-template-columns:repeat(3,1fr)}.stat-grid{grid-template-columns:repeat(2,1fr)}.nav-links{gap:4px}}
 /* ── Dashboard ── */
 .dash-header{padding:36px 0 8px}
@@ -2832,6 +2827,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
 <!-- TITLE WINDOW — pops up first, before the questionnaire -->
 <div class="modal-overlay" id="title-modal">
   <div class="modal-box" style="max-width:520px">
+    <button class="modal-close" onclick="closeTitleModal()" title="Close">×</button>
     <div class="ct" style="margin-bottom:6px">What are you researching?</div>
     <div class="cs" style="margin-bottom:20px">Give your paper a title and, if you like, describe the problem behind it. AI will use this as the foundation for everything else. Once you continue, we'll move straight into the Literature Review.</div>
     <div class="q-hint">💡 Think about: What is wrong or missing? Who is affected? What is the scale of the problem? What are the consequences of not addressing it?</div>
@@ -2860,17 +2856,12 @@ textarea::placeholder{color:#bbb;font-size:12px}
 
 <!-- Step indicator -->
 <div class="q-steps" id="q-steps">
-  <div class="q-step active" id="qs-0" onclick="goStep(0)"><span class="q-num">1</span><span class="q-lbl">Literature</span></div>
-  <div class="q-line"></div>
-  <div class="q-step" id="qs-1" onclick="goStep(1)"><span class="q-num">2</span><span class="q-lbl">Gap</span></div>
-  <div class="q-line"></div>
-  <div class="q-step" id="qs-2" onclick="goStep(2)"><span class="q-num">3</span><span class="q-lbl">Objectives</span></div>
-  <div class="q-line"></div>
-  <div class="q-step" id="qs-3" onclick="goStep(3)"><span class="q-num">4</span><span class="q-lbl">Statement</span></div>
-  <div class="q-line"></div>
-  <div class="q-step" id="qs-4" onclick="goStep(4)"><span class="q-num">5</span><span class="q-lbl">Visuals</span></div>
-  <div class="q-line"></div>
-  <div class="q-step" id="qs-5" onclick="goStep(5)"><span class="q-num">6</span><span class="q-lbl">Settings</span></div>
+  <div class="q-step active" id="qs-0" onclick="goStep(0)">Literature Review</div>
+  <div class="q-step" id="qs-1" onclick="goStep(1)">Research Gap</div>
+  <div class="q-step" id="qs-2" onclick="goStep(2)">Objectives</div>
+  <div class="q-step" id="qs-3" onclick="goStep(3)">Research Statement</div>
+  <div class="q-step" id="qs-4" onclick="goStep(4)">Visual Analysis</div>
+  <div class="q-step" id="qs-5" onclick="goStep(5)">Settings</div>
 </div>
 
 <!-- ── Step 0: Literature Review ────────────────────────── -->
@@ -2882,9 +2873,6 @@ textarea::placeholder{color:#bbb;font-size:12px}
   <div class="fg">
     <label>Key Sources & Their Main Arguments *</label>
     <textarea id="q-lit" rows="8" placeholder="List the sources you have reviewed and what they say. Examples:&#10;&#10;- Geneva Conventions (1949) & Additional Protocol I (1977) — establish basic environmental protections during armed conflict but lack post-war restoration obligations&#10;- UNEP (2009) From Conflict to Peacebuilding — documents how environmental damage sustains conflict cycles&#10;- Bothe, Bruch & Jensen (2010) — argue existing IHL is inadequate for modern environmental warfare&#10;- Rome Statute Art. 8 — criminalises widespread environmental damage but enforcement is rare&#10;- UN Compensation Commission (Kuwait, 1991) — first successful precedent for war environmental claims..."></textarea>
-  </div>
-  <div style="display:flex;gap:10px;justify-content:flex-end">
-    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(0)">Next → Research Gap</button>
   </div>
 </div>
 
@@ -2898,10 +2886,6 @@ textarea::placeholder{color:#bbb;font-size:12px}
     <label>The Research Gap <span style="color:var(--dim);font-weight:400">(optional)</span></label>
     <textarea id="q-gap" rows="5" placeholder="Describe what is missing from current research and why your study is needed.&#10;&#10;Example: While significant scholarship exists on environmental protection during armed conflict, there is a critical gap in research on post-war environmental restoration obligations. Existing studies either focus on pre-conflict prevention or general humanitarian law without addressing the specific legal mechanisms required for ecological recovery. Furthermore, no comparative study has examined how different post-conflict nations (Iraq, Kosovo, Lebanon, Ukraine) have implemented or failed to implement environmental restoration under international law..."></textarea>
   </div>
-  <div style="display:flex;gap:10px;justify-content:space-between">
-    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(1)">← Back</button>
-    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(1)">Next → Objectives</button>
-  </div>
 </div>
 
 <!-- ── Step 2: Objectives ────────────────────────────────── -->
@@ -2913,10 +2897,6 @@ textarea::placeholder{color:#bbb;font-size:12px}
   <div class="fg">
     <label>Research Objectives <span style="color:var(--dim);font-weight:400">(optional — one per line)</span></label>
     <textarea id="q-objectives" rows="7" placeholder="To examine the existing international legal frameworks governing environmental restoration in post-war reconstruction&#10;To analyse compensation mechanisms including liability determination, reparations, and restoration funding&#10;To evaluate practical challenges such as political instability, limited resources, and technical capacity gaps&#10;To compare legal approaches from different post-conflict contexts including Iraq, Kosovo, Lebanon, and Ukraine&#10;To propose recommendations for strengthening enforcement mechanisms and legal accountability for wartime environmental harm"></textarea>
-  </div>
-  <div style="display:flex;gap:10px;justify-content:space-between">
-    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(2)">← Back</button>
-    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(2)">Next → Research Statement</button>
   </div>
 </div>
 
@@ -2930,28 +2910,19 @@ textarea::placeholder{color:#bbb;font-size:12px}
     <label>Research Statement <span style="color:var(--dim);font-weight:400">(optional)</span></label>
     <textarea id="q-statement" rows="5" placeholder="This study investigates the legal frameworks governing environmental restoration in post-war reconstruction, focusing on obligations, compensation mechanisms, and practical implementation challenges. Through a comparative doctrinal analysis of international instruments and empirical case studies from four post-conflict regions, this research identifies critical gaps in existing law and proposes actionable reforms to strengthen ecological restoration as an integral component of sustainable peace-building."></textarea>
   </div>
-  <div style="display:flex;gap:10px;justify-content:space-between">
-    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(3)">← Back</button>
-    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(3)">Next → Visual Analysis</button>
-  </div>
 </div>
 
 <!-- ── Step 4: Visual Analysis (upload real survey data) ─── -->
 <div class="q-panel" id="qp-4">
   <div class="q-badge">Step 5 of 6</div>
   <div class="ct" style="margin-bottom:6px">Visual Analysis</div>
-  <div class="cs" style="margin-bottom:20px">Upload your own survey data (CSV or Excel) and rdxper will generate real, data-driven SPSS-style charts from it instead of AI-simulated ones. <strong style="color:var(--accent)">Optional — skip to let AI generate the charts automatically.</strong></div>
+  <div class="cs" style="margin-bottom:20px">Upload your own survey data (CSV or Excel) and rdxper will generate real, data-driven SPSS-style charts from it instead of AI-simulated ones. <strong style="color:var(--accent)">Optional — leave blank to let AI generate the charts automatically.</strong></div>
   <div class="q-hint">💡 Works best with survey exports (Google Forms, SurveyMonkey, Excel, etc.) that have demographic columns (age, gender, education, occupation...) alongside response columns (Likert-scale or categorical questions). If the file only covers some of your figures, AI fills in the rest.</div>
   <div class="fg">
     <label>Survey Data File <span style="color:var(--dim);font-weight:400">(.csv, .xlsx or .xls — optional, max 8MB)</span></label>
     <input type="file" id="survey-file-in" accept=".csv,.xlsx,.xls" onchange="handleSurveyFile()">
   </div>
   <div id="survey-status" class="notif"></div>
-  <div style="display:flex;gap:10px;justify-content:space-between">
-    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(4)">← Back</button>
-    <button class="btn btn-s" style="width:auto;padding:10px 18px" onclick="nextStep(4)">Skip →</button>
-    <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="nextStep(4)">Next → Paper Settings</button>
-  </div>
 </div>
 
 <!-- ── Step 5: Settings + Generate ──────────────────────── -->
@@ -2993,8 +2964,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
       oninput="document.getElementById('sl-display').textContent=this.value"
       style="width:100%;accent-color:var(--accent)">
   </div>
-  <div style="display:flex;gap:10px;justify-content:space-between">
-    <button class="btn btn-s" style="width:auto;padding:10px 20px" onclick="prevStep(5)">← Back</button>
+  <div style="display:flex;gap:10px;justify-content:flex-end">
     <button class="btn btn-p" id="btn-gen" onclick="generate()" style="flex:1">Generate Research Paper</button>
   </div>
 </div>
@@ -3303,16 +3273,6 @@ function goStep(n){
   renderStep();
 }
 
-function nextStep(from){
-  currentStep = from + 1;
-  renderStep();
-}
-
-function prevStep(from){
-  currentStep = from - 1;
-  renderStep();
-}
-
 function renderStep(){
   for(let i=0;i<totalSteps;i++){
     const panel = document.getElementById('qp-'+i);
@@ -3322,9 +3282,6 @@ function renderStep(){
     step.classList.remove('active','done');
     if(i===currentStep) step.classList.add('active');
     else if(i<currentStep) step.classList.add('done');
-    // Update connector lines
-    const lines = document.querySelectorAll('.q-line');
-    lines.forEach((l,li)=>{ l.classList.toggle('done', li < currentStep); });
   }
   if(currentStep === totalSteps - 1) buildSummary();
   window.scrollTo({top:0,behavior:'smooth'});
