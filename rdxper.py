@@ -2841,7 +2841,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
     </div>
     <div id="n-title" class="notif"></div>
     <div style="display:flex;gap:10px;justify-content:flex-end">
-      <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="startResearch()">Next → Literature Review</button>
+      <button class="btn btn-p" style="width:auto;padding:10px 28px" onclick="startResearch()">Begin Research →</button>
     </div>
   </div>
 </div>
