@@ -2413,24 +2413,16 @@ class PaperGenerator:
         self.jobs[self.jid].update({'progress': pct, 'message': msg, 'status': 'running'})
         print(f'[{self.jid[:8]}] {pct}% – {msg}')
 
-    def _build_preview(self, sections: dict, max_words: int = 220) -> str:
-        """Free teaser text shown before payment: keywords + abstract + intro,
-        truncated. Never includes the full paper."""
-        parts = []
-        kw = (sections.get('keywords') or '').strip()
-        if kw:
-            parts.append(f'Keywords: {kw}')
-        ab = (sections.get('abstract') or '').strip()
-        if ab:
-            parts.append(ab)
-        intro = (sections.get('introduction') or '').strip()
-        if intro:
-            parts.append(intro)
-        text = '\n\n'.join(parts)
-        words = text.split()
-        if len(words) > max_words:
-            text = ' '.join(words[:max_words]) + ' …'
-        return text
+    def _build_preview(self, sections: dict) -> str:
+        """Free teaser shown before payment: just the abstract & keywords
+        (title comes from the paper record itself), stored as JSON so the
+        preview modal can render them as clearly separated fields. Never
+        includes the full paper."""
+        data = {
+            'abstract': (sections.get('abstract') or '').strip(),
+            'keywords': (sections.get('keywords') or '').strip(),
+        }
+        return json.dumps(data)
 
 
     def generate(self, topic: str, nfigs: int, author: str, inst: str, email: str,
@@ -2829,15 +2821,10 @@ textarea::placeholder{color:#bbb;font-size:12px}
   <div class="modal-box" style="max-width:520px">
     <button class="modal-close" onclick="closeTitleModal()" title="Close">×</button>
     <div class="ct" style="margin-bottom:6px">What are you researching?</div>
-    <div class="cs" style="margin-bottom:20px">Give your paper a title and, if you like, describe the problem behind it. AI will use this as the foundation for everything else. Once you continue, we'll move straight into the Literature Review.</div>
-    <div class="q-hint">💡 Think about: What is wrong or missing? Who is affected? What is the scale of the problem? What are the consequences of not addressing it?</div>
+    <div class="cs" style="margin-bottom:20px">Give your paper a title. AI will use this as the foundation for everything else. Once you continue, we'll move straight into the Literature Review.</div>
     <div class="fg">
       <label>Research Topic / Title *</label>
       <input type="text" id="topic-in" placeholder="e.g. Legal Frameworks for Environmental Restoration in Post-War Reconstruction">
-    </div>
-    <div class="fg">
-      <label>Problem Statement <span style="color:var(--dim);font-weight:400">(optional)</span></label>
-      <textarea id="q-problem" rows="5" placeholder="Describe the core problem your research addresses. What issue exists? What are its consequences? Why does it need to be studied now?&#10;&#10;Example: Armed conflicts inflict devastating environmental damage that persists long after hostilities cease. Existing legal frameworks under the Geneva Conventions and Rome Statute fail to adequately address post-war ecological restoration, leaving affected communities without legal recourse or environmental remediation. This gap in international humanitarian law creates a vacuum where neither state nor non-state actors are held accountable for long-term environmental harm..."></textarea>
     </div>
     <div id="n-title" class="notif"></div>
     <div style="display:flex;gap:10px;justify-content:flex-end">
@@ -2861,7 +2848,7 @@ textarea::placeholder{color:#bbb;font-size:12px}
   <div class="q-step" id="qs-2" onclick="goStep(2)">Objectives</div>
   <div class="q-step" id="qs-3" onclick="goStep(3)">Research Statement</div>
   <div class="q-step" id="qs-4" onclick="goStep(4)">Visual Analysis</div>
-  <div class="q-step" id="qs-5" onclick="goStep(5)">Settings</div>
+  <div class="q-step" id="qs-5" onclick="goStep(5)">Finalize &amp; Generate</div>
 </div>
 
 <!-- ── Step 0: Literature Review ────────────────────────── -->
@@ -3020,10 +3007,19 @@ textarea::placeholder{color:#bbb;font-size:12px}
     <div class="ct">Paper Preview</div>
     <div class="cs" id="done-sub">Preview it below, then unlock the full download</div>
 
-    <div style="position:relative;text-align:left;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:16px;margin:16px 0;max-height:260px;overflow:hidden">
-      <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:8px;letter-spacing:.06em">PREVIEW</div>
-      <div id="preview-text" style="font-size:13px;line-height:1.65;white-space:pre-wrap;color:var(--text)">Loading preview…</div>
-      <div id="preview-fade" style="position:absolute;left:0;right:0;bottom:0;height:90px;background:linear-gradient(to bottom, rgba(245,245,245,0), var(--surface2))"></div>
+    <div style="text-align:left;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:16px;margin:16px 0;max-height:340px;overflow-y:auto">
+      <div style="margin-bottom:14px">
+        <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px;letter-spacing:.06em">TITLE</div>
+        <div id="preview-title" style="font-size:14px;font-weight:700;line-height:1.5;color:var(--text)">Loading…</div>
+      </div>
+      <div style="margin-bottom:14px">
+        <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px;letter-spacing:.06em">ABSTRACT</div>
+        <div id="preview-abstract" style="font-size:13px;line-height:1.65;white-space:pre-wrap;color:var(--text)">Loading…</div>
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px;letter-spacing:.06em">KEYWORDS</div>
+        <div id="preview-keywords" style="font-size:13px;line-height:1.65;color:var(--text)">Loading…</div>
+      </div>
     </div>
 
     <div id="promo-box" style="text-align:left;margin-bottom:14px">
@@ -3209,7 +3205,7 @@ function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(
 
 function startNewPaper(){
   // Reset questionnaire state, then pop up the Title Window first
-  ['topic-in','inst-in','q-problem','q-lit','q-gap','q-objectives','q-statement',
+  ['topic-in','inst-in','q-lit','q-gap','q-objectives','q-statement',
    'co-author-name','co-author-title','co-author-inst','co-author-email','co-author-phone'].forEach(id=>{
     const el=document.getElementById(id);if(el) el.value='';
   });
@@ -3235,8 +3231,8 @@ function closeTitleModal(){
 }
 
 function startResearch(){
-  // Identification of the Problem (title + optional problem statement) — then
-  // straight into the questionnaire, starting at Literature Review.
+  // Title captured — then straight into the questionnaire, starting at
+  // Literature Review.
   if(!document.getElementById('topic-in').value.trim()){
     notify('n-title','Please enter your research topic — this is the only required field.','error');
     return;
@@ -3259,8 +3255,8 @@ function logout(){
 }
 
 // ── QUESTIONNAIRE NAVIGATION ────────────────────────────────────────────────
-// Title (topic + problem statement) is collected in the Title Window modal
-// before this questionnaire ever opens. The questionnaire itself starts at
+// The title is collected in the Title Window modal before this questionnaire
+// ever opens. The questionnaire itself starts at
 // Literature Review, and every core input tab can be freely navigated —
 // clicking any step in the tab bar jumps straight there, in either direction.
 let currentStep = 0;
@@ -3289,7 +3285,6 @@ function renderStep(){
 
 function buildSummary(){
   const items = [
-    {label:'Problem Identified', id:'q-problem'},
     {label:'Literature Reviewed', id:'q-lit'},
     {label:'Research Gap', id:'q-gap'},
     {label:'Objectives', id:'q-objectives'},
@@ -3357,7 +3352,6 @@ async function generate(){
   const author = document.getElementById('author-in').value.trim();
   const inst   = document.getElementById('inst-in').value.trim();
   const nfigs  = parseInt(document.getElementById('sl').value);
-  const qProblem    = document.getElementById('q-problem').value.trim();
   const qLit        = document.getElementById('q-lit').value.trim();
   const qGap        = document.getElementById('q-gap').value.trim();
   const qObjectives = document.getElementById('q-objectives').value.trim();
@@ -3376,7 +3370,7 @@ async function generate(){
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
       body:JSON.stringify({
         topic, author_name:author, institution:inst, num_figures:nfigs,
-        q_problem:qProblem, q_lit:qLit, q_gap:qGap,
+        q_problem:'', q_lit:qLit, q_gap:qGap,
         q_objectives:qObjectives, q_statement:qStatement,
         co_author_name:coName, co_author_title:coTitle,
         co_author_inst:coInst, co_author_email:coEmail, co_author_phone:coPhone,
@@ -3440,14 +3434,27 @@ function closePreviewModal(){
 }
 
 async function loadPreview(){
+  const setField=(id,val)=>{const e=document.getElementById(id);if(e)e.textContent=val||'Not available.';};
   try{
     const r=await fetch('/api/preview/'+jobId,{headers:{'Authorization':'Bearer '+token}});
     const d=await r.json();
-    if(!d.success){document.getElementById('preview-text').textContent='Preview unavailable.';return;}
-    document.getElementById('preview-text').textContent=d.preview||'Preview unavailable.';
+    if(!d.success){
+      setField('preview-title','Preview unavailable.');
+      setField('preview-abstract','Preview unavailable.');
+      setField('preview-keywords','Preview unavailable.');
+      return;
+    }
+    setField('preview-title',d.title);
+    setField('preview-abstract',d.abstract);
+    setField('preview-keywords',d.keywords);
     paperPaid=!!d.paid;
     updatePayUI();
-  }catch(e){console.error(e);document.getElementById('preview-text').textContent='Preview unavailable.';}
+  }catch(e){
+    console.error(e);
+    setField('preview-title','Preview unavailable.');
+    setField('preview-abstract','Preview unavailable.');
+    setField('preview-keywords','Preview unavailable.');
+  }
 }
 
 function updatePayUI(){
@@ -3560,7 +3567,7 @@ function again(){
   const promoIn=document.getElementById('promo-in'); if(promoIn) promoIn.value='';
   const promoMsg=document.getElementById('promo-msg'); if(promoMsg) promoMsg.className='notif';
   const promoBtn=document.getElementById('btn-promo'); if(promoBtn){promoBtn.disabled=false;promoBtn.textContent='Apply';}
-  ['topic-in','inst-in','q-problem','q-lit','q-gap','q-objectives','q-statement',
+  ['topic-in','inst-in','q-lit','q-gap','q-objectives','q-statement',
    'co-author-name','co-author-title','co-author-inst','co-author-email','co-author-phone'].forEach(id=>{
     const el=document.getElementById(id);if(el) el.value='';
   });
@@ -3994,11 +4001,22 @@ def get_preview(jid):
         return jsonify({'success': False, 'message': 'Forbidden'}), 403
 
     job = jobs.get(jid)
-    preview = (job.get('preview') if job else None) or paper['preview_text'] or ''
-    topic   = (job.get('topic') if job else None) or paper['topic'] or ''
-    paid    = bool(paper['paid']) or admin
+    raw_preview = (job.get('preview') if job else None) or paper['preview_text'] or ''
+    topic       = (job.get('topic') if job else None) or paper['topic'] or ''
+    paid        = bool(paper['paid']) or admin
 
-    return jsonify({'success': True, 'preview': preview, 'topic': topic,
+    abstract, keywords = '', ''
+    try:
+        parsed = json.loads(raw_preview) if raw_preview else {}
+        abstract = parsed.get('abstract', '')
+        keywords = parsed.get('keywords', '')
+    except (ValueError, AttributeError):
+        # Legacy plain-text preview_text from before the structured format —
+        # show it as the abstract so old jobs still render something.
+        abstract = raw_preview
+
+    return jsonify({'success': True, 'title': topic, 'abstract': abstract,
+                    'keywords': keywords, 'topic': topic,
                     'paid': paid, 'price': PAPER_PRICE_INR})
 
 
